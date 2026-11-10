@@ -1,0 +1,170 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Jojeringnax\AirwallexLaravel\Services;
+
+use Closure;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
+use Jojeringnax\Airwallex\Exception\ValidationException;
+use Jojeringnax\AirwallexLaravel\BillingContext;
+use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
+use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
+use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
+use Jojeringnax\AirwallexLaravel\ModelRegistry;
+use Jojeringnax\AirwallexLaravel\Models\Customer;
+use Jojeringnax\AirwallexLaravel\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Models\Subscription;
+use Throwable;
+
+class OperationManager
+{
+    public function __construct(private readonly BillingContext $context) {}
+
+    public function reserveCustomer(Model $billable): Customer
+    {
+        if (! $billable->exists || $billable->getKey() === null) {
+            throw new ConflictException('A persisted billable is required.');
+        }
+        $identity = [...$this->context->attributes(), 'billable_type' => $billable->getMorphClass(), 'billable_id' => (string) $billable->getKey()];
+
+        /** @var Customer */
+        return ModelRegistry::query('customer')->firstOrCreate($identity);
+    }
+
+    /** @param array<string,mixed> $specification @param array<string,mixed> $intent */
+    public function prepare(Customer $customer, string $actionKey, string $kind, array $specification, array $intent, ?Subscription $subscription = null, ?string $name = null, ?string $lockKey = null): Operation
+    {
+        $this->context->assertModel($customer);
+        if ($actionKey === '' || strlen($actionKey) > 255 || ($name !== null && ($name === '' || strlen($name) > 255))) {
+            throw new ConflictException('Action key and subscription name must be nonempty bounded strings.');
+        }
+        if ($subscription !== null) {
+            $this->context->assertModel($subscription);
+            if ($subscription->customer_id !== $customer->id) {
+                throw new ConflictException('Subscription does not belong to this customer.');
+            }
+        }
+        $hash = hash('sha256', json_encode(self::canonical([$kind, $customer->getKey(), $subscription?->getKey(), $name, $specification]), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION));
+        $identity = [...$this->context->attributes(), 'action_key' => $actionKey];
+        try {
+            /** @var Operation */
+            return DB::transaction(function () use ($identity, $hash, $customer, $kind, $intent, $subscription, $name, $lockKey): Operation {
+                $existing = ModelRegistry::query('operation')->where($identity)->first();
+                if ($existing) {
+                    if (! hash_equals($existing->intent_hash, $hash)) {
+                        throw new ConflictException('Action key was already used for a different intent.', $existing->id);
+                    }
+
+                    return $existing;
+                }
+                /** @var Operation $operation */
+                $operation = ModelRegistry::make('operation', [...$identity, 'customer_id' => $customer->id, 'subscription_id' => $subscription?->id, 'kind' => $kind, 'intent_hash' => $hash, 'intent' => $intent, 'request_id' => (string) Str::uuid(), 'status' => 'prepared', 'lock_key' => $lockKey ?? ($subscription ? 'subscription/'.$subscription->id : 'customer/'.$customer->id)]);
+                $operation->save();
+                if ($name !== null) {
+                    if (ModelRegistry::query('subscription_slot')->where('customer_id', $customer->id)->where('name', $name)->exists()) {
+                        throw new ConflictException('Subscription name is already reserved.');
+                    }
+                    ModelRegistry::make('subscription_slot', ['customer_id' => $customer->id, 'name' => $name, 'operation_id' => $operation->id])->save();
+                }
+
+                return $operation;
+            });
+        } catch (QueryException $exception) {
+            // SQLite may choose either uniqueness or a busy conflict in a genuine race.
+            // Both preserve the committed operation and prohibit a second financial write.
+            throw new ConflictException('A concurrent billing action holds this reservation.');
+        }
+    }
+
+    /** @param Closure():array<array-key,mixed> $write @param Closure(array,Operation):mixed $confirm */
+    public function execute(Operation $operation, Closure $write, Closure $confirm): mixed
+    {
+        $this->context->assertModel($operation);
+        $changed = ModelRegistry::query('operation')->whereKey($operation->id)->where('status', 'prepared')->update(['status' => 'in_flight']);
+        if ($changed !== 1) {
+            throw new AmbiguousOperationException($operation->id);
+        }
+        $responseReceived = false;
+        try {
+            $result = $write();
+            $responseReceived = true;
+            if (! isset($result['id']) || ! is_string($result['id']) || $result['id'] === '') {
+                throw new EvidenceException('Mutation response has no resource identity.');
+            }
+            $operation->refresh();
+            $operation->remote_id = $result['id'];
+            $operation->save();
+            $confirmed = $confirm($result, $operation);
+            $this->succeed($operation);
+
+            return $confirmed;
+        } catch (ValidationException $exception) {
+            if ($responseReceived) {
+                ModelRegistry::query('operation')->whereKey($operation->id)->update(['status' => 'ambiguous', 'error_code' => 'reconciliation_required']);
+                throw new AmbiguousOperationException($operation->id, $exception);
+            }
+            DB::transaction(function () use ($operation): void {
+                $operation->refresh();
+                $operation->forceFill(['status' => 'failed', 'lock_key' => null, 'error_code' => 'sdk_validation'])->save();
+                ModelRegistry::query('subscription_slot')->where('operation_id', $operation->id)->whereNull('subscription_id')->delete();
+            });
+            throw $exception;
+        } catch (Throwable $exception) {
+            // Even a local storage failure after remote success must never invite replay.
+            try {
+                ModelRegistry::query('operation')->whereKey($operation->id)->update(['status' => 'ambiguous', 'error_code' => 'reconciliation_required']);
+            } catch (Throwable) {
+                // The pre-I/O in_flight row still durably proves the attempted action.
+            }
+            throw new AmbiguousOperationException($operation->id, $exception);
+        }
+    }
+
+    public function succeed(Operation $operation): void
+    {
+        $this->context->assertModel($operation);
+        $operation->refresh();
+        $operation->forceFill(['status' => 'succeeded', 'lock_key' => null, 'error_code' => null])->save();
+    }
+
+    public function releaseTerminated(Subscription $subscription): void
+    {
+        $this->context->assertModel($subscription);
+        if ($subscription->status !== 'CANCELLED') {
+            throw new ConflictException('Only confirmed provider termination releases a subscription name.');
+        }
+        DB::transaction(function () use ($subscription): void {
+            if (! ModelRegistry::query('subscription')->whereKey($subscription->id)->where('status', 'CANCELLED')->exists()) {
+                throw new ConflictException('Subscription termination is not persisted.');
+            }
+            ModelRegistry::query('subscription_slot')->where('subscription_id', $subscription->id)->delete();
+        });
+    }
+
+    private static function canonical(mixed $value): mixed
+    {
+        if ($value instanceof \stdClass) {
+            $members = get_object_vars($value);
+            ksort($members, SORT_STRING);
+            foreach ($members as &$member) {
+                $member = self::canonical($member);
+            }
+
+            return (object) $members;
+        }
+        if (is_array($value)) {
+            if (! array_is_list($value)) {
+                ksort($value, SORT_STRING);
+            }
+            foreach ($value as &$item) {
+                $item = self::canonical($item);
+            }
+        }
+
+        return $value;
+    }
+}
