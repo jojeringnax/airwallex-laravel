@@ -51,6 +51,16 @@ class OperationTest extends TestCase
         self::assertSame($operation->id, $repeat->id);
     }
 
+    public function test_numeric_object_map_order_never_collapses_into_list_intent(): void
+    {
+        $manager = $this->manager;
+        $operation = $manager->prepare($this->customer, 'command', 'create', ['metadata' => [1 => 'one', 0 => 'zero']], [], name: 'default');
+        $equivalent = $manager->prepare($this->customer, 'command', 'create', ['metadata' => (object) ['0' => 'zero', '1' => 'one']], [], name: 'default');
+        self::assertSame($operation->id, $equivalent->id);
+        $this->expectException(ConflictException::class);
+        $manager->prepare($this->customer, 'command', 'create', ['metadata' => ['zero', 'one']], [], name: 'default');
+    }
+
     public function test_different_action_cannot_take_reserved_name_or_customer_lock(): void
     {
         $this->manager->prepare($this->customer, 'first', 'create', [], [], name: 'default');

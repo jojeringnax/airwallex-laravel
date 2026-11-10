@@ -27,18 +27,21 @@ abstract class BillingModel extends Model
     /** @return list<string> */
     protected function immutable(): array
     {
-        return ['environment', 'organization_id'];
+        return ['id', 'environment', 'organization_id'];
+    }
+
+    public function assertIdentity(): void
+    {
+        foreach ($this->immutable() as $key) {
+            if ($this->exists && $this->isDirty($key) && $this->getRawOriginal($key) !== null) {
+                throw new OwnershipException('Billing identity cannot be reassigned.');
+            }
+        }
     }
 
     protected static function booted(): void
     {
-        static::updating(function (self $model): void {
-            foreach ($model->immutable() as $key) {
-                if ($model->isDirty($key) && $model->getRawOriginal($key) !== null) {
-                    throw new OwnershipException('Billing identity cannot be reassigned.');
-                }
-            }
-        });
+        static::updating(fn (self $model) => $model->assertIdentity());
     }
 
     public function freshTimestamp()

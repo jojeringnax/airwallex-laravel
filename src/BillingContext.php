@@ -28,7 +28,11 @@ final readonly class BillingContext
 
     public function assertModel(Model $model): void
     {
-        if ($model->getAttribute('environment') !== $this->environment
+        if ($model instanceof Models\BillingModel) {
+            $model->assertIdentity();
+        }
+        if (($model->exists && ($model->getRawOriginal('environment') !== $this->environment || $model->getRawOriginal('organization_id') !== $this->organizationId))
+            || $model->getAttribute('environment') !== $this->environment
             || $model->getAttribute('organization_id') !== $this->organizationId) {
             throw new OwnershipException('The billing record belongs to a different context.');
         }

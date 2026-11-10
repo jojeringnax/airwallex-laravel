@@ -10,6 +10,7 @@ use Jojeringnax\AirwallexLaravel\Casts\LosslessJson;
 use Jojeringnax\AirwallexLaravel\Contracts\SubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\DefaultSubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
+use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 
 /**
  * @property ?string $starts_at
@@ -24,6 +25,7 @@ use Jojeringnax\AirwallexLaravel\ModelRegistry;
  * @property string $customer_id
  * @property string $remote_id
  * @property string $name
+ * @property int $revision
  * @property string $status
  * @property ?bool $cancel_at_period_end
  * @property array<string,mixed> $snapshot
@@ -32,7 +34,7 @@ class Subscription extends BillingModel
 {
     protected $table = 'airwallex_subscriptions';
 
-    protected $casts = ['snapshot' => LosslessJson::class, 'cancel_at_period_end' => 'boolean', 'synced_at' => 'immutable_datetime', 'items_synced_at' => 'immutable_datetime'];
+    protected $casts = ['snapshot' => LosslessJson::class, 'revision' => 'integer', 'cancel_at_period_end' => 'boolean', 'synced_at' => 'immutable_datetime', 'items_synced_at' => 'immutable_datetime'];
 
     protected function immutable(): array
     {
@@ -44,9 +46,15 @@ class Subscription extends BillingModel
         return $this->belongsTo(ModelRegistry::class('customer'), 'customer_id');
     }
 
+    /** @return HasMany<SubscriptionItem, $this> */
     public function items(): HasMany
     {
         return $this->hasMany(ModelRegistry::class('subscription_item'), 'subscription_id');
+    }
+
+    public function reconcile(): Subscription
+    {
+        return app(SubscriptionSynchronizer::class)->reconcile($this);
     }
 
     public function active(): bool

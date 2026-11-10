@@ -1,0 +1,271 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Jojeringnax\AirwallexLaravel\Services;
+
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
+use Jojeringnax\Airwallex\Client;
+use Jojeringnax\AirwallexLaravel\BillingContext;
+use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
+use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
+use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
+use Jojeringnax\AirwallexLaravel\ModelRegistry;
+use Jojeringnax\AirwallexLaravel\Models\Customer;
+use Jojeringnax\AirwallexLaravel\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Models\Subscription;
+use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
+use Jojeringnax\AirwallexLaravel\Support\Pages;
+use Jojeringnax\AirwallexLaravel\Timestamp;
+
+class SubscriptionSynchronizer
+{
+    private const DATES = ['starts_at', 'ends_at', 'trial_starts_at', 'trial_ends_at', 'current_period_starts_at', 'current_period_ends_at', 'cancel_requested_at'];
+
+    public function __construct(private readonly Client $client, private readonly BillingContext $context, private readonly OperationManager $operations, private readonly Outbox $outbox) {}
+
+    public function reconcile(Subscription $subscription): Subscription
+    {
+        $this->context->assertModel($subscription);
+        $before = ModelRegistry::query('subscription')->findOrFail($subscription->getKey());
+        $this->context->assertModel($before);
+        $customer = ModelRegistry::query('customer')->findOrFail($before->customer_id);
+
+        return $this->refresh($customer, $before->name, $before->remote_id, $before);
+    }
+
+    public function import(Customer $customer, string $name, string $remoteId): Subscription
+    {
+        return $this->refresh($customer, $name, $remoteId, $this->existing($customer, $name, $remoteId));
+    }
+
+    /** Confirm a known result of the already-recorded creation/checkout intent. */
+    public function confirm(Customer $customer, string $name, string $remoteId, Operation $operation): Subscription
+    {
+        $operation = ModelRegistry::query('operation')->findOrFail($operation->getKey());
+        $this->context->assertModel($operation);
+        if (! in_array($operation->kind, ['subscription.create', 'checkout.subscription'], true)) {
+            throw new ConflictException('Operation is not a subscription creation intent.');
+        }
+        if (! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded'], true)) {
+            throw new ConflictException('Subscription mutation has not been sent.');
+        }
+        if ($operation->kind === 'subscription.create' && $operation->remote_id !== $remoteId) {
+            throw new OwnershipException('Subscription result does not match the durable operation identity.');
+        }
+        if ($operation->kind === 'checkout.subscription') {
+            $checkout = ModelRegistry::query('checkout')->where($this->context->attributes())->where('operation_id', $operation->id)->first();
+            if (! $checkout || $checkout->getAttribute('remote_id') !== $operation->remote_id || $checkout->getAttribute('remote_subscription_id') !== $remoteId || $checkout->getAttribute('status') !== 'COMPLETED') {
+                throw new OwnershipException('Subscription result has no confirmed checkout correlation.');
+            }
+        }
+        if ($operation->customer_id !== $customer->id) {
+            throw new OwnershipException('Subscription operation belongs to a different customer.');
+        }
+
+        return $this->refresh($customer, $name, $remoteId, $this->existing($customer, $name, $remoteId), $operation);
+    }
+
+    private function existing(Customer $customer, string $name, string $remoteId): ?Subscription
+    {
+        $this->context->assertModel($customer);
+        $existing = ModelRegistry::query('subscription')->where($this->context->attributes())->where('remote_id', $remoteId)->first();
+        if ($existing && ($existing->customer_id !== $customer->id || $existing->name !== $name)) {
+            throw new ConflictException('Remote subscription is already associated with a different parent or name.');
+        }
+
+        return $existing;
+    }
+
+    private function refresh(Customer $customer, string $name, string $remoteId, ?Subscription $before, ?Operation $operation = null): Subscription
+    {
+        $this->context->assertModel($customer);
+        if (! $customer->exists) {
+            throw new ConflictException('A persisted customer mapping is required.');
+        }
+        $customer = ModelRegistry::query('customer')->findOrFail($customer->getKey());
+        $this->context->assertModel($customer);
+        if ($name === '' || strlen($name) > 255 || $customer->remote_id === null) {
+            throw new ConflictException('A confirmed customer and explicit subscription name are required.');
+        }
+        $remote = $this->client->billing()->subscriptions()->retrieve($remoteId);
+        $this->verify($remote, $remoteId, $customer);
+        $items = Pages::all(fn (array $query) => $this->client->billing()->subscriptions()->listItems($remoteId, $query));
+        foreach ($items as $item) {
+            if (($item['subscription_id'] ?? null) !== $remoteId) {
+                throw new OwnershipException('Subscription item belongs to a different subscription.');
+            }
+        }
+        // The provider supplies no transactional list snapshot. Detect a parent
+        // change while paging and retain the previous complete local projection.
+        $after = $this->client->billing()->subscriptions()->retrieve($remoteId);
+        $this->verify($after, $remoteId, $customer);
+        if (! $this->sameCore($remote, $after) || Timestamp::compare($remote['updated_at'], $after['updated_at']) !== 0) {
+            throw new EvidenceException('Subscription changed during pagination; reconcile again.');
+        }
+        try {
+            return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $after, $items): Subscription {
+                $subscription = $this->existing($customer, $name, $remoteId);
+                $new = $subscription === null;
+                $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $customer->id)->where('name', $name)->first();
+                $terminal = $after['status'] === 'CANCELLED';
+                if (! $terminal && $new && $operation && ! $slot) {
+                    throw new ConflictException('Creation intent has no matching name reservation.');
+                }
+                if (! $terminal && $new && $slot && ($operation === null || $slot->operation_id !== $operation->id)) {
+                    throw new ConflictException('Subscription name is already reserved.');
+                }
+                if ($operation && $slot && $slot->operation_id !== $operation->id && $slot->subscription_id !== $subscription?->id) {
+                    throw new ConflictException('Subscription result conflicts with its reserved name.');
+                }
+                if ($subscription !== null && $subscription->provider_updated_at !== null) {
+                    $order = Timestamp::compare($after['updated_at'], $subscription->provider_updated_at);
+                    if ($order < 0 || ($order === 0 && ($before === null || $before->revision !== $subscription->revision))) {
+                        return $subscription;
+                    }
+                    if ($subscription->status === 'CANCELLED' && ! $terminal) {
+                        throw new EvidenceException('A cancelled subscription cannot be resurrected by an observation.');
+                    }
+                    if ($order === 0 && ! $this->sameCore($subscription->snapshot, $after)) {
+                        throw new EvidenceException('Equal provider versions contain conflicting lifecycle data.');
+                    }
+                    if ($subscription->provider_created_at !== null && Timestamp::compare($subscription->provider_created_at, $after['created_at']) !== 0) {
+                        throw new EvidenceException('Provider creation identity changed.');
+                    }
+                }
+                $subscription ??= ModelRegistry::make('subscription', [...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $remoteId, 'name' => $name]);
+                $previousStatus = $subscription->status;
+                $oldItems = $subscription->exists ? $subscription->items()->get()->keyBy('remote_id') : collect();
+                foreach ($items as $item) {
+                    $old = $oldItems->get($item['id']);
+                    if ($old && $old->provider_updated_at !== null && self::itemTime($item['updated_at'] ?? null) !== null) {
+                        $order = Timestamp::compare($item['updated_at'], $old->provider_updated_at);
+                        if ($order < 0) {
+                            throw new EvidenceException('Item observation is older than the local projection.');
+                        }
+                        if ($order === 0 && self::itemCore($item) !== self::itemCore($old->snapshot)) {
+                            throw new EvidenceException('Equal item versions contain conflicting mutable data.');
+                        }
+                    }
+                }
+                $snapshot = self::sanitize($after);
+                $changed = ! $subscription->exists || CanonicalJson::encode($subscription->snapshot) !== CanonicalJson::encode($snapshot);
+                $subscription->fill(['status' => $after['status'], 'cancel_at_period_end' => $after['cancel_at_period_end'], 'provider_created_at' => $after['created_at'], 'provider_updated_at' => $after['updated_at'], 'snapshot' => $snapshot, 'synced_at' => now(), 'items_synced_at' => now(), 'revision' => ($subscription->revision ?? 0) + 1]);
+                foreach (self::DATES as $date) {
+                    if (isset($after[$date]) || $new) {
+                        $subscription->setAttribute($date, $after[$date] ?? null);
+                    }
+                }
+                $subscription->save();
+                $remoteItems = [];
+                foreach ($items as $item) {
+                    $remoteItems[] = $item['id'];
+                    $data = self::sanitize($item);
+                    $old = $oldItems->get($item['id']);
+                    $changed = $changed || ! $old || CanonicalJson::encode($old->snapshot) !== CanonicalJson::encode($data);
+                    $local = $old ?? ModelRegistry::make('subscription_item', ['subscription_id' => $subscription->id, 'remote_id' => $item['id']]);
+                    $local->fill(['snapshot' => $data, 'price_id' => is_array($item['price'] ?? null) && is_string($item['price']['id'] ?? null) ? $item['price']['id'] : null, 'quantity' => is_string($item['quantity'] ?? null) ? $item['quantity'] : null, 'provider_created_at' => self::itemTime($item['created_at'] ?? null), 'provider_updated_at' => self::itemTime($item['updated_at'] ?? null)]);
+                    $local->save();
+                }
+                $removed = $subscription->items()->whereNotIn('remote_id', $remoteItems)->delete();
+                $changed = $changed || $removed > 0;
+                if ($terminal) {
+                    $this->operations->releaseTerminated($subscription);
+                    if ($operation) {
+                        ModelRegistry::query('subscription_slot')->where('operation_id', $operation->id)->whereNull('subscription_id')->delete();
+                    }
+                } elseif ($new || ($operation && $slot?->operation_id === $operation->id)) {
+                    $slot ??= ModelRegistry::make('subscription_slot', ['customer_id' => $customer->id, 'name' => $name]);
+                    $slot->fill(['subscription_id' => $subscription->id, 'operation_id' => null])->save();
+                }
+                if ($changed) {
+                    $this->outbox->record('SubscriptionReconciled', $subscription, ['remote_id' => $remoteId, 'previous_status' => $previousStatus, 'status' => $subscription->status]);
+                }
+
+                return $subscription;
+            });
+        } catch (QueryException) {
+            throw new ConflictException('A concurrent or invalid subscription projection must be reconciled again.');
+        }
+    }
+
+    /** @param array<array-key,mixed> $remote */
+    private function verify(array $remote, string $id, Customer $customer): void
+    {
+        foreach (['org_id' => $this->context->organizationId, 'organization_id' => $this->context->organizationId, 'environment' => $this->context->environment] as $field => $expected) {
+            if (array_key_exists($field, $remote) && $remote[$field] !== $expected) {
+                throw new OwnershipException('Subscription response conflicts with the configured context.');
+            }
+        }
+        if (($remote['id'] ?? null) !== $id || ($remote['billing_customer_id'] ?? null) !== $customer->remote_id) {
+            throw new OwnershipException('Subscription identity or customer does not match its mapping.');
+        }
+        if (! is_string($remote['status'] ?? null) || $remote['status'] === '' || ! is_bool($remote['cancel_at_period_end'] ?? null)) {
+            throw new EvidenceException('Subscription lifecycle data is malformed.');
+        }
+        foreach (['created_at', 'updated_at', 'starts_at'] as $field) {
+            if (! is_string($remote[$field] ?? null)) {
+                throw new EvidenceException('Required provider timing is missing.');
+            }
+        }
+        foreach ([...self::DATES, 'created_at', 'updated_at'] as $date) {
+            if (isset($remote[$date])) {
+                if (! is_string($remote[$date])) {
+                    throw new EvidenceException('Provider timing is malformed.');
+                }
+                Timestamp::compare($remote[$date], $remote[$date]);
+            }
+        }
+    }
+
+    private function sameCore(array $left, array $right): bool
+    {
+        foreach (['id', 'billing_customer_id', 'status', 'cancel_at_period_end', 'created_at', ...self::DATES] as $key) {
+            if (in_array($key, [...self::DATES, 'created_at'], true) && is_string($left[$key] ?? null) && is_string($right[$key] ?? null)) {
+                if (Timestamp::compare($left[$key], $right[$key]) !== 0) {
+                    return false;
+                }
+            } elseif (($left[$key] ?? null) !== ($right[$key] ?? null)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static function itemCore(array $item): string
+    {
+        return CanonicalJson::encode(['quantity' => $item['quantity'] ?? null, 'price_id' => is_array($item['price'] ?? null) ? ($item['price']['id'] ?? null) : null, 'metadata' => $item['metadata'] ?? null, 'rate_card_version' => $item['rate_card_version'] ?? null]);
+    }
+
+    private static function itemTime(mixed $value): ?string
+    {
+        if (! is_string($value)) {
+            return null;
+        }
+        try {
+            Timestamp::compare($value, $value);
+
+            return $value;
+        } catch (EvidenceException) {
+            return null;
+        }
+    }
+
+    /** @internal Remove credential-like fields before durable snapshots. */
+    public static function sanitize(array $data): array
+    {
+        foreach ($data as $key => &$value) {
+            if (is_string($key) && in_array(strtolower($key), ['client_secret', 'api_key', 'access_token', 'token', 'webhook_secret', 'authorization'], true)) {
+                unset($data[$key]);
+            } elseif (is_array($value)) {
+                $value = self::sanitize($value);
+            } elseif ($value instanceof \stdClass) {
+                $value = (object) self::sanitize(get_object_vars($value));
+            }
+        }
+
+        return $data;
+    }
+}

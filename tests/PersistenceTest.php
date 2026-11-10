@@ -9,7 +9,9 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Str;
 use Jojeringnax\AirwallexLaravel\Billable;
+use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
@@ -131,6 +133,21 @@ class PersistenceTest extends TestCase
         $snapshot = ['metadata' => new \stdClass, 'list' => [], 'numeric_map' => (object) ['0' => 'zero'], 'nested' => ['quantity' => '1.0000000000000001', 'null' => null, 'false' => false, 'zero' => 0]];
         $subscription->update(['snapshot' => $snapshot]);
         self::assertSame(json_encode($snapshot), json_encode($subscription->fresh()->snapshot));
+    }
+
+    public function test_local_primary_identity_cannot_be_changed(): void
+    {
+        $customer = Customer::create($this->identity('a', 'customer'));
+        $this->expectException(OwnershipException::class);
+        $customer->update(['id' => (string) Str::ulid()]);
+    }
+
+    public function test_changed_in_memory_context_does_not_disguise_a_foreign_persisted_record(): void
+    {
+        $customer = Customer::create($this->identity('a', 'customer'));
+        $customer->environment = 'production';
+        $this->expectException(OwnershipException::class);
+        (new BillingContext('production', 'org-test'))->assertModel($customer);
     }
 
     public function test_remote_identity_cannot_be_reassigned(): void
