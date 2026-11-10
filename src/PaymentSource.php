@@ -5,15 +5,21 @@ declare(strict_types=1);
 namespace Jojeringnax\AirwallexLaravel;
 
 use JsonSerializable;
+use stdClass;
 
 final readonly class PaymentSource implements JsonSerializable
 {
-    public function __construct(public string $id, public string $billingCustomerId, public string $linkedPaymentAccountId, private array $data) {}
+    private array $data;
+
+    public function __construct(public string $id, public string $billingCustomerId, public string $linkedPaymentAccountId, array $data)
+    {
+        $this->data = self::copy($data);
+    }
 
     /** Explicit server-side access to sanitized provider fields. */
     public function toArray(): array
     {
-        return $this->data;
+        return self::copy($this->data);
     }
 
     public function jsonSerialize(): array
@@ -24,5 +30,19 @@ final readonly class PaymentSource implements JsonSerializable
     public function __debugInfo(): array
     {
         return $this->jsonSerialize();
+    }
+
+    private static function copy(mixed $value): mixed
+    {
+        if ($value instanceof stdClass) {
+            $copy = new stdClass;
+            foreach (get_object_vars($value) as $key => $member) {
+                $copy->{$key} = self::copy($member);
+            }
+
+            return $copy;
+        }
+
+        return is_array($value) ? array_map(self::copy(...), $value) : $value;
     }
 }

@@ -19,6 +19,7 @@ use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
+use Jojeringnax\AirwallexLaravel\PaymentSource;
 use Jojeringnax\AirwallexLaravel\Services\CheckoutManager;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
@@ -146,6 +147,23 @@ class CheckoutWorkflowTest extends TestCase
         self::assertStringNotContainsString('SYNTHETIC-SOURCE-SECRET', json_encode($sources));
         $this->expectException(OwnershipException::class);
         $this->team->paymentSources(['billing_customer_id' => 'foreign']);
+    }
+
+    public function test_source_snapshot_is_immutable_through_nested_sdk_objects_and_constructor_inputs(): void
+    {
+        $this->fake([Billing::page([Billing::source(['metadata' => new \stdClass, 'extra' => ['nested' => new \stdClass]])])]);
+        $source = $this->team->paymentSources()->first();
+        $exported = $source->toArray();
+        $exported['metadata']->changed = 'changed export';
+        $exported['extra']['nested']->changed = 'changed nested export';
+        self::assertSame([], get_object_vars($source->toArray()['metadata']));
+        self::assertSame([], get_object_vars($source->toArray()['extra']['nested']));
+
+        $original = new \stdClass;
+        $constructed = new PaymentSource('source', 'customer', 'collector', ['nested' => [$original], 'exact' => '1.00000000000000000001']);
+        $original->changed = 'changed constructor input';
+        self::assertSame([], get_object_vars($constructed->toArray()['nested'][0]));
+        self::assertSame('1.00000000000000000001', $constructed->toArray()['exact']);
     }
 
     public function test_foreign_checkout_or_source_cannot_finalize_mapping(): void
