@@ -1,0 +1,53 @@
+name: Update Packagist
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: packagist-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh the registered package
+        env:
+          PACKAGIST_USERNAME: ${{ secrets.PACKAGIST_USERNAME }}
+          PACKAGIST_API_TOKEN: ${{ secrets.PACKAGIST_API_TOKEN }}
+        shell: python
+        run: |
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          username = os.environ.get('PACKAGIST_USERNAME', '')
+          token = os.environ.get('PACKAGIST_API_TOKEN', '')
+          if not username or not token:
+              sys.exit('Configure PACKAGIST_USERNAME and the Safe PACKAGIST_API_TOKEN repository secrets.')
+          request = urllib.request.Request(
+              'https://packagist.org/api/update-package',
+              data=json.dumps({'repository': 'https://github.com/jojeringnax/airwallex-laravel'}).encode(),
+              headers={
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer ' + username + ':' + token,
+                  'User-Agent': 'airwallex-laravel-release (https://github.com/jojeringnax/airwallex-laravel)',
+              },
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  result = json.load(response)
+          except urllib.error.HTTPError as error:
+              sys.exit('Packagist update failed (HTTP ' + str(error.code) + '). Check registration, username and Safe token.')
+          except (urllib.error.URLError, TimeoutError, ValueError):
+              sys.exit('Packagist update could not be confirmed. Check the package before retrying this update workflow.')
+          if not isinstance(result, dict) or result.get('status') != 'success':
+              sys.exit('Packagist did not confirm the update. Inspect the package and retry the update workflow.')
+          print('Packagist accepted the package refresh. Verify the published version on its package page.')

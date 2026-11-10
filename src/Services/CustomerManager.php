@@ -184,7 +184,9 @@ class CustomerManager
         try {
             return DB::transaction(function () use ($customer, $id, $linking): Customer {
                 app(CommitGuard::class)->assertMayCommit();
-                $customer->refresh();
+                $locked = ModelRegistry::query('customer')->whereKey($customer->id);
+                $locked->lockForUpdate();
+                $customer = $locked->firstOrFail();
                 if ($customer->remote_id !== null && $customer->remote_id !== $id) {
                     throw new OwnershipException('A customer mapping cannot be reassigned.');
                 }

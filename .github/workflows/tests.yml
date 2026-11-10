@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,7 +16,25 @@ jobs:
       fail-fast: false
       matrix:
         php: ['8.3', '8.4', '8.5']
+        laravel: ['12', '13']
+        database: [sqlite, mysql]
         dependencies: [lowest, latest]
+    services:
+      mysql:
+        image: mysql:8.4.11
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: airwallex_test
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      AIRWALLEX_TEST_DATABASE: ${{ matrix.database }}
+      AIRWALLEX_TEST_MYSQL_PORT: '3306'
+      AIRWALLEX_QUALIFY_MYSQL_DATABASE: airwallex_test_consumer
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,13 +42,24 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          extensions: pdo_sqlite
+          extensions: pdo_sqlite, pdo_mysql
           coverage: none
           tools: composer:2.11.2
       - run: composer validate --strict
-      - name: Resolve dependencies
+      - name: Select framework development graph
+        env:
+          LARAVEL_MAJOR: ${{ matrix.laravel }}
         run: |
-          if [ "${{ matrix.dependencies }}" = lowest ]; then
+          if [ "$LARAVEL_MAJOR" = 12 ]; then
+            composer require --dev --no-update 'orchestra/testbench:^10.0' 'laravel/framework:^12.69'
+          else
+            composer require --dev --no-update 'orchestra/testbench:^11.0' 'laravel/framework:^13.30'
+          fi
+      - name: Resolve dependencies
+        env:
+          DEPENDENCIES: ${{ matrix.dependencies }}
+        run: |
+          if [ "$DEPENDENCIES" = lowest ]; then
             composer update --prefer-lowest --prefer-stable --prefer-dist --no-interaction
           else
             composer update --prefer-dist --no-interaction
@@ -37,13 +67,21 @@ jobs:
       - run: composer check
       - run: composer check:dependencies
       - run: python3 tools/test_qualify_candidate.py
+      - name: Prepare isolated MySQL consumer schema
+        if: matrix.database == 'mysql'
+        run: php -r '(new PDO("mysql:host=127.0.0.1;port=3306", "root", ""))->exec("CREATE DATABASE airwallex_test_consumer");'
       - name: Qualify exact archive in a fresh native consumer
+        env:
+          LARAVEL_MAJOR: ${{ matrix.laravel }}
+          DATABASE: ${{ matrix.database }}
+          DEPENDENCIES: ${{ matrix.dependencies }}
         run: |
           curl --fail --location --silent --show-error --retry 3 https://getcomposer.org/download/2.11.2/composer.phar --output "$RUNNER_TEMP/airwallex-composer.phar"
           python3 tools/qualify-candidate.py \
             --candidate "$(git rev-parse HEAD)" \
             --composer "$RUNNER_TEMP/airwallex-composer.phar" \
-            --dependencies "${{ matrix.dependencies }}" \
+            --laravel "$LARAVEL_MAJOR" --database "$DATABASE" \
+            --dependencies "$DEPENDENCIES" \
             --workspace "$RUNNER_TEMP/airwallex-workspace" \
             --output "$RUNNER_TEMP/airwallex-evidence"
       - name: Record exact dependency resolution
@@ -51,13 +89,13 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: dependencies-php${{ matrix.php }}-${{ matrix.dependencies }}
+          name: dependencies-php${{ matrix.php }}-laravel${{ matrix.laravel }}-${{ matrix.database }}-${{ matrix.dependencies }}
           path: |
             composer.lock
             dependency-versions.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: consumer-php${{ matrix.php }}-${{ matrix.dependencies }}
+          name: consumer-php${{ matrix.php }}-laravel${{ matrix.laravel }}-${{ matrix.database }}-${{ matrix.dependencies }}
           path: ${{ runner.temp }}/airwallex-evidence/
           if-no-files-found: warn

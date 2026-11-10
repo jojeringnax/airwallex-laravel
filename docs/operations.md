@@ -2,6 +2,8 @@
 
 Use this reference when deploying the receiver, queue workers and scheduler, or investigating an uncertain action. [Public contracts](contracts.md) own persisted identities and lifecycle rules; [provider evidence](provider-contracts.md) owns event availability and account prerequisites. Application authorization of a billable is required independently of subscription eligibility.
 
+Use the [qualified database prerequisites](compatibility.md) for web, scheduler and workers. MySQL package tables use InnoDB and exact binary NO PAD identities even when the application connection defaults to an insensitive collation. Preserve foreign keys, strict mode and transactional ownership constraints in backups/restores. Package row locks cover short local commits, never provider calls; a database lock/deadlock conflict means inspect/retry local coordination, not replay an uncertain financial write.
+
 ## Receiver deployment
 
 Configure one environment and Billing organization, its nondelegated API credentials, an endpoint secret, and a webhook subscription explicitly using version `2026-08-21`. API request version headers do not configure webhook subscriptions. Register the HTTPS URL in Airwallex and select the supported subscription, Billing Checkout and invoice events listed in the provider reference. Configure the endpoint secret outside version control:

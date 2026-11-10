@@ -12,7 +12,7 @@ python3 tools/test_qualify_candidate.py
 python3 tools/qualify-candidate.py \
   --candidate FULL_40_CHARACTER_COMMIT \
   --composer /absolute/path/composer-2.11.2.phar \
-  --dependencies latest \
+  --laravel 13 --database sqlite --dependencies latest \
   --workspace build/qualification \
   --output build/candidates
 ```
@@ -23,7 +23,9 @@ Every run creates new private directories rather than overwriting existing work.
 
 The final JSON output names an `evidence-*/evidence.json` file. Its directory also contains `airwallex-laravel-FULL_COMMIT.zip`, `archive-manifest.json`, `package-repository.json`, `tooling-manifest.json`, `consumer-recipes.json`, `consumer.lock` and `dependency-versions.json`.
 
-Keep the emitted evidence JSON, archive, `archive-manifest.json`, `package-repository.json`, consumer lock and dependency versions together with the six PHP/dependency CI job locks. The descriptor's provisional `0.1.0-RC1` identifies a local review candidate, not a Git tag or published version. Use `--dependencies lowest` for the audited minimum graph and `--dependencies latest` for the current graph. CI runs both native-consumer resolutions on PHP 8.3, 8.4 and 8.5 at the exact PR head and retains their bundles alongside the development locks. A local passing consumer check does not replace that full matrix, backend journeys, independent reviews or sandbox evidence policy.
+Keep the emitted evidence JSON, archive, `archive-manifest.json`, `package-repository.json`, consumer lock and dependency versions together with the 24 PHP/framework/database/dependency CI job locks. The descriptor's provisional `0.1.0-RC1` identifies a local review candidate, not a Git tag or published version. Use `--dependencies lowest` for the audited minimum graph and `--dependencies latest` for the current graph. CI runs both native-consumer resolutions for Laravel 12/13 and SQLite/MySQL on PHP 8.3, 8.4 and 8.5 at the exact PR head and retains their bundles alongside the development locks. A local passing consumer check does not replace that full matrix, backend journeys, independent reviews or sandbox evidence policy.
+
+For a MySQL native consumer, precreate a dedicated empty schema named `airwallex_test_consumer` (or another `airwallex_test_` suffix), then pass `--database mysql --laravel 12` or `13`. `AIRWALLEX_QUALIFY_MYSQL_DATABASE` selects that disposable schema; `AIRWALLEX_TEST_MYSQL_HOST`, `PORT`, `USER`, `PASSWORD` supply only its test connection (defaults 127.0.0.1:33079/root/empty). Use a separate schema from package tests. Qualification isolates these values from provider credentials and excludes the consumer environment file from artifacts. Reuse only a fresh empty schema, since migrations/recipes deliberately leave evidence in it.
 
 ## Install the generated archive in another application
 
@@ -40,4 +42,12 @@ php artisan config:cache
 
 Inspect the dependency change in that application before adopting it. Follow the [consumer guide](usage.md) for real application configuration; generated qualification credentials and provider responses are synthetic. The descriptor intentionally has no fallback source/path repository. Do not substitute a sibling SDK checkout for the released dependency.
 
-The final candidate's external evidence records its exact source/SDK revisions, passing checks, open provisional questions, unexecuted provider scenarios and artifact hashes. A failed required check remains incomplete; a new source commit requires qualification of that commit. Keep publication, tags, merging and production operations separate from local preparation.
+The final candidate's external evidence records its exact source/SDK revisions, passing checks, remaining upstream limitations, unexecuted provider scenarios and artifact hashes. A failed required check remains incomplete; a new source commit requires qualification of that commit. Keep publication, tags, merging and production operations separate from local preparation.
+
+## First Packagist registration and updates
+
+**[Publish for the first time →](https://packagist.org/packages/submit)**
+
+After the release tracker’s required checks pass and the release tag is published, sign in to Packagist, submit `https://github.com/jojeringnax/airwallex-laravel`, and confirm the package. Browser submission needs no Main API Token in GitHub. Verify that the resulting [package page](https://packagist.org/packages/jojeringnax/airwallex-laravel) lists the intended tag/source revision.
+
+The [Update Packagist action](https://github.com/jojeringnax/airwallex-laravel/actions/workflows/packagist.yml) runs on published GitHub releases and also offers **Run workflow** for a manual refresh after registration. It uses repository secrets `PACKAGIST_USERNAME` and the **Safe** `PACKAGIST_API_TOKEN`, sent in the recommended Authorization header. It only refreshes the fixed registered repository; it does not create a package, tag or release. [Packagist’s API contract](https://packagist.org/apidoc) permits Safe-token updates and requires Main only for API-based first registration.

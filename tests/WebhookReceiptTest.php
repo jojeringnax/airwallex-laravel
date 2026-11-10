@@ -24,6 +24,7 @@ use Jojeringnax\AirwallexLaravel\Services\BillingWebhookProcessor;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Jojeringnax\AirwallexLaravel\Services\ReceiptManager;
 use Jojeringnax\AirwallexLaravel\Services\ReceiptOutcome;
+use Jojeringnax\AirwallexLaravel\Tests\Support\TestDatabase;
 use Mockery;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
@@ -193,7 +194,7 @@ class WebhookReceiptTest extends TestCase
     }
 
     #[DataProvider('concurrentBodies')]
-    public function test_separate_receivers_converge_on_one_receipt_with_native_sqlite_uniqueness(bool $conflicting): void
+    public function test_separate_receivers_converge_on_one_receipt_with_native_database_uniqueness(bool $conflicting): void
     {
         $directory = sys_get_temp_dir().'/airwallex-receipt-race-'.bin2hex(random_bytes(8));
         mkdir($directory, 0700);
@@ -210,7 +211,7 @@ $app = new Illuminate\Foundation\Application($root);
 Illuminate\Foundation\Application::setInstance($app);
 $app->instance('config', new Illuminate\Config\Repository(['airwallex' => ['webhook' => ['secret' => 'synthetic-webhook-secret', 'tolerance_milliseconds' => 300000, 'version' => '2026-08-21']]]));
 $capsule = new Illuminate\Database\Capsule\Manager($app);
-$capsule->addConnection(['driver' => 'sqlite', 'database' => $database, 'foreign_key_constraints' => true, 'busy_timeout' => 10000], 'race');
+$capsule->addConnection(Jojeringnax\AirwallexLaravel\Tests\Support\TestDatabase::connection($database), 'race');
 $capsule->getDatabaseManager()->setDefaultConnection('race');
 $capsule->setAsGlobal();
 $capsule->bootEloquent();
@@ -232,7 +233,7 @@ try {
     fwrite(STDOUT, json_encode(['retryable' => true], JSON_THROW_ON_ERROR));
 }
 PHP);
-        config(['database.connections.testing.database' => $database, 'database.connections.testing.busy_timeout' => 10000]);
+        config(['database.connections.testing' => TestDatabase::connection($database)]);
         DB::purge('testing');
         $processes = [];
         try {

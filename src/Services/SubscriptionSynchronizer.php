@@ -147,6 +147,7 @@ class SubscriptionSynchronizer
         try {
             return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $remote, $after, $items): Subscription {
                 app(CommitGuard::class)->assertMayCommit();
+                ModelRegistry::query('customer')->whereKey($customer->id)->lockForUpdate()->firstOrFail();
                 if ($operation !== null) {
                     $operation = $this->creationOperation($customer, $name, $remoteId, $operation);
                 }

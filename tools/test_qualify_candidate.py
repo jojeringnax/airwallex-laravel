@@ -107,7 +107,7 @@ class ArchiveBoundaryTest(unittest.TestCase):
     def test_qualifier_git_archive_matches_canonical_utc_bytes(self):
         repo = Path(self.directory.name) / "git-fixture"
         repo.mkdir()
-        qualification = qualifier.Qualification(SimpleNamespace(repo=repo, candidate="HEAD", dependencies="latest"))
+        qualification = qualifier.Qualification(SimpleNamespace(repo=repo, candidate="HEAD", dependencies="latest", laravel="12", database="sqlite"))
         environment = dict(qualification.env, GIT_AUTHOR_NAME="Archive fixture", GIT_AUTHOR_EMAIL="fixture@example.test", GIT_COMMITTER_NAME="Archive fixture", GIT_COMMITTER_EMAIL="fixture@example.test", GIT_AUTHOR_DATE="2026-11-10T12:00:00+0000", GIT_COMMITTER_DATE="2026-11-10T12:00:00+0000")
         subprocess.run(["git", "init", "--quiet"], cwd=repo, env=environment, check=True)
         (repo / "src").mkdir()

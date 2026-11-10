@@ -217,7 +217,7 @@ class ReceiptManager
 
     private function assertLease(string $receiptId, string $token, string $digest): void
     {
-        if (! $this->lease($receiptId, $token, $digest)->exists()) {
+        if ($this->lease($receiptId, $token, $digest)->lockForUpdate()->first() === null) {
             throw new ConflictException('Receipt processing lease was superseded.');
         }
     }

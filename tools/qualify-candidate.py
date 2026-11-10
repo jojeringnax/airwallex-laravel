@@ -96,7 +96,7 @@ class Qualification:
         self.workspace: Path | None = None
         self.output: Path | None = None
         self.records: list[dict] = []
-        self.evidence: dict = {"status": "incomplete", "provisional_version": VERSION, "candidate_input": args.candidate, "dependencies": args.dependencies, "financial_network": "disabled; synthetic PSR-18 transport only", "tool_runtime": {"python": sys.version, "executable": sys.executable, "platform": sys.platform}, "commands": self.records}
+        self.evidence: dict = {"status": "incomplete", "provisional_version": VERSION, "candidate_input": args.candidate, "dependencies": args.dependencies, "laravel_major": args.laravel, "database": args.database, "financial_network": "disabled; synthetic PSR-18 transport only", "tool_runtime": {"python": sys.version, "executable": sys.executable, "platform": sys.platform}, "commands": self.records}
         # Do not inherit provider credentials, Composer auth, or application configuration.
         self.env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "TMPDIR") if key in os.environ}
         self.env.update({"TZ": "UTC", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "COMPOSER_NO_INTERACTION": "1", "COMPOSER_ROOT_VERSION": "1.0.0"})
@@ -198,7 +198,12 @@ class Qualification:
         (consumer / "bootstrap/app.php").write_text("<?php\nreturn Illuminate\\Foundation\\Application::configure(basePath: dirname(__DIR__))->withExceptions()->create();\n")
         (consumer / "artisan").write_text("<?php\nrequire __DIR__.'/vendor/autoload.php';\n$app = require __DIR__.'/bootstrap/app.php';\nexit($app->handleCommand(new Symfony\\Component\\Console\\Input\\ArgvInput));\n")
         (consumer / ".env").write_text("APP_ENV=testing\nAPP_DEBUG=false\nAPP_KEY=base64:YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=\nDB_CONNECTION=sqlite\nDB_DATABASE=" + json.dumps(str(consumer / "database/database.sqlite")) + "\nCACHE_STORE=array\nQUEUE_CONNECTION=sync\n")
-        framework = metadata["require"].get("illuminate/support")
+        if self.args.database == "mysql":
+            database = os.environ.get("AIRWALLEX_QUALIFY_MYSQL_DATABASE", "airwallex_test_consumer")
+            if re.fullmatch(r"airwallex_test_[a-z0-9]+", database) is None:
+                raise ValueError("MySQL consumer requires a dedicated disposable airwallex_test_ database.")
+            self.env.update({"DB_CONNECTION": "mysql", "DB_HOST": os.environ.get("AIRWALLEX_TEST_MYSQL_HOST", "127.0.0.1"), "DB_PORT": os.environ.get("AIRWALLEX_TEST_MYSQL_PORT", "33079"), "DB_DATABASE": database, "DB_USERNAME": os.environ.get("AIRWALLEX_TEST_MYSQL_USER", "root"), "DB_PASSWORD": os.environ.get("AIRWALLEX_TEST_MYSQL_PASSWORD", "")})
+        framework = "^12.69" if self.args.laravel == "12" else "^13.30"
         if not isinstance(framework, str):
             raise ValueError("Candidate has no declared Laravel support constraint.")
         consumer_metadata = {"name": "qualification/airwallex-consumer", "description": "Isolated deterministic archive consumer qualification.", "type": "project", "license": "MIT", "require": {"php": metadata["require"]["php"], "laravel/framework": framework, PACKAGE: VERSION}, "repositories": [repository], "minimum-stability": "stable", "prefer-stable": True, "config": {"allow-plugins": {}}}
@@ -249,6 +254,8 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parent.parent)
     parser.add_argument("--php", default="php", help="PHP executable/path; defaults to php on PATH")
     parser.add_argument("--dependencies", choices=("lowest", "latest"), default="latest", help="Security-aware fresh consumer resolution; defaults to latest")
+    parser.add_argument("--laravel", choices=("12", "13"), default="12", help="Explicit native framework major")
+    parser.add_argument("--database", choices=("sqlite", "mysql"), default="sqlite", help="Explicit native database backend; MySQL requires a precreated disposable schema")
     parser.add_argument("--workspace", type=Path, default=Path(tempfile.gettempdir()) / "airwallex-candidate-qualification", help="Base for a new private isolated run directory")
     parser.add_argument("--output", type=Path, help="Optional evidence base; a new directory is created per run")
     parser.add_argument("--archive-only", action="store_true", help="Verify archive/descriptor only; never reports consumer qualification passed")
