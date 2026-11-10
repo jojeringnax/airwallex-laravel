@@ -6,10 +6,13 @@ namespace Jojeringnax\AirwallexLaravel\Models;
 
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Collection;
 use Jojeringnax\AirwallexLaravel\Casts\LosslessJson;
 use Jojeringnax\AirwallexLaravel\Contracts\SubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\DefaultSubscriptionAccessPolicy;
+use Jojeringnax\AirwallexLaravel\Invoice;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
+use Jojeringnax\AirwallexLaravel\Services\InvoiceManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 
@@ -57,6 +60,17 @@ class Subscription extends BillingModel
     public function reconcile(): Subscription
     {
         return app(SubscriptionSynchronizer::class)->reconcile($this);
+    }
+
+    public function findInvoice(string $id): Invoice
+    {
+        return app(InvoiceManager::class)->retrieve($this, $id);
+    }
+
+    /** @return Collection<int,Invoice> */
+    public function invoices(array $query = []): Collection
+    {
+        return app(InvoiceManager::class)->all($this, $query);
     }
 
     public function updateQuantity(string $actionKey, mixed $quantity, array $options, ?string $itemId = null): Subscription

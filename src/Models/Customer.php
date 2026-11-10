@@ -6,7 +6,10 @@ namespace Jojeringnax\AirwallexLaravel\Models;
 
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\MorphTo;
+use Illuminate\Support\Collection;
+use Jojeringnax\AirwallexLaravel\Invoice;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
+use Jojeringnax\AirwallexLaravel\Services\InvoiceManager;
 
 /**
  * @property string $billable_type
@@ -39,5 +42,16 @@ class Customer extends BillingModel
     public function slots(): HasMany
     {
         return $this->hasMany(ModelRegistry::class('subscription_slot'), 'customer_id');
+    }
+
+    public function findInvoice(string $id): Invoice
+    {
+        return app(InvoiceManager::class)->retrieve($this, $id);
+    }
+
+    /** @return Collection<int,Invoice> */
+    public function invoices(array $query = []): Collection
+    {
+        return app(InvoiceManager::class)->all($this, $query);
     }
 }

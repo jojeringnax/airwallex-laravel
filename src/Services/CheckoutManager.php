@@ -202,7 +202,11 @@ class CheckoutManager
         $this->verify($remote, $id, $customer, $operation, $requireCorrelation);
         try {
             $checkout = DB::transaction(function () use ($operation, $customer, $before, $remote, $id): Checkout {
+                app(CommitGuard::class)->assertMayCommit();
                 $checkout = ModelRegistry::query('checkout')->where($this->context->attributes())->where('remote_id', $id)->first();
+                if ($before !== null && ($checkout === null || $checkout->id !== $before->id)) {
+                    throw new ConflictException('The known checkout mapping was removed during reconciliation.');
+                }
                 if ($checkout && ($checkout->operation_id !== $operation->id || $checkout->customer_id !== $customer->id)) {
                     throw new OwnershipException('Checkout is already mapped to a different intent.');
                 }
@@ -298,6 +302,7 @@ class CheckoutManager
             }
         } elseif (in_array($checkout->status, ['CANCELLED', 'EXPIRED'], true)) {
             DB::transaction(function () use ($checkout, $operation): void {
+                app(CommitGuard::class)->assertMayCommit();
                 $current = ModelRegistry::query('checkout')->findOrFail($checkout->id);
                 $this->context->assertModel($current);
                 $intent = ModelRegistry::query('operation')->findOrFail($operation->id);
@@ -314,6 +319,7 @@ class CheckoutManager
     private function linkChild(Checkout $checkout, string $kind, string $localId, string $remoteId): void
     {
         DB::transaction(function () use ($checkout, $kind, $localId, $remoteId): void {
+            app(CommitGuard::class)->assertMayCommit();
             $current = ModelRegistry::query('checkout')->findOrFail($checkout->id);
             $this->context->assertModel($current);
             Routing::assertSnapshot($current->snapshot ?? []);
@@ -497,6 +503,7 @@ class CheckoutManager
     private function rejectPrepared(Operation $operation): void
     {
         DB::transaction(function () use ($operation): void {
+            app(CommitGuard::class)->assertMayCommit();
             $changed = ModelRegistry::query('operation')->whereKey($operation->id)->where('status', 'prepared')->update(['status' => 'failed', 'lock_key' => null, 'error_code' => 'checkout_preflight']);
             if ($changed !== 1) {
                 throw new AmbiguousOperationException($operation->id);

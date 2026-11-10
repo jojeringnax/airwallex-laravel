@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
 use Illuminate\Support\Collection;
 use Jojeringnax\AirwallexLaravel\Concerns\ManagesCustomers;
+use Jojeringnax\AirwallexLaravel\Concerns\ManagesInvoices;
 use Jojeringnax\AirwallexLaravel\Concerns\ManagesSubscriptions;
 use Jojeringnax\AirwallexLaravel\Models\Checkout;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
@@ -20,6 +21,7 @@ use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 trait Billable
 {
     use ManagesCustomers;
+    use ManagesInvoices;
     use ManagesSubscriptions;
 
     public function setupPaymentMethod(string $actionKey, array $options = []): Checkout

@@ -158,6 +158,44 @@ class SubscriptionManager
         return $this->recoverChange($subscription, $operation);
     }
 
+    /** A candidate is a locator, never proof; verify canonical correlation before recording it. */
+    public function recoverCreation(Operation $operation, ?string $candidateId = null): Subscription
+    {
+        $this->context->assertModel($operation);
+        $operation = ModelRegistry::query('operation')->findOrFail($operation->id);
+        $this->context->assertModel($operation);
+        if ($operation->kind !== 'subscription.create' || ! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded'], true)) {
+            throw new ConflictException('Only attempted subscription creation supports candidate recovery.', $operation->id);
+        }
+        if ($candidateId !== null && $operation->remote_id !== null && $operation->remote_id !== $candidateId) {
+            throw new OwnershipException('Creation resource identity cannot be replaced.');
+        }
+        if ($operation->remote_id === null && $candidateId !== null) {
+            $customer = ModelRegistry::query('customer')->findOrFail($operation->customer_id);
+            $this->context->assertModel($customer);
+            $remote = app(Client::class)->billing()->subscriptions()->retrieve($candidateId);
+            $this->response($remote, $candidateId, $customer);
+            $metadata = (array) ($remote['metadata'] ?? []);
+            if (($remote['billing_customer_id'] ?? null) !== $customer->remote_id || ($metadata['_laravel_operation_id'] ?? null) !== $operation->id) {
+                throw new OwnershipException('Candidate subscription has no matching owned creation correlation.');
+            }
+            Routing::assertSnapshot($remote);
+            DB::transaction(function () use ($operation, $candidateId): void {
+                app(CommitGuard::class)->assertMayCommit();
+                $operation->refresh();
+                if (! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded'], true) || ($operation->remote_id !== null && $operation->remote_id !== $candidateId)) {
+                    throw new ConflictException('Creation correlation changed during recovery.', $operation->id);
+                }
+                if ($operation->remote_id === null) {
+                    $operation->remote_id = $candidateId;
+                    $operation->save();
+                }
+            });
+        }
+
+        return $this->reconcileOperation($operation);
+    }
+
     private function finishCreation(Customer $customer, string $name, Operation $operation): Subscription
     {
         if ($operation->status === 'failed') {
@@ -502,6 +540,7 @@ class SubscriptionManager
         } catch (Throwable $exception) {
             try {
                 DB::transaction(function () use ($operation): void {
+                    app(CommitGuard::class)->assertMayCommit();
                     $changed = ModelRegistry::query('operation')->whereKey($operation->id)->where('status', 'prepared')->update(['status' => 'failed', 'lock_key' => null, 'error_code' => 'preflight_rejected']);
                     if ($changed !== 1) {
                         throw new AmbiguousOperationException($operation->id);

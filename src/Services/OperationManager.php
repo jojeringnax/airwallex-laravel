@@ -54,6 +54,7 @@ class OperationManager
         try {
             /** @var Operation */
             return DB::transaction(function () use ($identity, $hash, $customer, $kind, $intent, $subscription, $name, $lockKey): Operation {
+                app(CommitGuard::class)->assertMayCommit();
                 $existing = ModelRegistry::query('operation')->where($identity)->first();
                 if ($existing) {
                     if (! hash_equals($existing->intent_hash, $hash)) {
@@ -112,6 +113,7 @@ class OperationManager
                 throw new AmbiguousOperationException($operation->id, $exception);
             }
             DB::transaction(function () use ($operation): void {
+                app(CommitGuard::class)->assertMayCommit();
                 $operation->refresh();
                 $operation->forceFill(['status' => 'failed', 'lock_key' => null, 'error_code' => 'sdk_validation'])->save();
                 ModelRegistry::query('subscription_slot')->where('operation_id', $operation->id)->whereNull('subscription_id')->delete();
@@ -132,24 +134,30 @@ class OperationManager
     public function acknowledgeItemEffect(Operation $operation): void
     {
         $this->context->assertModel($operation);
-        $operation->refresh();
-        if (! in_array($operation->kind, ['subscription.quantity', 'subscription.items', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item'], true)
-            || ! in_array($operation->status, ['in_flight', 'ambiguous', 'acknowledged'], true) || $operation->remote_id === null || $operation->subscription_id === null) {
-            throw new ConflictException('Only a recorded item-action response can be acknowledged without observed fulfillment.', $operation->id);
-        }
-        // A parallel canonical recovery may already have established fulfillment.
-        // Preserve that terminal proof instead of saving a stale model over it.
-        ModelRegistry::query('operation')->whereKey($operation->id)
-            ->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged'])
-            ->update(['status' => 'acknowledged', 'lock_key' => null, 'error_code' => 'item_effect_unconfirmed']);
-        $operation->refresh();
+        DB::transaction(function () use ($operation): void {
+            app(CommitGuard::class)->assertMayCommit();
+            $operation->refresh();
+            if (! in_array($operation->kind, ['subscription.quantity', 'subscription.items', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item'], true)
+                || ! in_array($operation->status, ['in_flight', 'ambiguous', 'acknowledged'], true) || $operation->remote_id === null || $operation->subscription_id === null) {
+                throw new ConflictException('Only a recorded item-action response can be acknowledged without observed fulfillment.', $operation->id);
+            }
+            // A parallel canonical recovery may already have established fulfillment.
+            // Preserve that terminal proof instead of saving a stale model over it.
+            ModelRegistry::query('operation')->whereKey($operation->id)
+                ->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged'])
+                ->update(['status' => 'acknowledged', 'lock_key' => null, 'error_code' => 'item_effect_unconfirmed']);
+            $operation->refresh();
+        });
     }
 
     public function succeed(Operation $operation): void
     {
         $this->context->assertModel($operation);
-        $operation->refresh();
-        $operation->forceFill(['status' => 'succeeded', 'lock_key' => null, 'error_code' => null])->save();
+        DB::transaction(function () use ($operation): void {
+            app(CommitGuard::class)->assertMayCommit();
+            $operation->refresh();
+            $operation->forceFill(['status' => 'succeeded', 'lock_key' => null, 'error_code' => null])->save();
+        });
     }
 
     public function releaseTerminated(Subscription $subscription): void
@@ -159,6 +167,7 @@ class OperationManager
             throw new ConflictException('Only confirmed provider termination releases a subscription name.');
         }
         DB::transaction(function () use ($subscription): void {
+            app(CommitGuard::class)->assertMayCommit();
             if (! ModelRegistry::query('subscription')->whereKey($subscription->id)->where('status', 'CANCELLED')->exists()) {
                 throw new ConflictException('Subscription termination is not persisted.');
             }

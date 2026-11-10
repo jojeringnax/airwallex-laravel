@@ -5,5 +5,6 @@ A Cashier-style Laravel Billing integration built on [airwallex-php-sdk](https:/
 - [Accepted scope and access rules](docs/scope.md)
 - [Public interfaces, schema and lifecycles](docs/contracts.md)
 - [Compatibility, distribution and release gates](docs/compatibility.md)
+- [Webhook deployment, queues, recovery and offboarding](docs/operations.md)
 - [Versioned provider evidence and limitations](docs/provider-contracts.md)
 - [Release tracker](https://github.com/jojeringnax/airwallex-laravel/issues/1) and [delivery project](https://github.com/users/jojeringnax/projects/3)

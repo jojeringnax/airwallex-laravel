@@ -61,6 +61,7 @@ class CustomerManager
             // this operation acquired its durable hold. No write was sent.
             try {
                 return DB::transaction(function () use ($customer, $operation): Customer {
+                    app(CommitGuard::class)->assertMayCommit();
                     $operation->remote_id = $customer->remote_id;
                     $operation->save();
                     $this->operations->succeed($operation);
@@ -182,6 +183,7 @@ class CustomerManager
         $this->context->assertModel($customer);
         try {
             return DB::transaction(function () use ($customer, $id, $linking): Customer {
+                app(CommitGuard::class)->assertMayCommit();
                 $customer->refresh();
                 if ($customer->remote_id !== null && $customer->remote_id !== $id) {
                     throw new OwnershipException('A customer mapping cannot be reassigned.');
@@ -232,6 +234,37 @@ class CustomerManager
         }
 
         return $operation;
+    }
+
+    /** Refresh only an already mapped customer; never discover by profile/email. */
+    public function reconcile(Customer $customer): Customer
+    {
+        $this->context->assertModel($customer);
+        $customer = ModelRegistry::query('customer')->findOrFail($customer->id);
+        $this->context->assertModel($customer);
+        if ($customer->remote_id === null) {
+            throw new ConflictException('A confirmed customer mapping is required.');
+        }
+        $remote = app(Client::class)->billing()->customers()->retrieve($customer->remote_id);
+        $this->verify($remote, $customer->remote_id);
+
+        return $this->attach($customer, $remote, expectedId: $customer->remote_id);
+    }
+
+    /** @internal Attempted-operation recovery performs canonical reads only. */
+    public function reconcileOperation(Operation $operation): Customer
+    {
+        $this->context->assertModel($operation);
+        $operation = ModelRegistry::query('operation')->findOrFail($operation->id);
+        $this->context->assertModel($operation);
+        if (! in_array($operation->kind, ['customer.create', 'customer.update'], true)
+            || ! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded'], true)) {
+            throw new ConflictException('Customer operation has no recoverable attempt.', $operation->id);
+        }
+        $customer = ModelRegistry::query('customer')->findOrFail($operation->customer_id);
+        $this->context->assertModel($customer);
+
+        return $operation->status === 'succeeded' ? $this->confirmedMapping($customer, $operation) : $this->recover($customer, $operation);
     }
 
     private function recover(Customer $customer, Operation $operation): Customer

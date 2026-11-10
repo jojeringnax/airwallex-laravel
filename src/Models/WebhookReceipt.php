@@ -4,11 +4,26 @@ declare(strict_types=1);
 
 namespace Jojeringnax\AirwallexLaravel\Models;
 
+use Carbon\CarbonImmutable;
+
+/**
+ * @property string $event_id
+ * @property string $digest
+ * @property ?string $event_name
+ * @property ?string $version
+ * @property ?string $resource_id
+ * @property ?string $body
+ * @property string $status
+ * @property int $attempts
+ * @property ?string $last_error
+ * @property ?string $lease_token
+ * @property ?CarbonImmutable $lease_until
+ */
 class WebhookReceipt extends BillingModel
 {
     protected $table = 'airwallex_webhook_receipts';
 
-    protected $casts = ['body' => 'encrypted', 'lease_until' => 'immutable_datetime'];
+    protected $casts = ['body' => 'encrypted', 'attempts' => 'integer', 'lease_until' => 'immutable_datetime'];
 
     protected function immutable(): array
     {
