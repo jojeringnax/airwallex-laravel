@@ -15,6 +15,7 @@ use Jojeringnax\Airwallex\Environment;
 use Jojeringnax\Airwallex\RetryPolicy;
 use Jojeringnax\AirwallexLaravel\Contracts\SubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
+use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
@@ -24,6 +25,7 @@ class AirwallexServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/airwallex.php', 'airwallex');
+        $this->app->scoped(CommitGuard::class);
         $this->app->scoped(BillingContext::class, fn (Application $app) => new BillingContext(
             $this->stringConfig($app, 'environment'),
             $this->stringConfig($app, 'organization_id'),
@@ -71,7 +73,15 @@ class AirwallexServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+        $this->loadRoutesFrom(__DIR__.'/../routes/airwallex.php');
         if ($this->app->runningInConsole()) {
+            $this->commands([
+                Console\ReconcileCommand::class,
+                Console\OperationsCommand::class,
+                Console\ReceiptsCommand::class,
+                Console\EventsCommand::class,
+                Console\PruneReceiptsCommand::class,
+            ]);
             $this->publishes([__DIR__.'/../config/airwallex.php' => config_path('airwallex.php')], 'airwallex-config');
             $this->publishes([__DIR__.'/../database/migrations' => database_path('migrations')], 'airwallex-migrations');
         }

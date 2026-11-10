@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Casts\LosslessJson;
  * @property ?string $remote_id
  * @property string $status
  * @property ?string $lock_key
+ * @property ?string $error_code
  * @property array<string,mixed> $intent
  */
 class Operation extends BillingModel

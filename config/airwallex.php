@@ -38,4 +38,8 @@ return [
         'lease_seconds' => 300,
         'queue' => env('AIRWALLEX_WEBHOOK_QUEUE'),
     ],
+    'events' => [
+        'lease_seconds' => 300,
+        'queue' => env('AIRWALLEX_EVENTS_QUEUE'),
+    ],
 ];

@@ -146,10 +146,14 @@ class SubscriptionSynchronizer
         }
         try {
             return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $after, $items): Subscription {
+                app(CommitGuard::class)->assertMayCommit();
                 if ($operation !== null) {
                     $operation = $this->creationOperation($customer, $name, $remoteId, $operation);
                 }
                 $subscription = $this->existing($customer, $name, $remoteId);
+                if ($before !== null && ($subscription === null || $subscription->id !== $before->id)) {
+                    throw new ConflictException('The known subscription mapping was removed during reconciliation.');
+                }
                 $new = $subscription === null;
                 $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $customer->id)->where('name', $name)->first();
                 $terminal = $after['status'] === 'CANCELLED';
