@@ -28,8 +28,7 @@ class DefaultSubscriptionAccessPolicy implements SubscriptionAccessPolicy
                 }
             }
             if ($subscription->cancel_at_period_end) {
-                // An actual ends_at is authoritative; a period bound is needed only if absent.
-                $end = $subscription->ends_at ?? $subscription->current_period_ends_at;
+                $end = $subscription->scheduled_ends_at;
                 if (! is_string($end) || Timestamp::compare($now, $end) >= 0) {
                     return false;
                 }

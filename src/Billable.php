@@ -6,15 +6,33 @@ namespace Jojeringnax\AirwallexLaravel;
 
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
+use Illuminate\Support\Collection;
 use Jojeringnax\AirwallexLaravel\Concerns\ManagesCustomers;
+use Jojeringnax\AirwallexLaravel\Concerns\ManagesSubscriptions;
+use Jojeringnax\AirwallexLaravel\Models\Checkout;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
+use Jojeringnax\AirwallexLaravel\Services\CheckoutManager;
 use Jojeringnax\AirwallexLaravel\Services\CustomerManager;
+use Jojeringnax\AirwallexLaravel\Services\SourceManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 
 trait Billable
 {
     use ManagesCustomers;
+    use ManagesSubscriptions;
+
+    public function setupPaymentMethod(string $actionKey, array $options = []): Checkout
+    {
+        return app(CheckoutManager::class)->setup($this, $actionKey, $options);
+    }
+
+    public function paymentSources(array $query = []): Collection
+    {
+        $customer = app(CustomerManager::class)->requireCustomer($this);
+
+        return app(SourceManager::class)->all($customer, $query);
+    }
 
     public function importSubscription(string $name, string $remoteId): Subscription
     {
