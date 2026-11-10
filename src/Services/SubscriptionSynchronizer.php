@@ -26,14 +26,14 @@ class SubscriptionSynchronizer
 
     public function __construct(private readonly Client $client, private readonly BillingContext $context, private readonly OperationManager $operations, private readonly Outbox $outbox) {}
 
-    public function reconcile(Subscription $subscription): Subscription
+    public function reconcile(Subscription $subscription, bool $financial = false): Subscription
     {
         $this->context->assertModel($subscription);
         $before = ModelRegistry::query('subscription')->findOrFail($subscription->getKey());
         $this->context->assertModel($before);
         $customer = ModelRegistry::query('customer')->findOrFail($before->customer_id);
 
-        return $this->refresh($customer, $before->name, $before->remote_id, $before);
+        return $this->refresh($customer, $before->name, $before->remote_id, $before, financial: $financial);
     }
 
     public function import(Customer $customer, string $name, string $remoteId): Subscription
@@ -98,7 +98,7 @@ class SubscriptionSynchronizer
         return $existing;
     }
 
-    private function refresh(Customer $customer, string $name, string $remoteId, ?Subscription $before, ?Operation $operation = null): Subscription
+    private function refresh(Customer $customer, string $name, string $remoteId, ?Subscription $before, ?Operation $operation = null, bool $financial = false): Subscription
     {
         $this->context->assertModel($customer);
         if (! $customer->exists) {
@@ -111,7 +111,7 @@ class SubscriptionSynchronizer
         }
         $remote = $this->client->billing()->subscriptions()->retrieve($remoteId);
         $this->verify($remote, $remoteId, $customer);
-        if ($operation !== null) {
+        if ($operation !== null || $financial) {
             Routing::assertSubscription($remote);
         }
         $items = Pages::all(fn (array $query) => $this->client->billing()->subscriptions()->listItems($remoteId, $query));
@@ -124,7 +124,7 @@ class SubscriptionSynchronizer
         // change while paging and retain the previous complete local projection.
         $after = $this->client->billing()->subscriptions()->retrieve($remoteId);
         $this->verify($after, $remoteId, $customer);
-        if ($operation !== null) {
+        if ($operation !== null || $financial) {
             Routing::assertSubscription($after);
         }
         if (! $this->sameCore($remote, $after) || Timestamp::compare($remote['updated_at'], $after['updated_at']) !== 0) {
@@ -204,6 +204,8 @@ class SubscriptionSynchronizer
                         }
                     }
                 }
+                $routing = array_filter(array_intersect_key($after, array_flip(['legal_entity_id', 'linked_payment_account_id'])), fn ($value) => is_string($value) && $value !== '');
+                $subscription->observed_routing = [...($subscription->observed_routing ?? array_filter(array_intersect_key($subscription->snapshot ?? [], array_flip(['legal_entity_id', 'linked_payment_account_id'])), fn ($value) => is_string($value) && $value !== '')), ...$routing];
                 $snapshot = self::sanitize($after);
                 $changed = ! $subscription->exists || CanonicalJson::encode($subscription->snapshot) !== CanonicalJson::encode($snapshot);
                 $subscription->fill(['status' => $after['status'], 'cancel_at_period_end' => $after['cancel_at_period_end'], 'scheduled_ends_at' => $scheduleEnd, 'provider_created_at' => $after['created_at'], 'provider_updated_at' => $after['updated_at'], 'snapshot' => $snapshot, 'synced_at' => now(), 'items_synced_at' => now(), 'revision' => ($subscription->revision ?? 0) + 1]);
@@ -281,6 +283,9 @@ class SubscriptionSynchronizer
     private function sameCore(array $left, array $right): bool
     {
         foreach (['id', 'billing_customer_id', 'status', 'collection_method', 'payment_source_id', 'cancel_at_period_end', 'legal_entity_id', 'linked_payment_account_id', 'created_at', ...self::DATES] as $key) {
+            if (in_array($key, ['legal_entity_id', 'linked_payment_account_id'], true) && (! array_key_exists($key, $left) || ! array_key_exists($key, $right))) {
+                continue;
+            }
             if (in_array($key, [...self::DATES, 'created_at'], true) && is_string($left[$key] ?? null) && is_string($right[$key] ?? null)) {
                 if (Timestamp::compare($left[$key], $right[$key]) !== 0) {
                     return false;

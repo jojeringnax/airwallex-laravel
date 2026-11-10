@@ -587,6 +587,57 @@ class SubscriptionWorkflowTest extends TestCase
         self::assertNotNull(Operation::first()->lock_key);
     }
 
+    public function test_same_version_optional_routing_omission_during_paging_and_later_change_is_allowed(): void
+    {
+        $present = Billing::subscription();
+        $subscription = $this->seedSubscription($present);
+        $absent = $present;
+        unset($absent['legal_entity_id'], $absent['linked_payment_account_id']);
+        $cancelled = [...$absent, 'status' => 'CANCELLED', 'updated_at' => '2026-11-10T12:01:00Z'];
+        $this->fake([FakeHttpClient::json($present), Billing::page([]), FakeHttpClient::json($absent), FakeHttpClient::json($cancelled), ...$this->observation($cancelled)]);
+        $result = $subscription->cancelNow('cancel', 'NONE');
+        self::assertSame('CANCELLED', $result->status);
+        self::assertArrayNotHasKey('legal_entity_id', $result->snapshot);
+        self::assertSame('succeeded', Operation::first()->status);
+    }
+
+    public function test_first_paged_routing_contradiction_cannot_be_hidden_by_later_omission(): void
+    {
+        $remote = Billing::subscription();
+        $subscription = $this->seedSubscription($remote);
+        $absent = $remote;
+        unset($absent['legal_entity_id'], $absent['linked_payment_account_id']);
+        $http = $this->fake([FakeHttpClient::json([...$remote, 'legal_entity_id' => 'foreign']), Billing::page([]), FakeHttpClient::json($absent)]);
+        $this->expectException(OwnershipException::class);
+        try {
+            $subscription->cancelNow('cancel', 'NONE');
+        } finally {
+            self::assertSame(0, Operation::count());
+            self::assertCount(2, $http->requests);
+        }
+    }
+
+    public function test_read_only_foreign_routing_evidence_survives_later_optional_omission(): void
+    {
+        $foreign = Billing::subscription(['linked_payment_account_id' => 'foreign']);
+        $this->fake($this->observation($foreign));
+        $subscription = $this->team->importSubscription('default', 'sub-test');
+        $absent = Billing::subscription(['updated_at' => '2026-11-10T12:01:00Z']);
+        unset($absent['legal_entity_id'], $absent['linked_payment_account_id']);
+        $this->fake($this->observation($absent));
+        $subscription = $subscription->reconcile();
+        self::assertArrayNotHasKey('linked_payment_account_id', $subscription->snapshot);
+        self::assertSame('foreign', $subscription->observed_routing['linked_payment_account_id']);
+        $http = $this->fake($this->observation($absent));
+        $this->expectException(OwnershipException::class);
+        try {
+            $subscription->cancelNow('cancel', 'NONE');
+        } finally {
+            self::assertSame(0, Operation::count());
+            self::assertSame(0, count(array_filter($http->requests, fn ($request) => str_ends_with($request->getUri()->getPath(), '/cancel'))));
+        }
+    }
+
     public function test_foreign_canonical_routing_blocks_financial_writes(): void
     {
         $remote = Billing::subscription(['linked_payment_account_id' => 'foreign']);
@@ -596,7 +647,7 @@ class SubscriptionWorkflowTest extends TestCase
         try {
             $subscription->cancelNow('cancel', 'NONE');
         } finally {
-            self::assertCount(4, $http->requests);
+            self::assertCount(2, $http->requests);
             self::assertSame(0, Operation::count());
         }
     }
@@ -772,7 +823,7 @@ class SubscriptionWorkflowTest extends TestCase
             self::assertFalse($this->team->subscribed('default'));
             self::assertSame('ambiguous', Operation::first()->status);
             self::assertNotNull(SubscriptionSlot::first()->operation_id);
-            self::assertCount(3, $http->requests);
+            self::assertCount(2, $http->requests);
         }
     }
 

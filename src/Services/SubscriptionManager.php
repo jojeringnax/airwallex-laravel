@@ -250,8 +250,8 @@ class SubscriptionManager
             if ($local->customer_id !== $customer->id || $local->name !== $name) {
                 throw new OwnershipException('Subscription result belongs to a different mapping.');
             }
-            $result = $this->synchronizer->reconcile($local);
-            Routing::assertSubscription($result->snapshot);
+            $result = $this->synchronizer->reconcile($local, financial: true);
+            Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
             $this->outcome($operation, $result);
             if ($result->status === 'CANCELLED') {
                 ModelRegistry::query('subscription_slot')->where('operation_id', $operation->id)->whereNull('subscription_id')->delete();
@@ -272,8 +272,8 @@ class SubscriptionManager
         $this->context->assertModel($customer);
         $operation = $this->existing($customer, $actionKey, $kind, $specification, $subscription);
         if ($operation === null) {
-            $subscription = $this->synchronizer->reconcile($subscription);
-            Routing::assertSubscription($subscription->snapshot);
+            $subscription = $this->synchronizer->reconcile($subscription, financial: true);
+            Routing::assertSubscription([...$subscription->snapshot, ...($subscription->observed_routing ?? [])]);
             if ($subscription->status === 'CANCELLED') {
                 throw new ConflictException('A permanently cancelled subscription cannot accept a new financial action.');
             }
@@ -290,7 +290,7 @@ class SubscriptionManager
         }
         $this->preflight($operation, function () use ($subscription, $customer, $operation): void {
             $current = ModelRegistry::query('subscription')->findOrFail($subscription->id);
-            Routing::assertSubscription($current->snapshot);
+            Routing::assertSubscription([...$current->snapshot, ...($current->observed_routing ?? [])]);
             if ($this->fingerprint($current) !== $operation->intent['fingerprint']) {
                 throw new EvidenceException('Subscription changed before the financial action; prepare a new intent.');
             }
@@ -325,8 +325,8 @@ class SubscriptionManager
             return $operation->kind === 'subscription.cancel' ? $resource->cancel($subscription->remote_id, $payload) : $resource->update($subscription->remote_id, $payload);
         }, function (array $response) use ($subscription, $customer, $operation): Subscription {
             $this->response($response, $subscription->remote_id, $customer);
-            $result = $this->synchronizer->reconcile($subscription);
-            Routing::assertSubscription($result->snapshot);
+            $result = $this->synchronizer->reconcile($subscription, financial: true);
+            Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
             $this->outcome($operation, $result);
 
             return $result;
@@ -439,11 +439,11 @@ class SubscriptionManager
             throw new ConflictException('Financial operation has no recoverable attempt.', $operation->id);
         }
         try {
-            $result = $this->synchronizer->reconcile($subscription);
+            $result = $this->synchronizer->reconcile($subscription, financial: true);
             if ($operation->remote_id === null || $operation->remote_id !== $subscription->remote_id) {
                 throw new AmbiguousOperationException($operation->id);
             }
-            Routing::assertSubscription($result->snapshot);
+            Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
             if ($this->outcome($operation, $result)) {
                 $this->operations->succeed($operation);
             }
