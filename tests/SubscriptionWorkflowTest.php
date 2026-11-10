@@ -585,6 +585,16 @@ class SubscriptionWorkflowTest extends TestCase
         self::assertSame(0, Subscription::count());
         self::assertCount(2, $http->requests);
         self::assertNotNull(Operation::first()->lock_key);
+        $this->fake($this->observation($remote));
+        try {
+            app(SubscriptionManager::class)->reconcileOperation(Operation::first());
+            self::fail('Omission resolved contradictory response evidence.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('ambiguous', Operation::first()->status);
+        }
+        $this->fake($this->observation(Billing::subscription()));
+        app(SubscriptionManager::class)->reconcileOperation(Operation::first());
+        self::assertSame('succeeded', Operation::first()->status);
     }
 
     public function test_same_version_optional_routing_omission_during_paging_and_later_change_is_allowed(): void

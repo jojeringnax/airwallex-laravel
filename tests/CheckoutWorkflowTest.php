@@ -307,6 +307,30 @@ class CheckoutWorkflowTest extends TestCase
         self::assertSame('https://checkout.airwallex.com/synthetic-session', $checkout->redirect()->getTargetUrl());
     }
 
+    public function test_contradictory_checkout_response_cannot_be_resolved_by_optional_omission(): void
+    {
+        $remote = Billing::checkout();
+        unset($remote['legal_entity_id']);
+        $this->fake([FakeHttpClient::json([...$remote, 'legal_entity_id' => 'foreign'])]);
+        try {
+            $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+            self::fail('Contradictory response was accepted.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('ambiguous', Operation::first()->status);
+        }
+        $this->fake([FakeHttpClient::json($remote)]);
+        try {
+            $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+            self::fail('Omission resolved contradictory response evidence.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('ambiguous', Operation::first()->status);
+            self::assertSame(0, Checkout::count());
+        }
+        $this->fake([FakeHttpClient::json(Billing::checkout())]);
+        $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+        self::assertSame('succeeded', Operation::first()->status);
+    }
+
     public function test_required_checkout_collector_cannot_be_absent(): void
     {
         $remote = Billing::checkout();

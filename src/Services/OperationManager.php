@@ -98,6 +98,7 @@ class OperationManager
                 throw new EvidenceException('Mutation response has no resource identity.');
             }
             $operation->refresh();
+            $operation->observed_routing = array_intersect_key($result, array_flip(['legal_entity_id', 'linked_payment_account_id']));
             $operation->remote_id = $result['id'];
             $operation->save();
             $confirmed = $confirm($result, $operation);

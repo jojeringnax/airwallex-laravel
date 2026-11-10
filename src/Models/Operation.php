@@ -17,13 +17,14 @@ use Jojeringnax\AirwallexLaravel\Casts\LosslessJson;
  * @property string $status
  * @property ?string $lock_key
  * @property ?string $error_code
+ * @property ?array<string,mixed> $observed_routing
  * @property array<string,mixed> $intent
  */
 class Operation extends BillingModel
 {
     protected $table = 'airwallex_operations';
 
-    protected $casts = ['intent' => LosslessJson::class.':encrypted'];
+    protected $casts = ['observed_routing' => LosslessJson::class, 'intent' => LosslessJson::class.':encrypted'];
 
     protected function immutable(): array
     {

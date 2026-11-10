@@ -383,6 +383,7 @@ class CheckoutManager
                     if ($operation->remote_id === null || $operation->remote_id !== $current->remote_id) {
                         throw new AmbiguousOperationException($operation->id);
                     }
+                    Routing::assertCheckout([...($operation->observed_routing ?? []), ...$current->snapshot]);
                     $this->outcome($current, $operation);
                     $this->operations->succeed($operation);
 
@@ -478,7 +479,7 @@ class CheckoutManager
         if (($remote['id'] ?? null) !== $id || ($remote['billing_customer_id'] ?? null) !== $customer->remote_id || ($remote['mode'] ?? null) !== $mode || ($remote['ui_mode'] ?? null) !== 'HOSTED') {
             throw new OwnershipException('Checkout identity, mode or customer does not match its durable intent.');
         }
-        Routing::assertCheckout($remote);
+        Routing::assertCheckout([...($operation->observed_routing ?? []), ...$remote]);
         foreach (['org_id' => $this->context->organizationId, 'organization_id' => $this->context->organizationId, 'environment' => $this->context->environment] as $key => $expected) {
             if (array_key_exists($key, $remote) && $remote[$key] !== $expected) {
                 throw new OwnershipException('Checkout response belongs to a foreign context.');

@@ -251,6 +251,7 @@ class SubscriptionManager
                 throw new OwnershipException('Subscription result belongs to a different mapping.');
             }
             $result = $this->synchronizer->reconcile($local, financial: true);
+            Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
             Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
             $this->outcome($operation, $result);
             if ($result->status === 'CANCELLED') {
@@ -326,6 +327,7 @@ class SubscriptionManager
         }, function (array $response) use ($subscription, $customer, $operation): Subscription {
             $this->response($response, $subscription->remote_id, $customer);
             $result = $this->synchronizer->reconcile($subscription, financial: true);
+            Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
             Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
             $this->outcome($operation, $result);
 
@@ -443,6 +445,7 @@ class SubscriptionManager
             if ($operation->remote_id === null || $operation->remote_id !== $subscription->remote_id) {
                 throw new AmbiguousOperationException($operation->id);
             }
+            Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
             Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
             if ($this->outcome($operation, $result)) {
                 $this->operations->succeed($operation);

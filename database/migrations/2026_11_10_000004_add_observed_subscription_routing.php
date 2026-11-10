@@ -12,6 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('airwallex_subscriptions', fn (Blueprint $table) => $table->text('observed_routing')->nullable());
+        Schema::table('airwallex_operations', fn (Blueprint $table) => $table->text('observed_routing')->nullable());
         DB::table('airwallex_subscriptions')->orderBy('id')->chunkById(100, function ($rows): void {
             foreach ($rows as $row) {
                 try {
@@ -31,6 +32,7 @@ return new class extends Migration
 
     public function down(): void
     {
+        Schema::table('airwallex_operations', fn (Blueprint $table) => $table->dropColumn('observed_routing'));
         Schema::table('airwallex_subscriptions', fn (Blueprint $table) => $table->dropColumn('observed_routing'));
     }
 };
