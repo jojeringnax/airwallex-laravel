@@ -65,7 +65,7 @@ try {
         $report['checks'][] = 'installed_route_and_recovery_commands';
     }
     if ($options['mode'] === 'boot') {
-        check(Schema::getTables() === [], 'Native consumer requires an empty disposable database.');
+        check(Schema::getTables($app->make('db')->getDriverName() === 'mysql' ? $app->make('db')->connection()->getDatabaseName() : null) === [], 'Native consumer requires an empty disposable database.');
     }
     $tables = ['customers', 'subscriptions', 'subscription_items', 'subscription_slots', 'operations', 'checkouts', 'webhook_receipts', 'domain_events'];
     if (in_array($options['mode'], ['migrated', 'rolled-back', 'recipes'], true)) {
