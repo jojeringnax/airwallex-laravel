@@ -26,9 +26,20 @@ Receipts retain the original verified body encrypted at rest, with context/event
 
 Unknown resources are ignored unless an attempted, recorded creation operation provides correlation that canonical reads verify. Known subscription IDs always select their immutable local generation, including history. A delayed cancellation cannot release a replacement subscription's name. Setup verifies a source but grants no access. Invoice notifications verify the invoice and may refresh an already-known same-customer subscription; invoice payment status does not directly change access.
 
-Projection events are recorded in the same transaction as local state. The outbox dispatches `SubscriptionReconciled`, `CheckoutReconciled`, `InvoiceObserved` and `WebhookProcessed` after commit. Events carry a stable delivery ID, context, local resource identity and safe observation fields. They contain no customer profile, body, secret or document/checkout URL. Listeners must deduplicate the event delivery ID: a crash after listener delivery and before acknowledgement can redeliver the same row. A failed listener or queue dispatch leaves recoverable work. Event delivery does not authorize a new financial command. Retrying one outbox row retains its delivery ID; explicitly replaying a receipt is a new canonical observation and can create new InvoiceObserved/WebhookProcessed delivery IDs. Use receipt_id/provider_event_id as an additional application deduplication boundary when that is appropriate for your listener.
+Projection events are recorded in the same transaction as local state. The outbox dispatches `SubscriptionReconciled`, `CheckoutReconciled`, `InvoiceObserved` and `WebhookProcessed` after commit. Events carry a stable delivery ID, context, local resource identity and safe observation fields. They contain no customer profile, body, secret or document/checkout URL. Listeners must deduplicate the event delivery ID: a crash after listener delivery and before acknowledgement can redeliver the same row. A failed synchronous listener or queue dispatch leaves recoverable outbox work. Event delivery does not authorize a new financial command. Retrying one outbox row retains its delivery ID; explicitly replaying a receipt is a new canonical observation and can create new InvoiceObserved/WebhookProcessed delivery IDs. Use receipt_id/provider_event_id as an additional application deduplication boundary when that is appropriate for your listener.
 
 Use a configured persistent queue and run its worker for the selected queue names. A synchronous queue is supported for deterministic tests and small deployments, but executes canonical reads/listeners within the HTTP request after receipt acceptance. Use asynchronous workers to keep production acknowledgements prompt. Worker jobs bind their stored environment/organization to current configuration before processing; changing deployments never reroutes old jobs to another organization.
+
+The event classes live in `Jojeringnax\AirwallexLaravel\Events`. Each extends readonly `BillingEvent` with `id`, `environment`, `organizationId`, `resourceType` (local model table), `resourceId` (local mapping ID) and `payload` properties. Payload fields are nullable strings:
+
+| Event | Observation payload |
+| --- | --- |
+| `SubscriptionReconciled` | Remote `remote_id`, `previous_status`, current `status` |
+| `CheckoutReconciled` | Remote `remote_id`, `mode`, `previous_status`, current `status` |
+| `InvoiceObserved` | Remote invoice `remote_id`, `subscription_id`, `status`, `payment_status`; webhook observations additionally include `receipt_id` and `provider_event_id`. The local resource is the Customer, or the Subscription for a subscription-scoped application read. |
+| `WebhookProcessed` | `receipt_id`, `provider_event_id`, `event_name`, remote `resource_id`, `outcome`, `reason` |
+
+Register Laravel listeners for these classes, persist delivery-ID deduplication in application storage and make side effects idempotent. A synchronous listener may receive an already-delivered ID after a crash; throwing before the dispatcher returns leaves its outbox row eligible for retry. Laravel ShouldQueue listeners have a separate handoff: successful enqueueing can mark the outbox row dispatched before that listener executes. Recover their retries/failed_jobs through Laravel queue operations; the outbox does not track eventual queued-listener completion. No event represents an exactly-once payment instruction.
 
 ## Bounded commands
 
@@ -67,6 +78,20 @@ For a known resource ID, use `airwallex:operations --id=LOCAL_ID --reconcile`. F
 `acknowledged` means a known item-write response was recorded, but the requested observable item effect remains unproven. The active mutex is released; the operation is never replayed, including by the same key. Exact observed quantity/item conditions may later establish fulfillment. Overlapping additions without command-specific provider attribution can remain unconfirmed indefinitely. Inspect actual canonical items before a distinct, explicitly authorized action; do not treat acknowledgement as a pending guarantee, active fee or settlement. [Question #40](https://github.com/jojeringnax/airwallex-laravel/issues/40) records this provisional policy.
 
 Default access always follows confirmed lifecycle/dates. UNPAID denies immediately; source replacement is a separate explicit action that may immediately retry the latest failed invoice. Neither successful setup nor local time restores access. A later canonical ACTIVE observation can restore eligibility. Provider dunning configuration determines retry behavior; there is no package cancellation deadline.
+
+An acknowledged call returns the actual canonical Subscription. To find its operation without an exception, use the original command key in the already-authorized subscription's customer/context scope:
+
+```php
+use Jojeringnax\AirwallexLaravel\BillingContext;
+use Jojeringnax\AirwallexLaravel\ModelRegistry;
+
+$operation = ModelRegistry::query('operation')
+    ->where(app(BillingContext::class)->attributes())
+    ->where('customer_id', $subscription->customer_id)
+    ->where('action_key', $persistedCommandKey)
+    ->firstOrFail();
+// Inspect $operation->id, status and error_code; keep raw intent private.
+```
 
 ## Retention, replay and offboarding
 

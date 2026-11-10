@@ -18,6 +18,8 @@ jobs:
         dependencies: [lowest, latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -34,6 +36,16 @@ jobs:
           fi
       - run: composer check
       - run: composer check:dependencies
+      - run: python3 tools/test_qualify_candidate.py
+      - name: Qualify exact archive in a fresh native consumer
+        run: |
+          curl --fail --location --silent --show-error --retry 3 https://getcomposer.org/download/2.11.2/composer.phar --output "$RUNNER_TEMP/airwallex-composer.phar"
+          python3 tools/qualify-candidate.py \
+            --candidate "$(git rev-parse HEAD)" \
+            --composer "$RUNNER_TEMP/airwallex-composer.phar" \
+            --dependencies "${{ matrix.dependencies }}" \
+            --workspace "$RUNNER_TEMP/airwallex-workspace" \
+            --output "$RUNNER_TEMP/airwallex-evidence"
       - name: Record exact dependency resolution
         run: composer show --format=json > dependency-versions.json
       - uses: actions/upload-artifact@v4
@@ -43,3 +55,9 @@ jobs:
           path: |
             composer.lock
             dependency-versions.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: consumer-php${{ matrix.php }}-${{ matrix.dependencies }}
+          path: ${{ runner.temp }}/airwallex-evidence/
+          if-no-files-found: warn

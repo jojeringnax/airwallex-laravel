@@ -429,7 +429,8 @@ class SubscriptionWorkflowTest extends TestCase
         $subscription = $this->seedSubscription($remote, $items);
         $changed = Billing::subscription(['updated_at' => '2026-11-10T12:01:00Z']);
         $http = $this->fake([...$this->observation($remote, $items), FakeHttpClient::json($changed), ...$this->observation($changed, [Billing::item(['quantity' => '3', 'updated_at' => '2026-11-10T12:01:00Z'])])]);
-        $subscription->updateItems('custom', [['id' => 'item-test', 'quantity' => 3, 'proration_mode' => 'CUSTOM', 'proration_value' => ['charge_amount' => '100.00000000000000001', 'credit_amount' => '0.00']]], ['billing_action' => 'IMMEDIATE_CHARGE_AND_KEEP_CYCLE', 'proration_date' => '2026-11-10T12:00:00.123456789+0230', 'cancel_at_period_end' => false, 'ends_at' => null, 'days_until_due' => 0]);
+        $recipe = require __DIR__.'/../examples/change-items.php';
+        $recipe($subscription, 'custom', [['id' => 'item-test', 'quantity' => 3, 'proration_mode' => 'CUSTOM', 'proration_value' => ['charge_amount' => '100.00000000000000001', 'credit_amount' => '0.00']]], ['billing_action' => 'IMMEDIATE_CHARGE_AND_KEEP_CYCLE', 'proration_date' => '2026-11-10T12:00:00.123456789+0230', 'cancel_at_period_end' => false, 'ends_at' => null, 'days_until_due' => 0]);
         $body = self::body($http, 4);
         self::assertSame('100.00000000000000001', $body['items'][0]['proration_value']['charge_amount']);
         self::assertSame('0.00', $body['items'][0]['proration_value']['credit_amount']);
@@ -477,7 +478,8 @@ class SubscriptionWorkflowTest extends TestCase
         $subscription = $this->seedSubscription($remote);
         $changed = Billing::subscription(['status' => $status, 'updated_at' => '2026-11-10T12:01:00Z', 'payment_source_id' => 'source-test']);
         $http = $this->fake([...$this->observation($remote), $this->source(), FakeHttpClient::json($changed), ...$this->observation($changed)]);
-        $result = $subscription->updatePaymentSource('source', 'source-test');
+        $recipe = require __DIR__.'/../examples/replace-source.php';
+        $result = $recipe($subscription, 'source', 'source-test');
         self::assertSame($valid, $result->valid());
         self::assertSame('source-test', self::body($http, 5)['payment_source_id']);
         self::assertArrayNotHasKey('metadata', self::body($http, 5));
@@ -495,7 +497,8 @@ class SubscriptionWorkflowTest extends TestCase
         $subscription = $this->seedSubscription($remote);
         $changed = Billing::subscription(['status' => $status, 'cancel_at_period_end' => true, 'ends_at' => '2026-11-11T00:00:00Z', 'updated_at' => '2026-11-10T12:01:00Z']);
         $http = $this->fake([...$this->observation($remote), FakeHttpClient::json($changed), ...$this->observation($changed)]);
-        $result = $subscription->cancelAtPeriodEnd('ending');
+        $recipe = require __DIR__.'/../examples/schedule-ending.php';
+        $result = $recipe($subscription, 'ending');
         self::assertSame($eligible, $result->onGracePeriod());
         self::assertSame($eligible, $result->valid());
         self::assertTrue(self::body($http, 4)['cancel_at_period_end']);
@@ -638,7 +641,8 @@ class SubscriptionWorkflowTest extends TestCase
         $cancelled = Billing::subscription(['status' => 'CANCELLED', 'updated_at' => '2026-11-10T12:01:00Z']);
         $replacement = Billing::subscription(['id' => 'sub-new', 'updated_at' => '2026-11-10T12:02:00Z']);
         $http = $this->fake([...$this->observation($remote), FakeHttpClient::json($cancelled), ...$this->observation($cancelled), FakeHttpClient::json($replacement), ...$this->observation($replacement), ...$this->observation($cancelled)]);
-        $old = $subscription->cancelNow('cancel', 'NONE');
+        $recipe = require __DIR__.'/../examples/cancel-subscription.php';
+        $old = $recipe($subscription, 'cancel', 'NONE');
         self::assertFalse($old->valid());
         self::assertSame(0, SubscriptionSlot::count());
         $new = $this->team->newSubscription('default', 'price-test')->create('replacement', ['collection_method' => 'OUT_OF_BAND']);

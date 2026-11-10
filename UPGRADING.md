@@ -1,0 +1,13 @@
+# First installation and future upgrades
+
+This is the first Laravel package candidate, with no previous released Laravel schema to migrate. Its local Composer descriptor uses provisional version `0.1.0-RC1`; no Git tag or package publication is implied. The separate PHP SDK is already released as v0.1.1. Follow [candidate installation](docs/release.md) and [configuration](docs/usage.md#install-and-configure).
+
+Back up the application database and encryption keys before applying package migrations. Automatic discovery loads all four migrations: base tables, subscription revision, checkout observations and confirmed scheduled-end projection. They are reversible for a clean uninstall, including removal of package history; rollback is not an offboarding workflow and must not be used to discard unresolved financial evidence. Rehearse changes against a copy of the application's data.
+
+Keep environment/organization, billable morph identity and remote parent/resource IDs stable. Credential rotation does not change mapping identity. Changing an established morph map or custom table layout needs a coordinated application data/schema migration. Do not repoint a local mapping to another remote Customer or organization. Published migrations/custom subclasses must preserve the package's unique and foreign-key constraints, immutable fields and casts.
+
+The schedule-cap migration only backfills `scheduled_ends_at` from matching positively owned raw snapshot evidence with a valid scheduled flag/bound. It does not fabricate effective dates from stale unrelated columns. Inspect a scheduled subscription with missing proof and reconcile it; default access remains conservative. Existing receipts/operations/outbox rows are operational evidence and must survive ordinary upgrades.
+
+During 0.x, documented breaking public changes require a new minor with release notes and migration guidance; patches preserve public behavior. Only the latest minor is maintained under the provisional policy. Before adopting another candidate/release, inspect its notes, run dependency audit and migrations/recipes on your qualified runtime/backends, and compare exact SDK/API/webhook versions. Reconfigure a webhook subscription's version explicitly when required; changing API headers alone does not migrate deliveries.
+
+Before uninstalling, follow [offboarding and retention](docs/operations.md#retention-replay-and-offboarding): explicitly confirm intended cancellations, resolve held operations, retain lawful invoice/history access and recover pending receipts/events. Removing code or a billable never cancels remote subscriptions.

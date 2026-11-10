@@ -166,7 +166,8 @@ class RecoveryCommandTest extends TestCase
         $operation = app(OperationManager::class)->prepare($this->customer, 'profile', 'customer.update', [], ['remote_id' => 'customer-test', 'profile' => ['name' => 'Confirmed']]);
         $operation->update(['status' => 'ambiguous']);
         $http = $this->fake([FakeHttpClient::json(['id' => 'customer-test', 'name' => 'Confirmed'])]);
-        app(RecoveryManager::class)->operation($operation);
+        $recipe = require __DIR__.'/../examples/recover-operation.php';
+        $recipe($operation->id);
         app(RecoveryManager::class)->operation($operation->fresh());
         self::assertSame('succeeded', $operation->fresh()->status);
         self::assertSame('customer-test', $operation->fresh()->remote_id);

@@ -67,7 +67,8 @@ class CustomerTest extends TestCase
                 self::assertNull(Customer::first()->remote_id);
             }
         });
-        $customer = $team->createOrGetAirwallexCustomer('create-team', ['nickname' => '', 'metadata' => (object) ['0' => 'zero']]);
+        $recipe = require __DIR__.'/../examples/create-customer.php';
+        $customer = $recipe($team, 'create-team', ['nickname' => '', 'metadata' => (object) ['0' => 'zero']]);
         self::assertSame('Customer-A', $customer->remote_id);
         self::assertSame($team->id, $customer->billable_id);
         $body = json_decode((string) $http->requests[1]->getBody(), true, flags: JSON_THROW_ON_ERROR);
