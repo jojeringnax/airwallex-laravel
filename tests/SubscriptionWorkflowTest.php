@@ -617,10 +617,15 @@ class SubscriptionWorkflowTest extends TestCase
         }
     }
 
-    public function test_read_only_foreign_routing_evidence_survives_later_optional_omission(): void
+    #[DataProvider('routingPaging')]
+    public function test_read_only_foreign_routing_evidence_survives_later_optional_omission(bool $omitFinal): void
     {
         $foreign = Billing::subscription(['linked_payment_account_id' => 'foreign']);
-        $this->fake($this->observation($foreign));
+        $last = $foreign;
+        if ($omitFinal) {
+            unset($last['legal_entity_id'], $last['linked_payment_account_id']);
+        }
+        $this->fake([FakeHttpClient::json($foreign), Billing::page([]), FakeHttpClient::json($last)]);
         $subscription = $this->team->importSubscription('default', 'sub-test');
         $absent = Billing::subscription(['updated_at' => '2026-11-10T12:01:00Z']);
         unset($absent['legal_entity_id'], $absent['linked_payment_account_id']);
@@ -636,6 +641,11 @@ class SubscriptionWorkflowTest extends TestCase
             self::assertSame(0, Operation::count());
             self::assertSame(0, count(array_filter($http->requests, fn ($request) => str_ends_with($request->getUri()->getPath(), '/cancel'))));
         }
+    }
+
+    public static function routingPaging(): array
+    {
+        return [[false], [true]];
     }
 
     public function test_foreign_canonical_routing_blocks_financial_writes(): void

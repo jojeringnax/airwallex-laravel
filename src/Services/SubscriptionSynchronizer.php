@@ -145,7 +145,7 @@ class SubscriptionSynchronizer
             app(SourceManager::class)->retrieve($customer, $after['payment_source_id']);
         }
         try {
-            return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $after, $items): Subscription {
+            return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $remote, $after, $items): Subscription {
                 app(CommitGuard::class)->assertMayCommit();
                 if ($operation !== null) {
                     $operation = $this->creationOperation($customer, $name, $remoteId, $operation);
@@ -204,7 +204,7 @@ class SubscriptionSynchronizer
                         }
                     }
                 }
-                $routing = array_filter(array_intersect_key($after, array_flip(['legal_entity_id', 'linked_payment_account_id'])), fn ($value) => is_string($value) && $value !== '');
+                $routing = array_filter(array_intersect_key([...$remote, ...$after], array_flip(['legal_entity_id', 'linked_payment_account_id'])), fn ($value) => is_string($value) && $value !== '');
                 $subscription->observed_routing = [...($subscription->observed_routing ?? array_filter(array_intersect_key($subscription->snapshot ?? [], array_flip(['legal_entity_id', 'linked_payment_account_id'])), fn ($value) => is_string($value) && $value !== '')), ...$routing];
                 $snapshot = self::sanitize($after);
                 $changed = ! $subscription->exists || CanonicalJson::encode($subscription->snapshot) !== CanonicalJson::encode($snapshot);
