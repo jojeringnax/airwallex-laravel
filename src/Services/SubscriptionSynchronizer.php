@@ -112,7 +112,7 @@ class SubscriptionSynchronizer
         $remote = $this->client->billing()->subscriptions()->retrieve($remoteId);
         $this->verify($remote, $remoteId, $customer);
         if ($operation !== null || $financial) {
-            Routing::assertSubscription([...($operation?->observed_routing ?? []), ...$remote]);
+            Routing::assertSubscription([...($operation->observed_routing ?? []), ...$remote]);
         }
         $items = Pages::all(fn (array $query) => $this->client->billing()->subscriptions()->listItems($remoteId, $query));
         foreach ($items as $item) {
@@ -125,7 +125,7 @@ class SubscriptionSynchronizer
         $after = $this->client->billing()->subscriptions()->retrieve($remoteId);
         $this->verify($after, $remoteId, $customer);
         if ($operation !== null || $financial) {
-            Routing::assertSubscription([...($operation?->observed_routing ?? []), ...$after]);
+            Routing::assertSubscription([...($operation->observed_routing ?? []), ...$after]);
         }
         if (! $this->sameCore($remote, $after) || Timestamp::compare($remote['updated_at'], $after['updated_at']) !== 0) {
             throw new EvidenceException('Subscription changed during pagination; reconcile again.');

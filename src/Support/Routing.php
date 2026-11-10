@@ -54,6 +54,20 @@ final class Routing
         }
     }
 
+    /** Retain only bounded IDs or a safe malformed-value sentinel. */
+    public static function responseEvidence(array $response): array
+    {
+        $evidence = [];
+        foreach (['legal_entity_id', 'linked_payment_account_id'] as $key) {
+            if (array_key_exists($key, $response)) {
+                $value = $response[$key];
+                $evidence[$key] = is_string($value) && $value !== '' && strlen($value) <= 255 ? $value : null;
+            }
+        }
+
+        return $evidence;
+    }
+
     private static function configured(string $key): string
     {
         $value = config('airwallex.'.$key);

@@ -331,6 +331,20 @@ class CheckoutWorkflowTest extends TestCase
         self::assertSame('succeeded', Operation::first()->status);
     }
 
+    public function test_malformed_response_routing_retains_only_safe_unresolved_evidence(): void
+    {
+        $this->fake([FakeHttpClient::json(Billing::checkout(['legal_entity_id' => ['client_secret' => 'SYNTHETIC-NESTED-SECRET']]))]);
+        try {
+            $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+            self::fail('Malformed routing response was accepted.');
+        } catch (AmbiguousOperationException) {
+            $operation = Operation::first();
+            self::assertSame(['legal_entity_id' => null, 'linked_payment_account_id' => 'collector-test'], $operation->observed_routing);
+            self::assertArrayNotHasKey('observed_routing', $operation->toArray());
+            self::assertStringNotContainsString('SYNTHETIC-NESTED-SECRET', (string) $operation->getRawOriginal('observed_routing'));
+        }
+    }
+
     public function test_required_checkout_collector_cannot_be_absent(): void
     {
         $remote = Billing::checkout();

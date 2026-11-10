@@ -22,7 +22,7 @@ abstract class BillingModel extends Model
 
     protected $dateFormat = 'Y-m-d H:i:s.u';
 
-    protected $hidden = ['snapshot', 'intent', 'url', 'body', 'payload'];
+    protected $hidden = ['observed_routing', 'snapshot', 'intent', 'url', 'body', 'payload'];
 
     /** @return list<string> */
     protected function immutable(): array
