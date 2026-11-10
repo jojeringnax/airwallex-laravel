@@ -4,7 +4,9 @@ import importlib.util
 import json
 from pathlib import Path
 import stat
+import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 import warnings
 import zipfile
@@ -101,6 +103,26 @@ class ArchiveBoundaryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Running qualifier differs"):
             qualifier.extract_tooling(files.__getitem__, destination, b"uncommitted driver\n")
         self.assertFalse(destination.exists())
+
+    def test_qualifier_git_archive_matches_canonical_utc_bytes(self):
+        repo = Path(self.directory.name) / "git-fixture"
+        repo.mkdir()
+        qualification = qualifier.Qualification(SimpleNamespace(repo=repo, candidate="HEAD", dependencies="latest"))
+        environment = dict(qualification.env, GIT_AUTHOR_NAME="Archive fixture", GIT_AUTHOR_EMAIL="fixture@example.test", GIT_COMMITTER_NAME="Archive fixture", GIT_COMMITTER_EMAIL="fixture@example.test", GIT_AUTHOR_DATE="2026-11-10T12:00:00+0000", GIT_COMMITTER_DATE="2026-11-10T12:00:00+0000")
+        subprocess.run(["git", "init", "--quiet"], cwd=repo, env=environment, check=True)
+        (repo / "src").mkdir()
+        (repo / "src/fixture.txt").write_bytes(b"Timezone-independent archive content.\n")
+        subprocess.run(["git", "add", "--", "src"], cwd=repo, env=environment, check=True)
+        subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Fixed-time archive fixture"], cwd=repo, env=environment, check=True)
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=environment, check=True, capture_output=True, text=True).stdout.strip()
+        actual = Path(self.directory.name) / "qualifier.zip"
+        utc = Path(self.directory.name) / "utc.zip"
+        honolulu = Path(self.directory.name) / "honolulu.zip"
+        qualification.command("archive-regression", ["git", "archive", "--format=zip", f"--output={actual}", commit], repo)
+        for path, timezone in [(utc, "UTC"), (honolulu, "Pacific/Honolulu")]:
+            subprocess.run(["git", "archive", "--format=zip", f"--output={path}", commit], cwd=repo, env=dict(environment, TZ=timezone), check=True)
+        self.assertNotEqual(utc.read_bytes(), honolulu.read_bytes(), "Control archives must expose Git's host-timezone ZIP timestamps.")
+        self.assertEqual(utc.read_bytes(), actual.read_bytes(), "Qualifier must produce canonical UTC Git archive bytes on every host.")
 
 
 if __name__ == "__main__":

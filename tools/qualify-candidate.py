@@ -99,7 +99,7 @@ class Qualification:
         self.evidence: dict = {"status": "incomplete", "provisional_version": VERSION, "candidate_input": args.candidate, "dependencies": args.dependencies, "financial_network": "disabled; synthetic PSR-18 transport only", "tool_runtime": {"python": sys.version, "executable": sys.executable, "platform": sys.platform}, "commands": self.records}
         # Do not inherit provider credentials, Composer auth, or application configuration.
         self.env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "TMPDIR") if key in os.environ}
-        self.env.update({"GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "COMPOSER_NO_INTERACTION": "1", "COMPOSER_ROOT_VERSION": "1.0.0"})
+        self.env.update({"TZ": "UTC", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "COMPOSER_NO_INTERACTION": "1", "COMPOSER_ROOT_VERSION": "1.0.0"})
 
     def command(self, name: str, argv: list[str], cwd: Path, *, timeout: int = 600) -> str:
         if self.output is None:
