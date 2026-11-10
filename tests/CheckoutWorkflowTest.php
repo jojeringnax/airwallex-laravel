@@ -295,19 +295,30 @@ class CheckoutWorkflowTest extends TestCase
         self::assertSame(1, SubscriptionSlot::count());
     }
 
-    public function test_missing_routing_proof_is_ambiguous_instead_of_using_local_defaults(): void
+    public function test_optional_checkout_entity_can_be_absent_without_fabricating_observed_values(): void
     {
         $remote = Billing::checkout();
         unset($remote['legal_entity_id']);
+        $http = $this->fake([FakeHttpClient::json($remote), FakeHttpClient::json($remote)]);
+        $checkout = $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+        self::assertSame('succeeded', Operation::first()->status);
+        self::assertArrayNotHasKey('legal_entity_id', $checkout->snapshot);
+        self::assertSame('entity-test', json_decode((string) $http->requests[1]->getBody(), true)['legal_entity_id']);
+        self::assertSame('https://checkout.airwallex.com/synthetic-session', $checkout->redirect()->getTargetUrl());
+    }
+
+    public function test_required_checkout_collector_cannot_be_absent(): void
+    {
+        $remote = Billing::checkout();
+        unset($remote['linked_payment_account_id']);
         $this->fake([FakeHttpClient::json($remote)]);
+        $this->expectException(AmbiguousOperationException::class);
         try {
             $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
-            self::fail('Expected missing proof');
-        } catch (AmbiguousOperationException $exception) {
-            self::assertSame('evidence', $exception->causeCategory);
+        } finally {
+            self::assertSame(0, Checkout::count());
+            self::assertSame(1, SubscriptionSlot::count());
         }
-        self::assertSame(0, Checkout::count());
-        self::assertSame(1, SubscriptionSlot::count());
     }
 
     public function test_recorded_response_then_local_failure_recovers_by_reads_only(): void

@@ -67,7 +67,7 @@ class SubscriptionSynchronizer
             if (! $checkout || $checkout->getAttribute('remote_id') !== $operation->remote_id || $checkout->getAttribute('remote_subscription_id') !== $remoteId || $checkout->getAttribute('status') !== 'COMPLETED' || $checkout->getAttribute('customer_id') !== $customer->id) {
                 throw new OwnershipException('Subscription result has no confirmed checkout correlation.');
             }
-            Routing::assertSnapshot($checkout->snapshot ?? []);
+            Routing::assertCheckout($checkout->snapshot ?? []);
         }
         if ($operation->customer_id !== $customer->id) {
             throw new OwnershipException('Subscription operation belongs to a different customer.');
@@ -112,7 +112,7 @@ class SubscriptionSynchronizer
         $remote = $this->client->billing()->subscriptions()->retrieve($remoteId);
         $this->verify($remote, $remoteId, $customer);
         if ($operation !== null) {
-            Routing::assertSnapshot($remote);
+            Routing::assertSubscription($remote);
         }
         $items = Pages::all(fn (array $query) => $this->client->billing()->subscriptions()->listItems($remoteId, $query));
         foreach ($items as $item) {
@@ -125,7 +125,7 @@ class SubscriptionSynchronizer
         $after = $this->client->billing()->subscriptions()->retrieve($remoteId);
         $this->verify($after, $remoteId, $customer);
         if ($operation !== null) {
-            Routing::assertSnapshot($after);
+            Routing::assertSubscription($after);
         }
         if (! $this->sameCore($remote, $after) || Timestamp::compare($remote['updated_at'], $after['updated_at']) !== 0) {
             throw new EvidenceException('Subscription changed during pagination; reconcile again.');

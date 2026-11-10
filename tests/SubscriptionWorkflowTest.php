@@ -534,7 +534,60 @@ class SubscriptionWorkflowTest extends TestCase
         return [['PENDING', false], ['IN_TRIAL', true], ['ACTIVE', true], ['UNPAID', false]];
     }
 
-    public function test_foreign_or_missing_canonical_routing_blocks_all_financial_writes(): void
+    public function test_optional_subscription_routing_allows_confirmed_creation_and_later_cancellation(): void
+    {
+        $remote = Billing::subscription();
+        unset($remote['legal_entity_id'], $remote['linked_payment_account_id']);
+        $http = $this->fake([FakeHttpClient::json($remote), ...$this->observation($remote)]);
+        $subscription = $this->team->newSubscription('default', 'price-test')->create('create', ['collection_method' => 'OUT_OF_BAND']);
+        self::assertSame('succeeded', Operation::first()->status);
+        self::assertArrayNotHasKey('legal_entity_id', $subscription->snapshot);
+        self::assertArrayNotHasKey('linked_payment_account_id', $subscription->snapshot);
+        self::assertSame('collector-test', self::body($http, 1)['linked_payment_account_id']);
+        $cancelled = [...$remote, 'status' => 'CANCELLED', 'updated_at' => '2026-11-10T12:01:00Z'];
+        $this->fake([...$this->observation($remote), FakeHttpClient::json($cancelled), ...$this->observation($cancelled)]);
+        self::assertSame('CANCELLED', $subscription->cancelNow('cancel', 'NONE')->status);
+        self::assertSame(2, Operation::where('status', 'succeeded')->count());
+    }
+
+    #[DataProvider('malformedRouting')]
+    public function test_present_malformed_subscription_routing_never_confirms_creation(string $key, mixed $value): void
+    {
+        $remote = Billing::subscription([$key => $value]);
+        $http = $this->fake([FakeHttpClient::json($remote), ...$this->observation($remote)]);
+        $this->expectException(AmbiguousOperationException::class);
+        try {
+            $this->team->newSubscription('default', 'price-test')->create('create', ['collection_method' => 'OUT_OF_BAND']);
+        } finally {
+            self::assertSame(0, Subscription::count());
+            self::assertSame(1, SubscriptionSlot::count());
+            self::assertSame(1, count(array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/subscriptions/create'))));
+        }
+    }
+
+    public static function malformedRouting(): array
+    {
+        return [['legal_entity_id', null], ['legal_entity_id', []], ['legal_entity_id', ''], ['linked_payment_account_id', null], ['linked_payment_account_id', []], ['linked_payment_account_id', '']];
+    }
+
+    public function test_foreign_write_response_cannot_be_overridden_by_optional_omission_in_later_reads(): void
+    {
+        $remote = Billing::subscription();
+        unset($remote['legal_entity_id'], $remote['linked_payment_account_id']);
+        $http = $this->fake([FakeHttpClient::json([...$remote, 'legal_entity_id' => 'foreign']), ...$this->observation($remote)]);
+        try {
+            $this->team->newSubscription('default', 'price-test')->create('create', ['collection_method' => 'OUT_OF_BAND']);
+            self::fail('Contradictory write response was accepted.');
+        } catch (AmbiguousOperationException $exception) {
+            self::assertSame('ownership', $exception->causeCategory);
+        }
+        self::assertSame('ambiguous', Operation::first()->status);
+        self::assertSame(0, Subscription::count());
+        self::assertCount(2, $http->requests);
+        self::assertNotNull(Operation::first()->lock_key);
+    }
+
+    public function test_foreign_canonical_routing_blocks_financial_writes(): void
     {
         $remote = Billing::subscription(['linked_payment_account_id' => 'foreign']);
         $subscription = $this->seedSubscription($remote);

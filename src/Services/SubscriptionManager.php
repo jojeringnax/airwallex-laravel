@@ -179,7 +179,7 @@ class SubscriptionManager
             if (($remote['billing_customer_id'] ?? null) !== $customer->remote_id || ($metadata['_laravel_operation_id'] ?? null) !== $operation->id) {
                 throw new OwnershipException('Candidate subscription has no matching owned creation correlation.');
             }
-            Routing::assertSnapshot($remote);
+            Routing::assertSubscription($remote);
             DB::transaction(function () use ($operation, $candidateId): void {
                 app(CommitGuard::class)->assertMayCommit();
                 $operation->refresh();
@@ -251,7 +251,7 @@ class SubscriptionManager
                 throw new OwnershipException('Subscription result belongs to a different mapping.');
             }
             $result = $this->synchronizer->reconcile($local);
-            Routing::assertSnapshot($result->snapshot);
+            Routing::assertSubscription($result->snapshot);
             $this->outcome($operation, $result);
             if ($result->status === 'CANCELLED') {
                 ModelRegistry::query('subscription_slot')->where('operation_id', $operation->id)->whereNull('subscription_id')->delete();
@@ -273,7 +273,7 @@ class SubscriptionManager
         $operation = $this->existing($customer, $actionKey, $kind, $specification, $subscription);
         if ($operation === null) {
             $subscription = $this->synchronizer->reconcile($subscription);
-            Routing::assertSnapshot($subscription->snapshot);
+            Routing::assertSubscription($subscription->snapshot);
             if ($subscription->status === 'CANCELLED') {
                 throw new ConflictException('A permanently cancelled subscription cannot accept a new financial action.');
             }
@@ -290,7 +290,7 @@ class SubscriptionManager
         }
         $this->preflight($operation, function () use ($subscription, $customer, $operation): void {
             $current = ModelRegistry::query('subscription')->findOrFail($subscription->id);
-            Routing::assertSnapshot($current->snapshot);
+            Routing::assertSubscription($current->snapshot);
             if ($this->fingerprint($current) !== $operation->intent['fingerprint']) {
                 throw new EvidenceException('Subscription changed before the financial action; prepare a new intent.');
             }
@@ -326,7 +326,7 @@ class SubscriptionManager
         }, function (array $response) use ($subscription, $customer, $operation): Subscription {
             $this->response($response, $subscription->remote_id, $customer);
             $result = $this->synchronizer->reconcile($subscription);
-            Routing::assertSnapshot($result->snapshot);
+            Routing::assertSubscription($result->snapshot);
             $this->outcome($operation, $result);
 
             return $result;
@@ -443,7 +443,7 @@ class SubscriptionManager
             if ($operation->remote_id === null || $operation->remote_id !== $subscription->remote_id) {
                 throw new AmbiguousOperationException($operation->id);
             }
-            Routing::assertSnapshot($result->snapshot);
+            Routing::assertSubscription($result->snapshot);
             if ($this->outcome($operation, $result)) {
                 $this->operations->succeed($operation);
             }
@@ -585,6 +585,7 @@ class SubscriptionManager
 
     private function response(array $response, string $id, Customer $customer): void
     {
+        Routing::assertSubscription($response);
         if (($response['id'] ?? null) !== $id || (array_key_exists('billing_customer_id', $response) && $response['billing_customer_id'] !== $customer->remote_id)) {
             throw new OwnershipException('Mutation response does not match the intended owned subscription.');
         }
