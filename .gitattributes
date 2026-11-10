@@ -1,0 +1,10 @@
+/.agents export-ignore
+/.env* export-ignore
+/.github export-ignore
+/tests export-ignore
+/tools export-ignore
+/phpunit.xml export-ignore
+/phpstan.neon export-ignore
+/composer.lock export-ignore
+/AGENTS.md export-ignore
+/.gitignore export-ignore

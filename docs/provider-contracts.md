@@ -1,0 +1,49 @@
+# Versioned provider contracts
+
+Inspected 2026-11-10 against released SDK **v0.1.1**, source `bd11abb67e2e5761b86a9ca9d4a1b7993900de6e`, API/webhook pin **2026-08-21**. The [SDK contract inventory](https://github.com/jojeringnax/airwallex-php-sdk/blob/v0.1.1/docs/api-contracts.md), [Billing schemas](https://github.com/jojeringnax/airwallex-php-sdk/tree/v0.1.1/resources/contracts/billing), [Billing behavior](https://github.com/jojeringnax/airwallex-php-sdk/blob/v0.1.1/docs/billing-resources.md) and [webhook reference](https://github.com/jojeringnax/airwallex-php-sdk/blob/v0.1.1/docs/webhook-contracts.md) preserve source/version provenance and sanitized fixtures.
+
+Official rendered sources below were reread for this investigation. Fresh raw page metadata extraction returned HTTP 403; rendered output did not establish `currentVersion`. The selected version is verified in the tagged SDK's snapshots, originally extracted 2026-11-08 with update additions on 2026-11-09; it is **not independently reconfirmed as today's latest provider version**. Retrieve the official selected specification or inspect authorized browser metadata to close that precise evidence gap. Do not silently repin or fabricate equality. [Issue #11](https://github.com/jojeringnax/airwallex-laravel/issues/11) owns remaining contract qualification.
+
+## Workflow map
+
+All resource accessors are `$client->billing()->…`; native bodies/responses remain arrays. Common signatures: `create(array): array`, `retrieve(string): array`, `list(array = []): array`, `update(string,array): array`. The SDK owns validation and exact decoding; Laravel supplies only orchestration and ownership checks.
+
+| Workflow / official source | SDK operation | Request / response / ownership proof |
+| --- | --- | --- |
+| [Customers](https://www.airwallex.com/docs/api/billing/billing_customers) | `customers()->create/retrieve/list/update` | Create uses persisted `request_id` and profile; Update has no request_id. Validate returned `id` against known identity and configured organization authorization. Never establish ownership by email. |
+| [Subscriptions](https://www.airwallex.com/docs/api/billing/subscriptions) | `subscriptions()->create/retrieve/list/update/cancel` | Create: customer, collection method, items, request_id and explicit configured entity/collector; AUTO_CHARGE requires owned source. Check ID and `billing_customer_id`; unknown state is preserved. Cancel requires request_id + explicit `proration_behavior`. |
+| [Subscription items](https://www.airwallex.com/docs/api/billing/subscriptions) | `retrieveItem(id,itemId)`, `listItems(id,query)` | Explicit parent/child IDs, `page`/`page_size`; validate each `subscription_id`. Fetch every page before atomic local replacement. |
+| [Hosted checkout](https://www.airwallex.com/docs/api/billing/billing_checkouts) | `checkouts()->create/retrieve/update/cancel` | HOSTED, customer, mode, request_id, entity/collector and durable metadata. SUBSCRIPTION uses `line_items`; SETUP requires currency and omits `line_items`. Check canonical `billing_customer_id`, mode, collector and stored correlation; resulting `subscription_id`/`payment_source_id` is independently retrieved/owned. Update is metadata-only; cancel is bodyless. |
+| [Payment Sources](https://www.airwallex.com/docs/api/billing/payment_sources) | `paymentSources()->retrieve/list`; subscription `update` | Verify `billing_customer_id` and `linked_payment_account_id`; Source external identity is an authorized Payments Method, not a Billing Customer. Source replacement may immediately retry the last failed invoice. No invented default/delete/detach API. |
+| [Invoices](https://www.airwallex.com/docs/api/billing/invoices) | `invoices()->retrieve/list/retrieveLineItem/listLineItems` | Force customer filter, verify response customer/optional subscription, verify parent before subordinate reads. Expose nullable `pdf_url`/`hosted_url`. No inferred renewal or settlement. |
+
+All rows use pin 2026-08-21. SDK endpoint metadata independently declares organization resource level, no on-behalf-of support and relevant `billing.*:read/write` permission. [Key authorization](https://www.airwallex.com/docs/developer-tools/api/manage-api-keys) and [login](https://www.airwallex.com/docs/api/authentication/api_access_token) must not be confused with Payments account selection. Use a nondelegated organization client. Owning organization is trusted deployment configuration; a collector ID neither establishes organization ownership nor grants permission. Credential rotation preserves local context.
+
+[Billing settings](https://www.airwallex.com/docs/billing/configure-your-billing-settings) require activated/authorized Billing, eligible legal entity, linked collection account, supported currency/method and eligible owned source where applicable. Supply entity/collector explicitly rather than infer defaults or entitlement. Price frequencies must be compatible; schema-valid payloads do not establish account eligibility.
+
+## Representation, changes and dates
+
+Request item quantities are positive int32 integers; observed response quantities are schema numbers decoded as exact strings. Preserve decimal money, unknown numeric text and extra fields through the SDK. Omitted/null/false/zero remain distinct. Timestamp strings retain timezone, offset and arbitrary fractional precision.
+
+Existing item IDs permit quantity/metadata/deletion; changing price deletes the old item and adds `price_id`. Omitted existing items remain. Require explicit `default_proration_mode` (NONE/PRORATED/ALL) or per-item controls. Per-item CUSTOM uses exact string `proration_value.charge_amount`/`credit_amount`; billing_action and proration_date preserve SDK semantics. No package computation of proration, totals or effective item state. Unsupported observed item models block unsafe changes without revoking lifecycle access. Source update is an explicit financial action because of immediate invoice retry.
+
+`cancel_at_period_end=true` schedules ending; only confirmed effective dates cap access. Do not infer subscription termination from ordinary recurring period rollover. Immediate cancellation uses the separate cancel action and explicit proration. [Dunning settings](https://www.airwallex.com/docs/billing/subscriptions/dunning) prevent any universal retry deadline or automatic CANCELLED assumption after UNPAID.
+
+Lists return `items`, `page_after`, `page_before`; pass `page_after` as `page` with unchanged filters/context. `page_size` is 1–1000. Reject repeated cursors/IDs and incomplete pages rather than publish partial item sets. Item/line lists have no customer filters, so establish parent ownership first.
+
+## Signed events
+
+[Signing](https://www.airwallex.com/docs/developer-tools/webhooks/listen-for-webhook-events) uses hex HMAC-SHA256 over exact x-timestamp bytes followed by raw body, endpoint secret and configured millisecond tolerance. Use SDK WebhookVerifier before SDK WebhookEvent decoding. Decoder preserves direct and `data.object` forms; it does not authorize envelopes or supply trusted normalization. Validate organization `org_id`, selected version, event family and resource identity independently. Do not alias account_id into org_id. A present malformed wrapper cannot fall back to direct data.
+
+[Billing events](https://www.airwallex.com/docs/developer-tools/webhooks/listen-for-webhook-events/billing): subscription created/in_trial/active/unpaid/modified/cancelled; checkout created/completed/cancelled; invoice created/finalized/updated/payment.paid/voided. No Payment Source event is established. Generic/Billing examples disagree about owner/nesting/version; quarantine unsupported/missing/conflicting proof, retain classification and reconcile canonically. Valid signatures alone never associate an unknown resource. [Public contracts](contracts.md) own receipt storage, recovery and event delivery.
+
+## Evidence gaps and verification actions
+
+- SDK Checkouts has no list method. Unknown-ID creation recovery needs verified metadata correlation from a signed event or explicit operator-known ID plus ownership/intent verification. Retain ambiguity otherwise; an upstream list capability would improve automatic recovery. Do not implement transport in Laravel.
+- No documented request_id lookup, safe replay window, proof of resource absence or universal retry/cancellation deadline exists. Timeout, expired lease and 404 do not authorize a replacement financial write.
+- Checkout expiry prose and observed Sandbox timestamps differ; use returned status/dates, never guaranteed TTLs. Completed checkout notifications and resulting source/subscription availability remain account-specific observations.
+- Invoice API/product guides describe different link-expiry clocks; renewal on retrieval is unverified. Return links as observed, including null/expired values, without a local clock or renewal promise.
+- Account activation/permissions, collection eligibility, natural trial/renewal/ending timing, configured dunning, actual settlement and cleanup are not established by deterministic fixtures. Record opted-in Sandbox results separately under [compatibility evidence policy](compatibility.md).
+- Schedule reversal, reactivation, link regeneration, PDF rendering/mailing and broad resume conveniences remain unclaimed. No newly demonstrated SDK capability blocker was found for the accepted v1 operations; fresh metadata equality above remains evidence work, not a provisional provider fact.
+
+Validation must cover success and malformed/foreign-ID/owner/version cases with real SDK decoding, precise numbers/dates, direct/wrapped events, all-page failure, stale history, timed-out writes and queue recovery. Sanitized fixtures must name the selected version and be described as synthetic contract fixtures, never provider observations.
