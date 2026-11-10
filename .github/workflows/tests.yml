@@ -53,7 +53,7 @@ jobs:
           if [ "$LARAVEL_MAJOR" = 12 ]; then
             composer require --dev --no-update 'orchestra/testbench:^10.0' 'laravel/framework:^12.69'
           else
-            composer require --dev --no-update 'orchestra/testbench:^11.0' 'laravel/framework:^13.0'
+            composer require --dev --no-update 'orchestra/testbench:^11.0' 'laravel/framework:^13.30'
           fi
       - name: Resolve dependencies
         env:

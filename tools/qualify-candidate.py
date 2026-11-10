@@ -203,7 +203,7 @@ class Qualification:
             if re.fullmatch(r"airwallex_test_[a-z0-9]+", database) is None:
                 raise ValueError("MySQL consumer requires a dedicated disposable airwallex_test_ database.")
             self.env.update({"DB_CONNECTION": "mysql", "DB_HOST": os.environ.get("AIRWALLEX_TEST_MYSQL_HOST", "127.0.0.1"), "DB_PORT": os.environ.get("AIRWALLEX_TEST_MYSQL_PORT", "33079"), "DB_DATABASE": database, "DB_USERNAME": os.environ.get("AIRWALLEX_TEST_MYSQL_USER", "root"), "DB_PASSWORD": os.environ.get("AIRWALLEX_TEST_MYSQL_PASSWORD", "")})
-        framework = "^12.69" if self.args.laravel == "12" else "^13.0"
+        framework = "^12.69" if self.args.laravel == "12" else "^13.30"
         if not isinstance(framework, str):
             raise ValueError("Candidate has no declared Laravel support constraint.")
         consumer_metadata = {"name": "qualification/airwallex-consumer", "description": "Isolated deterministic archive consumer qualification.", "type": "project", "license": "MIT", "require": {"php": metadata["require"]["php"], "laravel/framework": framework, PACKAGE: VERSION}, "repositories": [repository], "minimum-stability": "stable", "prefer-stable": True, "config": {"allow-plugins": {}}}
