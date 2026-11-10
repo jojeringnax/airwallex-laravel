@@ -1,6 +1,6 @@
 # Release notes
 
-## 0.1.0-RC1 review candidate
+## 0.1.0 — 2026-11-10
 
 The first Laravel integration provides persisted Billable customer mappings, explicit customer link/subscription import, named multi-item subscriptions, direct and HOSTED checkout creation, SETUP source collection, verified source reads/replacement, explicit item/price/quantity/proration changes and scheduled/immediate cancellation. Browser/setup success grants no independent access; eligibility follows owned canonical subscription state and confirmed bounds.
 
@@ -14,4 +14,4 @@ Deterministic tests and synthetic SDK fixtures establish package behavior. They 
 
 Standalone Payments/refunds, multiple Billing organizations/connected routing, OAuth, catalogue administration, embedded components, customer portal UI, generic local trials, tax/coupons/usage billing, pause/reactivation and unverified resume/link/PDF/mailing conveniences remain deferred in [scope](docs/scope.md#deferrals). Raw SDK capabilities are still accessible within application authorization.
 
-This candidate is prepared through reviewable development branches/PRs and local archives. Merging, tagging, registry publication, releases, production deployment and live financial validation are separate actions. See [upgrade guidance](UPGRADING.md), [security](SECURITY.md) and [reproduction instructions](docs/release.md).
+Release qualification and delivery are recorded in the [release tracker](https://github.com/jojeringnax/airwallex-laravel/issues/1). The local `0.1.0-RC1` descriptor remains an exact-commit review archive; registry publication is verified separately. See [upgrade guidance](UPGRADING.md), [security](SECURITY.md) and [reproduction instructions](docs/release.md).
