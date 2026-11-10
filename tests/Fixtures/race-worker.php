@@ -14,6 +14,9 @@ use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
+if (! isset($argv) || count($argv) !== 4) {
+    throw new RuntimeException('Race worker requires database, barrier and action arguments.');
+}
 [$script, $database, $barrier, $command] = $argv;
 $app = new Application(dirname(__DIR__, 2));
 Application::setInstance($app);
