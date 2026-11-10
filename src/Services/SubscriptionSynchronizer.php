@@ -17,6 +17,7 @@ use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\Pages;
+use Jojeringnax\AirwallexLaravel\Support\Routing;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 
 class SubscriptionSynchronizer
@@ -43,6 +44,13 @@ class SubscriptionSynchronizer
     /** Confirm a known result of the already-recorded creation/checkout intent. */
     public function confirm(Customer $customer, string $name, string $remoteId, Operation $operation): Subscription
     {
+        $operation = $this->creationOperation($customer, $name, $remoteId, $operation);
+
+        return $this->refresh($customer, $name, $remoteId, $this->existing($customer, $name, $remoteId), $operation);
+    }
+
+    private function creationOperation(Customer $customer, string $name, string $remoteId, Operation $operation): Operation
+    {
         $operation = ModelRegistry::query('operation')->findOrFail($operation->getKey());
         $this->context->assertModel($operation);
         if (! in_array($operation->kind, ['subscription.create', 'checkout.subscription'], true)) {
@@ -56,15 +64,27 @@ class SubscriptionSynchronizer
         }
         if ($operation->kind === 'checkout.subscription') {
             $checkout = ModelRegistry::query('checkout')->where($this->context->attributes())->where('operation_id', $operation->id)->first();
-            if (! $checkout || $checkout->getAttribute('remote_id') !== $operation->remote_id || $checkout->getAttribute('remote_subscription_id') !== $remoteId || $checkout->getAttribute('status') !== 'COMPLETED') {
+            if (! $checkout || $checkout->getAttribute('remote_id') !== $operation->remote_id || $checkout->getAttribute('remote_subscription_id') !== $remoteId || $checkout->getAttribute('status') !== 'COMPLETED' || $checkout->getAttribute('customer_id') !== $customer->id) {
                 throw new OwnershipException('Subscription result has no confirmed checkout correlation.');
             }
+            Routing::assertSnapshot($checkout->snapshot ?? []);
         }
         if ($operation->customer_id !== $customer->id) {
             throw new OwnershipException('Subscription operation belongs to a different customer.');
         }
 
-        return $this->refresh($customer, $name, $remoteId, $this->existing($customer, $name, $remoteId), $operation);
+        if (isset($operation->intent['name']) && $operation->intent['name'] !== $name) {
+            throw new OwnershipException('Subscription name does not match its durable intent.');
+        }
+        if ($operation->subscription_id !== null) {
+            $result = ModelRegistry::query('subscription')->findOrFail($operation->subscription_id);
+            if ($result->remote_id !== $remoteId || $result->customer_id !== $customer->id || $result->name !== $name) {
+                throw new OwnershipException('Creation intent already has a different confirmed subscription result.');
+            }
+        }
+        Routing::defaults($operation->intent['payload'] ?? []);
+
+        return $operation;
     }
 
     private function existing(Customer $customer, string $name, string $remoteId): ?Subscription
@@ -91,6 +111,9 @@ class SubscriptionSynchronizer
         }
         $remote = $this->client->billing()->subscriptions()->retrieve($remoteId);
         $this->verify($remote, $remoteId, $customer);
+        if ($operation !== null) {
+            Routing::assertSnapshot($remote);
+        }
         $items = Pages::all(fn (array $query) => $this->client->billing()->subscriptions()->listItems($remoteId, $query));
         foreach ($items as $item) {
             if (($item['subscription_id'] ?? null) !== $remoteId) {
@@ -101,11 +124,31 @@ class SubscriptionSynchronizer
         // change while paging and retain the previous complete local projection.
         $after = $this->client->billing()->subscriptions()->retrieve($remoteId);
         $this->verify($after, $remoteId, $customer);
+        if ($operation !== null) {
+            Routing::assertSnapshot($after);
+        }
         if (! $this->sameCore($remote, $after) || Timestamp::compare($remote['updated_at'], $after['updated_at']) !== 0) {
             throw new EvidenceException('Subscription changed during pagination; reconcile again.');
         }
+        if ($operation?->kind === 'subscription.create') {
+            $payload = $operation->intent['payload'] ?? [];
+            foreach (['collection_method', 'payment_source_id'] as $key) {
+                if (array_key_exists($key, $payload) && ($after[$key] ?? null) !== $payload[$key]) {
+                    throw new EvidenceException('Canonical creation result does not confirm its explicit collection controls.');
+                }
+            }
+        }
+        if ($operation?->kind === 'checkout.subscription' && ($after['collection_method'] ?? null) === 'AUTO_CHARGE') {
+            if (! is_string($after['payment_source_id'] ?? null) || $after['payment_source_id'] === '') {
+                throw new EvidenceException('Hosted subscription has no confirmed payment source.');
+            }
+            app(SourceManager::class)->retrieve($customer, $after['payment_source_id']);
+        }
         try {
             return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $after, $items): Subscription {
+                if ($operation !== null) {
+                    $operation = $this->creationOperation($customer, $name, $remoteId, $operation);
+                }
                 $subscription = $this->existing($customer, $name, $remoteId);
                 $new = $subscription === null;
                 $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $customer->id)->where('name', $name)->first();
@@ -136,6 +179,14 @@ class SubscriptionSynchronizer
                 }
                 $subscription ??= ModelRegistry::make('subscription', [...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $remoteId, 'name' => $name]);
                 $previousStatus = $subscription->status;
+                $scheduleEnd = ($subscription->cancel_at_period_end === true && $after['cancel_at_period_end']) ? $subscription->scheduled_ends_at : null;
+                if ($after['cancel_at_period_end']) {
+                    foreach (['ends_at', 'current_period_ends_at'] as $key) {
+                        if (is_string($after[$key] ?? null) && ($scheduleEnd === null || Timestamp::compare($after[$key], $scheduleEnd) < 0)) {
+                            $scheduleEnd = $after[$key];
+                        }
+                    }
+                }
                 $oldItems = $subscription->exists ? $subscription->items()->get()->keyBy('remote_id') : collect();
                 foreach ($items as $item) {
                     $old = $oldItems->get($item['id']);
@@ -151,13 +202,17 @@ class SubscriptionSynchronizer
                 }
                 $snapshot = self::sanitize($after);
                 $changed = ! $subscription->exists || CanonicalJson::encode($subscription->snapshot) !== CanonicalJson::encode($snapshot);
-                $subscription->fill(['status' => $after['status'], 'cancel_at_period_end' => $after['cancel_at_period_end'], 'provider_created_at' => $after['created_at'], 'provider_updated_at' => $after['updated_at'], 'snapshot' => $snapshot, 'synced_at' => now(), 'items_synced_at' => now(), 'revision' => ($subscription->revision ?? 0) + 1]);
+                $subscription->fill(['status' => $after['status'], 'cancel_at_period_end' => $after['cancel_at_period_end'], 'scheduled_ends_at' => $scheduleEnd, 'provider_created_at' => $after['created_at'], 'provider_updated_at' => $after['updated_at'], 'snapshot' => $snapshot, 'synced_at' => now(), 'items_synced_at' => now(), 'revision' => ($subscription->revision ?? 0) + 1]);
                 foreach (self::DATES as $date) {
                     if (isset($after[$date]) || $new) {
                         $subscription->setAttribute($date, $after[$date] ?? null);
                     }
                 }
                 $subscription->save();
+                if ($operation !== null && $operation->subscription_id === null) {
+                    $operation->subscription_id = $subscription->id;
+                    $operation->save();
+                }
                 $remoteItems = [];
                 foreach ($items as $item) {
                     $remoteItems[] = $item['id'];
@@ -221,7 +276,7 @@ class SubscriptionSynchronizer
 
     private function sameCore(array $left, array $right): bool
     {
-        foreach (['id', 'billing_customer_id', 'status', 'cancel_at_period_end', 'created_at', ...self::DATES] as $key) {
+        foreach (['id', 'billing_customer_id', 'status', 'collection_method', 'payment_source_id', 'cancel_at_period_end', 'legal_entity_id', 'linked_payment_account_id', 'created_at', ...self::DATES] as $key) {
             if (in_array($key, [...self::DATES, 'created_at'], true) && is_string($left[$key] ?? null) && is_string($right[$key] ?? null)) {
                 if (Timestamp::compare($left[$key], $right[$key]) !== 0) {
                     return false;

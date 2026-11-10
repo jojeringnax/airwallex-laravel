@@ -352,6 +352,56 @@ class SubscriptionSyncTest extends TestCase
         app(SubscriptionSynchronizer::class)->import($this->customer, 'default', 'sub-test');
     }
 
+    public function test_new_scheduled_period_end_caps_a_retained_later_finite_end(): void
+    {
+        $remote = Billing::subscription(['ends_at' => '2027-01-01T00:00:00Z']);
+        $this->fake($this->observation($remote));
+        $subscription = $this->team->importSubscription('default', 'sub-test');
+        unset($remote['ends_at']);
+        $remote = [...$remote, 'cancel_at_period_end' => true, 'current_period_ends_at' => '2026-12-01T00:00:00Z', 'updated_at' => '2026-11-10T12:01:00Z'];
+        $this->fake($this->observation($remote));
+        $subscription = $subscription->reconcile();
+        self::assertTrue($subscription->active());
+        self::assertSame('2027-01-01T00:00:00Z', $subscription->ends_at);
+        Carbon::setTestNow('2026-12-01T00:00:00Z');
+        self::assertFalse($subscription->active());
+        self::assertFalse($this->team->subscribed('default'));
+    }
+
+    public function test_confirmed_schedule_cap_survives_partial_reads_and_period_rollover(): void
+    {
+        $remote = Billing::subscription(['cancel_at_period_end' => true, 'current_period_ends_at' => '2026-12-01T00:00:00Z']);
+        $this->fake($this->observation($remote));
+        $subscription = $this->team->importSubscription('default', 'sub-test');
+        self::assertSame('2026-12-01T00:00:00Z', $subscription->scheduled_ends_at);
+        unset($remote['current_period_ends_at']);
+        $remote['updated_at'] = '2026-11-10T12:01:00Z';
+        $this->fake($this->observation($remote));
+        $subscription = $subscription->reconcile();
+        self::assertTrue($subscription->active());
+        $remote['current_period_ends_at'] = '2027-01-01T00:00:00Z';
+        $remote['updated_at'] = '2026-12-02T12:00:00Z';
+        $this->fake($this->observation($remote));
+        $subscription = $subscription->reconcile();
+        Carbon::setTestNow('2026-12-02T12:00:00Z');
+        self::assertSame('2026-12-01T00:00:00Z', $subscription->scheduled_ends_at);
+        self::assertFalse($subscription->active());
+    }
+
+    public function test_new_schedule_without_fresh_bound_does_not_reuse_an_unrelated_finite_end(): void
+    {
+        $remote = Billing::subscription(['ends_at' => '2027-01-01T00:00:00Z']);
+        $this->fake($this->observation($remote));
+        $subscription = $this->team->importSubscription('default', 'sub-test');
+        unset($remote['ends_at']);
+        $remote = [...$remote, 'cancel_at_period_end' => true, 'updated_at' => '2026-11-10T12:01:00Z'];
+        $this->fake($this->observation($remote));
+        $subscription = $subscription->reconcile();
+        self::assertSame('2027-01-01T00:00:00Z', $subscription->ends_at);
+        self::assertNull($subscription->scheduled_ends_at);
+        self::assertFalse($subscription->active());
+    }
+
     public function test_parent_changes_during_paging_retain_previous_projection(): void
     {
         $remote = Billing::subscription();

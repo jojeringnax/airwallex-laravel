@@ -150,6 +150,22 @@ class PersistenceTest extends TestCase
         (new BillingContext('production', 'org-test'))->assertModel($customer);
     }
 
+    public function test_schedule_migration_backfills_only_owned_raw_bound_proof(): void
+    {
+        $this->artisan('migrate:rollback', ['--force' => true, '--step' => 1])->assertSuccessful();
+        $customer = Customer::create($this->identity('a', 'customer-test'));
+        $proven = $this->subscription($customer, 'sub-proof');
+        $proven->update(['cancel_at_period_end' => true, 'snapshot' => ['id' => 'sub-proof', 'billing_customer_id' => 'customer-test', 'status' => 'ACTIVE', 'cancel_at_period_end' => true, 'current_period_ends_at' => '2026-12-01T00:00:00.123456789+0000']]);
+        $unproven = $this->subscription($customer, 'sub-unproven');
+        $unproven->update(['cancel_at_period_end' => true, 'ends_at' => '2027-01-01T00:00:00Z', 'snapshot' => ['id' => 'sub-unproven', 'billing_customer_id' => 'customer-test', 'status' => 'ACTIVE', 'cancel_at_period_end' => true]]);
+        $foreign = $this->subscription($customer, 'sub-foreign');
+        $foreign->update(['cancel_at_period_end' => true, 'snapshot' => ['id' => 'sub-foreign', 'billing_customer_id' => 'other-customer', 'status' => 'ACTIVE', 'cancel_at_period_end' => true, 'ends_at' => '2027-01-01T00:00:00Z']]);
+        $this->artisan('migrate', ['--force' => true])->assertSuccessful();
+        self::assertSame('2026-12-01T00:00:00.123456789+0000', $proven->fresh()->scheduled_ends_at);
+        self::assertNull($unproven->fresh()->scheduled_ends_at);
+        self::assertNull($foreign->fresh()->scheduled_ends_at);
+    }
+
     public function test_remote_identity_cannot_be_reassigned(): void
     {
         $customer = Customer::create($this->identity('a', 'customer'));

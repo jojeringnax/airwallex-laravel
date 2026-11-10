@@ -12,10 +12,14 @@ use Psr\Http\Message\ResponseInterface;
 /** Invokes a bounded local interleaving instead of making network requests. */
 final class InterleavingHttpClient implements ClientInterface
 {
+    /** @var list<RequestInterface> */
+    public array $requests = [];
+
     public function __construct(private array $responses) {}
 
     public function sendRequest(RequestInterface $request): ResponseInterface
     {
+        $this->requests[] = $request;
         $next = array_shift($this->responses);
         if ($next instanceof Closure) {
             $next = $next();

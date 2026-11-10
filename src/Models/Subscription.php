@@ -10,6 +10,7 @@ use Jojeringnax\AirwallexLaravel\Casts\LosslessJson;
 use Jojeringnax\AirwallexLaravel\Contracts\SubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\DefaultSubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
+use Jojeringnax\AirwallexLaravel\Services\SubscriptionManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 
 /**
@@ -19,6 +20,7 @@ use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
  * @property ?string $trial_ends_at
  * @property ?string $current_period_starts_at
  * @property ?string $current_period_ends_at
+ * @property ?string $scheduled_ends_at
  * @property ?string $cancel_requested_at
  * @property ?string $provider_created_at
  * @property ?string $provider_updated_at
@@ -55,6 +57,46 @@ class Subscription extends BillingModel
     public function reconcile(): Subscription
     {
         return app(SubscriptionSynchronizer::class)->reconcile($this);
+    }
+
+    public function updateQuantity(string $actionKey, mixed $quantity, array $options, ?string $itemId = null): Subscription
+    {
+        return app(SubscriptionManager::class)->updateQuantity($this, $actionKey, $quantity, $options, $itemId);
+    }
+
+    public function swapPrice(string $actionKey, string $priceId, array $options, ?string $itemId = null, mixed $quantity = null): Subscription
+    {
+        return app(SubscriptionManager::class)->swapPrice($this, $actionKey, $priceId, $options, $itemId, $quantity);
+    }
+
+    public function addItem(string $actionKey, string $priceId, mixed $quantity, array $options): Subscription
+    {
+        return app(SubscriptionManager::class)->addItem($this, $actionKey, $priceId, $quantity, $options);
+    }
+
+    public function removeItem(string $actionKey, string $itemId, array $options): Subscription
+    {
+        return app(SubscriptionManager::class)->removeItem($this, $actionKey, $itemId, $options);
+    }
+
+    public function updateItems(string $actionKey, array $items, array $options = []): Subscription
+    {
+        return app(SubscriptionManager::class)->updateItems($this, $actionKey, $items, $options);
+    }
+
+    public function cancelAtPeriodEnd(string $actionKey): Subscription
+    {
+        return app(SubscriptionManager::class)->cancelAtPeriodEnd($this, $actionKey);
+    }
+
+    public function cancelNow(string $actionKey, string $prorationBehavior): Subscription
+    {
+        return app(SubscriptionManager::class)->cancelNow($this, $actionKey, $prorationBehavior);
+    }
+
+    public function updatePaymentSource(string $actionKey, string $sourceId): Subscription
+    {
+        return app(SubscriptionManager::class)->updatePaymentSource($this, $actionKey, $sourceId);
     }
 
     public function active(): bool

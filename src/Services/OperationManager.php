@@ -100,12 +100,15 @@ class OperationManager
             $operation->remote_id = $result['id'];
             $operation->save();
             $confirmed = $confirm($result, $operation);
-            $this->succeed($operation);
+            $operation->refresh();
+            if ($operation->status !== 'acknowledged') {
+                $this->succeed($operation);
+            }
 
             return $confirmed;
         } catch (ValidationException $exception) {
             if ($responseReceived) {
-                ModelRegistry::query('operation')->whereKey($operation->id)->update(['status' => 'ambiguous', 'error_code' => 'reconciliation_required']);
+                ModelRegistry::query('operation')->whereKey($operation->id)->where('status', 'in_flight')->update(['status' => 'ambiguous', 'error_code' => 'reconciliation_required']);
                 throw new AmbiguousOperationException($operation->id, $exception);
             }
             DB::transaction(function () use ($operation): void {
@@ -117,12 +120,29 @@ class OperationManager
         } catch (Throwable $exception) {
             // Even a local storage failure after remote success must never invite replay.
             try {
-                ModelRegistry::query('operation')->whereKey($operation->id)->update(['status' => 'ambiguous', 'error_code' => 'reconciliation_required']);
+                ModelRegistry::query('operation')->whereKey($operation->id)->where('status', 'in_flight')->update(['status' => 'ambiguous', 'error_code' => 'reconciliation_required']);
             } catch (Throwable) {
                 // The pre-I/O in_flight row still durably proves the attempted action.
             }
             throw new AmbiguousOperationException($operation->id, $exception);
         }
+    }
+
+    /** @internal Known response, but an item postcondition remains unobserved. */
+    public function acknowledgeItemEffect(Operation $operation): void
+    {
+        $this->context->assertModel($operation);
+        $operation->refresh();
+        if (! in_array($operation->kind, ['subscription.quantity', 'subscription.items', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item'], true)
+            || ! in_array($operation->status, ['in_flight', 'ambiguous', 'acknowledged'], true) || $operation->remote_id === null || $operation->subscription_id === null) {
+            throw new ConflictException('Only a recorded item-action response can be acknowledged without observed fulfillment.', $operation->id);
+        }
+        // A parallel canonical recovery may already have established fulfillment.
+        // Preserve that terminal proof instead of saving a stale model over it.
+        ModelRegistry::query('operation')->whereKey($operation->id)
+            ->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged'])
+            ->update(['status' => 'acknowledged', 'lock_key' => null, 'error_code' => 'item_effect_unconfirmed']);
+        $operation->refresh();
     }
 
     public function succeed(Operation $operation): void
