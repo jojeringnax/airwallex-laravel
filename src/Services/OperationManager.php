@@ -18,6 +18,7 @@ use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
+use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Throwable;
 
 class OperationManager
@@ -48,7 +49,7 @@ class OperationManager
                 throw new ConflictException('Subscription does not belong to this customer.');
             }
         }
-        $hash = hash('sha256', json_encode(self::canonical([$kind, $customer->getKey(), $subscription?->getKey(), $name, $specification]), JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION));
+        $hash = hash('sha256', CanonicalJson::encode([$kind, $customer->getKey(), $subscription?->getKey(), $name, $specification]));
         $identity = [...$this->context->attributes(), 'action_key' => $actionKey];
         try {
             /** @var Operation */
@@ -143,28 +144,5 @@ class OperationManager
             }
             ModelRegistry::query('subscription_slot')->where('subscription_id', $subscription->id)->delete();
         });
-    }
-
-    private static function canonical(mixed $value): mixed
-    {
-        if ($value instanceof \stdClass) {
-            $members = get_object_vars($value);
-            ksort($members, SORT_STRING);
-            foreach ($members as &$member) {
-                $member = self::canonical($member);
-            }
-
-            return (object) $members;
-        }
-        if (is_array($value)) {
-            if (! array_is_list($value)) {
-                ksort($value, SORT_STRING);
-            }
-            foreach ($value as &$item) {
-                $item = self::canonical($item);
-            }
-        }
-
-        return $value;
     }
 }

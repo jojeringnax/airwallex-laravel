@@ -20,7 +20,7 @@ class SubscriptionSlot extends BillingModel
 
     protected function immutable(): array
     {
-        return ['customer_id', 'name'];
+        return ['id', 'customer_id', 'name'];
     }
 
     public function subscription(): BelongsTo

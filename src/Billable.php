@@ -6,11 +6,23 @@ namespace Jojeringnax\AirwallexLaravel;
 
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\MorphOne;
+use Jojeringnax\AirwallexLaravel\Concerns\ManagesCustomers;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
+use Jojeringnax\AirwallexLaravel\Services\CustomerManager;
+use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 
 trait Billable
 {
+    use ManagesCustomers;
+
+    public function importSubscription(string $name, string $remoteId): Subscription
+    {
+        $customer = app(CustomerManager::class)->requireCustomer($this);
+
+        return app(SubscriptionSynchronizer::class)->import($customer, $name, $remoteId);
+    }
+
     public function airwallexCustomer(): MorphOne
     {
         $relation = $this->morphOne(ModelRegistry::class('customer'), 'billable');

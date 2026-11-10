@@ -9,13 +9,30 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
+use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Symfony\Component\Process\Process;
 
 class ConcurrencyTest extends TestCase
 {
     public function test_separate_processes_share_one_customer_and_name_reservation(): void
+    {
+        $this->race(false);
+    }
+
+    public function test_import_and_creation_compete_for_the_same_name_in_separate_processes(): void
+    {
+        $this->race(true);
+    }
+
+    public function test_committed_import_prevents_a_later_process_from_creating_under_the_same_name(): void
+    {
+        $this->race(true, true);
+    }
+
+    private function race(bool $import, bool $delayCreate = false): void
     {
         $directory = sys_get_temp_dir().'/airwallex-race-'.bin2hex(random_bytes(8));
         mkdir($directory, 0700);
@@ -30,9 +47,12 @@ class ConcurrencyTest extends TestCase
             Schema::create('local_teams', function (Blueprint $table): void {
                 $table->string('id')->primary();
             });
-            Team::create(['id' => 'race']);
-            foreach (['command-a', 'command-b'] as $command) {
-                $process = new Process([PHP_BINARY, '-d', 'display_errors=stderr', __DIR__.'/Fixtures/race-worker.php', $database, $barrier, $command], dirname(__DIR__));
+            $team = Team::create(['id' => 'race']);
+            if ($import) {
+                app(OperationManager::class)->reserveCustomer($team)->update(['remote_id' => 'customer-test']);
+            }
+            foreach (['command-a', 'command-b'] as $index => $command) {
+                $process = new Process([PHP_BINARY, '-d', 'display_errors=stderr', __DIR__.'/Fixtures/race-worker.php', $database, $barrier, $command, ($import && $index === 1) ? 'import' : ($delayCreate ? 'delayed-create' : 'create')], dirname(__DIR__));
                 $process->setTimeout(15);
                 $process->start();
                 $processes[] = $process;
@@ -55,10 +75,13 @@ class ConcurrencyTest extends TestCase
             }
             self::assertSame($results[0]['customer'], $results[1]['customer']);
             self::assertSame(1, Customer::count());
-            self::assertSame(1, Operation::count());
+            self::assertSame(1, Operation::count() + Subscription::count());
             self::assertSame(1, SubscriptionSlot::count());
-            self::assertSame(1, count(array_filter($results, fn (array $result) => isset($result['operation']))));
+            self::assertSame(1, count(array_filter($results, fn (array $result) => isset($result['operation']) || isset($result['subscription']))));
             self::assertSame(1, count(array_filter($results, fn (array $result) => $result['conflict'] ?? false)));
+            if ($delayCreate) {
+                self::assertArrayHasKey('subscription', $results[1]);
+            }
         } finally {
             foreach ($processes as $process) {
                 $process->stop();
