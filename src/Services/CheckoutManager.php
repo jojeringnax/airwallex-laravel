@@ -203,6 +203,7 @@ class CheckoutManager
         try {
             $checkout = DB::transaction(function () use ($operation, $customer, $before, $remote, $id): Checkout {
                 app(CommitGuard::class)->assertMayCommit();
+                ModelRegistry::query('customer')->whereKey($customer->id)->lockForUpdate()->firstOrFail();
                 $checkout = ModelRegistry::query('checkout')->where($this->context->attributes())->where('remote_id', $id)->first();
                 if ($before !== null && ($checkout === null || $checkout->id !== $before->id)) {
                     throw new ConflictException('The known checkout mapping was removed during reconciliation.');
@@ -303,7 +304,9 @@ class CheckoutManager
         } elseif (in_array($checkout->status, ['CANCELLED', 'EXPIRED'], true)) {
             DB::transaction(function () use ($checkout, $operation): void {
                 app(CommitGuard::class)->assertMayCommit();
-                $current = ModelRegistry::query('checkout')->findOrFail($checkout->id);
+                $locked = ModelRegistry::query('checkout')->whereKey($checkout->id);
+                $locked->lockForUpdate();
+                $current = $locked->firstOrFail();
                 $this->context->assertModel($current);
                 $intent = ModelRegistry::query('operation')->findOrFail($operation->id);
                 if ($intent->subscription_id !== null || ! in_array($current->status, ['CANCELLED', 'EXPIRED'], true) || $current->remote_subscription_id !== null || $current->remote_payment_source_id !== null || $current->subscription_id !== null || $current->payment_source_id !== null) {
@@ -320,7 +323,9 @@ class CheckoutManager
     {
         DB::transaction(function () use ($checkout, $kind, $localId, $remoteId): void {
             app(CommitGuard::class)->assertMayCommit();
-            $current = ModelRegistry::query('checkout')->findOrFail($checkout->id);
+            $locked = ModelRegistry::query('checkout')->whereKey($checkout->id);
+            $locked->lockForUpdate();
+            $current = $locked->firstOrFail();
             $this->context->assertModel($current);
             Routing::assertCheckout($current->snapshot ?? []);
             $candidate = $kind === 'subscription' ? $current->remote_subscription_id : $current->remote_payment_source_id;

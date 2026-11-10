@@ -23,6 +23,7 @@ use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
+use Jojeringnax\AirwallexLaravel\Tests\Support\TestDatabase;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
 use RuntimeException;
@@ -44,7 +45,7 @@ class QueueRecoveryTest extends TestCase
         mkdir($this->directory, 0700);
         touch($this->directory.'/database.sqlite');
         config([
-            'database.connections.testing.database' => $this->directory.'/database.sqlite',
+            'database.connections.testing' => TestDatabase::connection($this->directory.'/database.sqlite'),
             'queue.default' => 'database',
             'queue.connections.database' => ['driver' => 'database', 'connection' => 'testing', 'table' => 'jobs', 'queue' => 'default', 'retry_after' => 60, 'after_commit' => false],
             'queue.failed' => ['driver' => 'database-uuids', 'database' => 'testing', 'table' => 'failed_jobs'],

@@ -56,6 +56,7 @@ class OperationManager
             /** @var Operation */
             return DB::transaction(function () use ($identity, $hash, $customer, $kind, $intent, $subscription, $name, $lockKey): Operation {
                 app(CommitGuard::class)->assertMayCommit();
+                ModelRegistry::query('customer')->whereKey($customer->id)->lockForUpdate()->firstOrFail();
                 $existing = ModelRegistry::query('operation')->where($identity)->first();
                 if ($existing) {
                     if (! hash_equals($existing->intent_hash, $hash)) {
@@ -77,7 +78,7 @@ class OperationManager
                 return $operation;
             });
         } catch (QueryException $exception) {
-            // SQLite may choose either uniqueness or a busy conflict in a genuine race.
+            // Unique keys, a busy store or a deadlock can reject a genuine race.
             // Both preserve the committed operation and prohibit a second financial write.
             throw new ConflictException('A concurrent billing action holds this reservation.');
         }

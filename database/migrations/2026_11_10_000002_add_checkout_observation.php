@@ -11,7 +11,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('airwallex_checkouts', function (Blueprint $table): void {
-            $table->text('snapshot')->nullable();
+            $table->longText('snapshot')->nullable();
             $table->string('remote_payment_source_id')->nullable();
             $table->text('provider_created_at')->nullable();
             $table->text('provider_updated_at')->nullable();

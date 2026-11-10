@@ -44,7 +44,7 @@ try {
     check($app->bound(SubscriptionAccessPolicy::class), 'Policy binding is missing.');
     check(! $app->resolved(Client::class), 'SDK must remain lazy during native boot without credentials.');
     check(config('airwallex.environment') === 'sandbox', 'Consumer must default to sandbox.');
-    $report = ['status' => 'passed', 'mode' => $options['mode'], 'runtime' => ['php' => PHP_VERSION, 'php_int_size' => PHP_INT_SIZE, 'sqlite' => $app->make('db')->selectOne('select sqlite_version() as version')->version], 'checks' => ['native_config_cache', 'provider_discovery', 'policy_binding', 'lazy_sdk']];
+    $report = ['status' => 'passed', 'mode' => $options['mode'], 'runtime' => ['php' => PHP_VERSION, 'php_int_size' => PHP_INT_SIZE, 'laravel' => InstalledVersions::getPrettyVersion('laravel/framework'), 'database' => $app->make('db')->getDriverName(), 'database_version' => $app->make('db')->selectOne($app->make('db')->getDriverName() === 'mysql' ? 'select version() as version' : 'select sqlite_version() as version')->version], 'checks' => ['native_config_cache', 'provider_discovery', 'policy_binding', 'lazy_sdk']];
     $contracts = [];
     foreach (glob($consumer.'/vendor/jojeringnax/airwallex-php-sdk/resources/contracts/billing/*.json') as $path) {
         $contract = json_decode(file_get_contents($path), true, flags: JSON_THROW_ON_ERROR);
@@ -64,6 +64,9 @@ try {
         check(! $app->resolved(Client::class), 'Route/command registration eagerly resolved SDK credentials.');
         $report['checks'][] = 'installed_route_and_recovery_commands';
     }
+    if ($options['mode'] === 'boot') {
+        check(Schema::getTables() === [], 'Native consumer requires an empty disposable database.');
+    }
     $tables = ['customers', 'subscriptions', 'subscription_items', 'subscription_slots', 'operations', 'checkouts', 'webhook_receipts', 'domain_events'];
     if (in_array($options['mode'], ['migrated', 'rolled-back', 'recipes'], true)) {
         foreach ($tables as $table) {
@@ -72,11 +75,15 @@ try {
         $report['checks'][] = 'package_table_state';
     }
     if (in_array($options['mode'], ['migrated', 'recipes'], true)) {
-        foreach (['revision', 'scheduled_ends_at'] as $column) {
+        foreach (['revision', 'scheduled_ends_at', 'observed_routing'] as $column) {
             check(Schema::hasColumn('airwallex_subscriptions', $column), 'Required subscription column missing.');
         }
         check(Schema::hasColumn('airwallex_checkouts', 'revision'), 'Checkout observation column missing.');
-        check((int) $app->make('db')->selectOne('PRAGMA foreign_keys')->foreign_keys === 1, 'SQLite foreign keys must be enabled.');
+        if ($app->make('db')->getDriverName() === 'mysql') {
+            check((int) $app->make('db')->selectOne('select @@foreign_key_checks as enabled')->enabled === 1, 'MySQL foreign keys must be enabled.');
+        } else {
+            check((int) $app->make('db')->selectOne('PRAGMA foreign_keys')->foreign_keys === 1, 'SQLite foreign keys must be enabled.');
+        }
         $report['checks'][] = 'projection_columns_and_foreign_keys';
     }
     if ($options['mode'] === 'recipes') {

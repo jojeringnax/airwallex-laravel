@@ -1,6 +1,6 @@
 # Scope and access rules
 
-The accepted product baseline is [release tracker #1](https://github.com/jojeringnax/airwallex-laravel/issues/1). This reference owns durable capability and access requirements; GitHub owns execution status. [Public contracts](contracts.md) own signatures/schema, [provider contracts](provider-contracts.md) own evidence, and [compatibility](compatibility.md) owns support policy. Public implementation choices remain provisional under [question #34](https://github.com/jojeringnax/airwallex-laravel/issues/34).
+The accepted product baseline is [release tracker #1](https://github.com/jojeringnax/airwallex-laravel/issues/1). This reference owns durable capability and access requirements; GitHub owns execution status. [Public contracts](contracts.md) own signatures/schema, [provider contracts](provider-contracts.md) own evidence, and [compatibility](compatibility.md) owns support policy. Public implementation choices are accepted under [#34](https://github.com/jojeringnax/airwallex-laravel/issues/34).
 
 ## Capabilities
 

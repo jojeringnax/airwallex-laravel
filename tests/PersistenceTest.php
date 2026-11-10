@@ -18,6 +18,7 @@ use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionItem;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
+use Jojeringnax\AirwallexLaravel\Models\WebhookReceipt;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 
@@ -83,6 +84,32 @@ class PersistenceTest extends TestCase
         self::assertSame(3, Customer::count());
         $this->expectException(QueryException::class);
         Customer::create($this->identity('c', 'Cus-A'));
+    }
+
+    public function test_opaque_identity_preserves_trailing_spaces_and_unicode_codepoints(): void
+    {
+        $values = ['customer', 'customer ', 'Customer', 'é', "e\u{0301}"];
+        foreach ($values as $index => $remote) {
+            $customer = Customer::create($this->identity((string) $index, $remote));
+            self::assertSame($customer->id, Customer::where('remote_id', $remote)->sole()->id);
+        }
+        self::assertSame(count($values), Customer::count());
+    }
+
+    public function test_full_length_composite_identity_and_large_payloads_roundtrip(): void
+    {
+        $customer = Customer::create(['environment' => 'production', 'organization_id' => str_repeat('😀', 255), 'billable_type' => str_repeat('😀', 255), 'billable_id' => str_repeat('😀', 255)]);
+        self::assertSame(str_repeat('😀', 255), $customer->fresh()->billable_id);
+        $large = str_repeat('synthetic', 10000);
+        $receipt = WebhookReceipt::create(['environment' => 'sandbox', 'organization_id' => 'org-test', 'event_id' => 'large', 'digest' => hash('sha256', $large), 'body' => $large, 'status' => 'pending']);
+        self::assertSame($large, $receipt->fresh()->body);
+        $ordinary = Customer::create($this->identity('ordinary', 'ordinary'));
+        $subscription = $this->subscription($ordinary, 'sub-large');
+        $subscription->snapshot = ['large' => $large];
+        $subscription->save();
+        self::assertSame($large, $subscription->fresh()->snapshot['large']);
+        $operation = app(OperationManager::class)->prepare($ordinary, 'large', 'test', [], ['large' => $large]);
+        self::assertSame($large, $operation->fresh()->intent['large']);
     }
 
     public function test_parent_context_is_enforced_by_the_database(): void

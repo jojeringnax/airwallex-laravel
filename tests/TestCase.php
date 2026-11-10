@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Jojeringnax\AirwallexLaravel\Tests;
 
 use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\Schema;
 use Jojeringnax\AirwallexLaravel\AirwallexServiceProvider;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
+use Jojeringnax\AirwallexLaravel\Tests\Support\TestDatabase;
 use Orchestra\Testbench\TestCase as Orchestra;
 use Psr\Http\Client\ClientInterface;
 
@@ -15,6 +17,9 @@ abstract class TestCase extends Orchestra
     protected function setUp(): void
     {
         parent::setUp();
+        if (getenv('AIRWALLEX_TEST_DATABASE') === 'mysql') {
+            Schema::dropAllTables();
+        }
         // A new worker scope must also remain unable to reach the network.
         $this->app->bind(ClientInterface::class, fn () => new FakeHttpClient);
     }
@@ -30,12 +35,7 @@ abstract class TestCase extends Orchestra
     {
         $app['config']->set('app.key', 'base64:'.base64_encode(str_repeat('a', 32)));
         $app['config']->set('database.default', 'testing');
-        $app['config']->set('database.connections.testing', [
-            'driver' => 'sqlite',
-            'database' => ':memory:',
-            'prefix' => '',
-            'foreign_key_constraints' => true,
-        ]);
+        $app['config']->set('database.connections.testing', TestDatabase::connection());
         $app['config']->set('cache.default', 'array');
         $app['config']->set('queue.default', 'sync');
         $app['config']->set('airwallex.environment', 'sandbox');
