@@ -534,7 +534,131 @@ class SubscriptionWorkflowTest extends TestCase
         return [['PENDING', false], ['IN_TRIAL', true], ['ACTIVE', true], ['UNPAID', false]];
     }
 
-    public function test_foreign_or_missing_canonical_routing_blocks_all_financial_writes(): void
+    public function test_optional_subscription_routing_allows_confirmed_creation_and_later_cancellation(): void
+    {
+        $remote = Billing::subscription();
+        unset($remote['legal_entity_id'], $remote['linked_payment_account_id']);
+        $http = $this->fake([FakeHttpClient::json($remote), ...$this->observation($remote)]);
+        $subscription = $this->team->newSubscription('default', 'price-test')->create('create', ['collection_method' => 'OUT_OF_BAND']);
+        self::assertSame('succeeded', Operation::first()->status);
+        self::assertArrayNotHasKey('legal_entity_id', $subscription->snapshot);
+        self::assertArrayNotHasKey('linked_payment_account_id', $subscription->snapshot);
+        self::assertSame('collector-test', self::body($http, 1)['linked_payment_account_id']);
+        $cancelled = [...$remote, 'status' => 'CANCELLED', 'updated_at' => '2026-11-10T12:01:00Z'];
+        $this->fake([...$this->observation($remote), FakeHttpClient::json($cancelled), ...$this->observation($cancelled)]);
+        self::assertSame('CANCELLED', $subscription->cancelNow('cancel', 'NONE')->status);
+        self::assertSame(2, Operation::where('status', 'succeeded')->count());
+    }
+
+    #[DataProvider('malformedRouting')]
+    public function test_present_malformed_subscription_routing_never_confirms_creation(string $key, mixed $value): void
+    {
+        $remote = Billing::subscription([$key => $value]);
+        $http = $this->fake([FakeHttpClient::json($remote), ...$this->observation($remote)]);
+        $this->expectException(AmbiguousOperationException::class);
+        try {
+            $this->team->newSubscription('default', 'price-test')->create('create', ['collection_method' => 'OUT_OF_BAND']);
+        } finally {
+            self::assertSame(0, Subscription::count());
+            self::assertSame(1, SubscriptionSlot::count());
+            self::assertSame(1, count(array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/subscriptions/create'))));
+        }
+    }
+
+    public static function malformedRouting(): array
+    {
+        return [['legal_entity_id', null], ['legal_entity_id', []], ['legal_entity_id', ''], ['linked_payment_account_id', null], ['linked_payment_account_id', []], ['linked_payment_account_id', '']];
+    }
+
+    public function test_foreign_write_response_cannot_be_overridden_by_optional_omission_in_later_reads(): void
+    {
+        $remote = Billing::subscription();
+        unset($remote['legal_entity_id'], $remote['linked_payment_account_id']);
+        $http = $this->fake([FakeHttpClient::json([...$remote, 'legal_entity_id' => 'foreign']), ...$this->observation($remote)]);
+        try {
+            $this->team->newSubscription('default', 'price-test')->create('create', ['collection_method' => 'OUT_OF_BAND']);
+            self::fail('Contradictory write response was accepted.');
+        } catch (AmbiguousOperationException $exception) {
+            self::assertSame('ownership', $exception->causeCategory);
+        }
+        self::assertSame('ambiguous', Operation::first()->status);
+        self::assertSame(0, Subscription::count());
+        self::assertCount(2, $http->requests);
+        self::assertNotNull(Operation::first()->lock_key);
+        $this->fake($this->observation($remote));
+        try {
+            app(SubscriptionManager::class)->reconcileOperation(Operation::first());
+            self::fail('Omission resolved contradictory response evidence.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('ambiguous', Operation::first()->status);
+        }
+        $this->fake($this->observation(Billing::subscription()));
+        app(SubscriptionManager::class)->reconcileOperation(Operation::first());
+        self::assertSame('succeeded', Operation::first()->status);
+    }
+
+    public function test_same_version_optional_routing_omission_during_paging_and_later_change_is_allowed(): void
+    {
+        $present = Billing::subscription();
+        $subscription = $this->seedSubscription($present);
+        $absent = $present;
+        unset($absent['legal_entity_id'], $absent['linked_payment_account_id']);
+        $cancelled = [...$absent, 'status' => 'CANCELLED', 'updated_at' => '2026-11-10T12:01:00Z'];
+        $this->fake([FakeHttpClient::json($present), Billing::page([]), FakeHttpClient::json($absent), FakeHttpClient::json($cancelled), ...$this->observation($cancelled)]);
+        $result = $subscription->cancelNow('cancel', 'NONE');
+        self::assertSame('CANCELLED', $result->status);
+        self::assertArrayNotHasKey('legal_entity_id', $result->snapshot);
+        self::assertSame('succeeded', Operation::first()->status);
+    }
+
+    public function test_first_paged_routing_contradiction_cannot_be_hidden_by_later_omission(): void
+    {
+        $remote = Billing::subscription();
+        $subscription = $this->seedSubscription($remote);
+        $absent = $remote;
+        unset($absent['legal_entity_id'], $absent['linked_payment_account_id']);
+        $http = $this->fake([FakeHttpClient::json([...$remote, 'legal_entity_id' => 'foreign']), Billing::page([]), FakeHttpClient::json($absent)]);
+        $this->expectException(OwnershipException::class);
+        try {
+            $subscription->cancelNow('cancel', 'NONE');
+        } finally {
+            self::assertSame(0, Operation::count());
+            self::assertCount(2, $http->requests);
+        }
+    }
+
+    #[DataProvider('routingPaging')]
+    public function test_read_only_foreign_routing_evidence_survives_later_optional_omission(bool $omitFinal): void
+    {
+        $foreign = Billing::subscription(['linked_payment_account_id' => 'foreign']);
+        $last = $foreign;
+        if ($omitFinal) {
+            unset($last['legal_entity_id'], $last['linked_payment_account_id']);
+        }
+        $this->fake([FakeHttpClient::json($foreign), Billing::page([]), FakeHttpClient::json($last)]);
+        $subscription = $this->team->importSubscription('default', 'sub-test');
+        $absent = Billing::subscription(['updated_at' => '2026-11-10T12:01:00Z']);
+        unset($absent['legal_entity_id'], $absent['linked_payment_account_id']);
+        $this->fake($this->observation($absent));
+        $subscription = $subscription->reconcile();
+        self::assertArrayNotHasKey('linked_payment_account_id', $subscription->snapshot);
+        self::assertSame('foreign', $subscription->observed_routing['linked_payment_account_id']);
+        $http = $this->fake($this->observation($absent));
+        $this->expectException(OwnershipException::class);
+        try {
+            $subscription->cancelNow('cancel', 'NONE');
+        } finally {
+            self::assertSame(0, Operation::count());
+            self::assertSame(0, count(array_filter($http->requests, fn ($request) => str_ends_with($request->getUri()->getPath(), '/cancel'))));
+        }
+    }
+
+    public static function routingPaging(): array
+    {
+        return [[false], [true]];
+    }
+
+    public function test_foreign_canonical_routing_blocks_financial_writes(): void
     {
         $remote = Billing::subscription(['linked_payment_account_id' => 'foreign']);
         $subscription = $this->seedSubscription($remote);
@@ -543,7 +667,7 @@ class SubscriptionWorkflowTest extends TestCase
         try {
             $subscription->cancelNow('cancel', 'NONE');
         } finally {
-            self::assertCount(4, $http->requests);
+            self::assertCount(2, $http->requests);
             self::assertSame(0, Operation::count());
         }
     }
@@ -719,7 +843,7 @@ class SubscriptionWorkflowTest extends TestCase
             self::assertFalse($this->team->subscribed('default'));
             self::assertSame('ambiguous', Operation::first()->status);
             self::assertNotNull(SubscriptionSlot::first()->operation_id);
-            self::assertCount(3, $http->requests);
+            self::assertCount(2, $http->requests);
         }
     }
 

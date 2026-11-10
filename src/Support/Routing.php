@@ -8,7 +8,7 @@ use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 
-/** @internal Provisional high-level routing boundary, question #39. */
+/** @internal Configured routing and per-resource response contracts, issue #39. */
 final class Routing
 {
     /** @return array{legal_entity_id:string,linked_payment_account_id:string} */
@@ -29,16 +29,43 @@ final class Routing
         return self::configured('linked_payment_account_id');
     }
 
-    public static function assertSnapshot(array $snapshot): void
+    public static function assertSubscription(array $snapshot): void
+    {
+        self::assertSnapshot($snapshot, []);
+    }
+
+    public static function assertCheckout(array $snapshot): void
+    {
+        self::assertSnapshot($snapshot, ['linked_payment_account_id']);
+    }
+
+    private static function assertSnapshot(array $snapshot, array $required): void
     {
         foreach (self::defaults() as $key => $expected) {
-            if (! isset($snapshot[$key]) || ! is_string($snapshot[$key])) {
-                throw new EvidenceException('Financial action requires confirmed entity and collector identity.');
+            if (! array_key_exists($key, $snapshot) && ! in_array($key, $required, true)) {
+                continue;
+            }
+            if (! is_string($snapshot[$key] ?? null) || $snapshot[$key] === '') {
+                throw new EvidenceException('Resource routing is missing a required value or contains a malformed value.');
             }
             if ($snapshot[$key] !== $expected) {
                 throw new OwnershipException('Resource routing conflicts with the configured entity or collector.');
             }
         }
+    }
+
+    /** Retain only bounded IDs or a safe malformed-value sentinel. */
+    public static function responseEvidence(array $response): array
+    {
+        $evidence = [];
+        foreach (['legal_entity_id', 'linked_payment_account_id'] as $key) {
+            if (array_key_exists($key, $response)) {
+                $value = $response[$key];
+                $evidence[$key] = is_string($value) && $value !== '' && strlen($value) <= 255 ? $value : null;
+            }
+        }
+
+        return $evidence;
     }
 
     private static function configured(string $key): string

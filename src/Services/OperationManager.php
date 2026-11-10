@@ -19,6 +19,7 @@ use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
+use Jojeringnax\AirwallexLaravel\Support\Routing;
 use Throwable;
 
 class OperationManager
@@ -98,6 +99,7 @@ class OperationManager
                 throw new EvidenceException('Mutation response has no resource identity.');
             }
             $operation->refresh();
+            $operation->observed_routing = Routing::responseEvidence($result);
             $operation->remote_id = $result['id'];
             $operation->save();
             $confirmed = $confirm($result, $operation);

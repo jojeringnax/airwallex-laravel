@@ -295,19 +295,68 @@ class CheckoutWorkflowTest extends TestCase
         self::assertSame(1, SubscriptionSlot::count());
     }
 
-    public function test_missing_routing_proof_is_ambiguous_instead_of_using_local_defaults(): void
+    public function test_optional_checkout_entity_can_be_absent_without_fabricating_observed_values(): void
     {
         $remote = Billing::checkout();
         unset($remote['legal_entity_id']);
+        $http = $this->fake([FakeHttpClient::json($remote), FakeHttpClient::json($remote)]);
+        $checkout = $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+        self::assertSame('succeeded', Operation::first()->status);
+        self::assertArrayNotHasKey('legal_entity_id', $checkout->snapshot);
+        self::assertSame('entity-test', json_decode((string) $http->requests[1]->getBody(), true)['legal_entity_id']);
+        self::assertSame('https://checkout.airwallex.com/synthetic-session', $checkout->redirect()->getTargetUrl());
+    }
+
+    public function test_contradictory_checkout_response_cannot_be_resolved_by_optional_omission(): void
+    {
+        $remote = Billing::checkout();
+        unset($remote['legal_entity_id']);
+        $this->fake([FakeHttpClient::json([...$remote, 'legal_entity_id' => 'foreign'])]);
+        try {
+            $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+            self::fail('Contradictory response was accepted.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('ambiguous', Operation::first()->status);
+        }
         $this->fake([FakeHttpClient::json($remote)]);
         try {
             $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
-            self::fail('Expected missing proof');
-        } catch (AmbiguousOperationException $exception) {
-            self::assertSame('evidence', $exception->causeCategory);
+            self::fail('Omission resolved contradictory response evidence.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('ambiguous', Operation::first()->status);
+            self::assertSame(0, Checkout::count());
         }
-        self::assertSame(0, Checkout::count());
-        self::assertSame(1, SubscriptionSlot::count());
+        $this->fake([FakeHttpClient::json(Billing::checkout())]);
+        $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+        self::assertSame('succeeded', Operation::first()->status);
+    }
+
+    public function test_malformed_response_routing_retains_only_safe_unresolved_evidence(): void
+    {
+        $this->fake([FakeHttpClient::json(Billing::checkout(['legal_entity_id' => ['client_secret' => 'SYNTHETIC-NESTED-SECRET']]))]);
+        try {
+            $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+            self::fail('Malformed routing response was accepted.');
+        } catch (AmbiguousOperationException) {
+            $operation = Operation::first();
+            self::assertSame(['legal_entity_id' => null, 'linked_payment_account_id' => 'collector-test'], $operation->observed_routing);
+            self::assertArrayNotHasKey('observed_routing', $operation->toArray());
+            self::assertStringNotContainsString('SYNTHETIC-NESTED-SECRET', (string) $operation->getRawOriginal('observed_routing'));
+        }
+    }
+
+    public function test_required_checkout_collector_cannot_be_absent(): void
+    {
+        $remote = Billing::checkout();
+        unset($remote['linked_payment_account_id']);
+        $this->fake([FakeHttpClient::json($remote)]);
+        $this->expectException(AmbiguousOperationException::class);
+        try {
+            $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+        } finally {
+            self::assertSame(0, Checkout::count());
+            self::assertSame(1, SubscriptionSlot::count());
+        }
     }
 
     public function test_recorded_response_then_local_failure_recovers_by_reads_only(): void

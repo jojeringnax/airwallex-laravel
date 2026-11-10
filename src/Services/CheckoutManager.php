@@ -322,7 +322,7 @@ class CheckoutManager
             app(CommitGuard::class)->assertMayCommit();
             $current = ModelRegistry::query('checkout')->findOrFail($checkout->id);
             $this->context->assertModel($current);
-            Routing::assertSnapshot($current->snapshot ?? []);
+            Routing::assertCheckout($current->snapshot ?? []);
             $candidate = $kind === 'subscription' ? $current->remote_subscription_id : $current->remote_payment_source_id;
             $field = $kind === 'subscription' ? 'subscription_id' : 'payment_source_id';
             if ($current->status !== 'COMPLETED' || $candidate !== $remoteId || $current->operation_id !== $checkout->operation_id || $current->customer_id !== $checkout->customer_id) {
@@ -341,7 +341,7 @@ class CheckoutManager
         $this->context->assertModel($checkout);
         $checkout = ModelRegistry::query('checkout')->findOrFail($checkout->id);
         $this->context->assertModel($checkout);
-        Routing::assertSnapshot($checkout->snapshot ?? []);
+        Routing::assertCheckout($checkout->snapshot ?? []);
         $url = $checkout->url;
         $parts = is_string($url) ? parse_url($url) : false;
         if ($checkout->status !== 'ACTIVE' || ! is_string($checkout->expires_at) || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $checkout->expires_at) >= 0
@@ -383,6 +383,7 @@ class CheckoutManager
                     if ($operation->remote_id === null || $operation->remote_id !== $current->remote_id) {
                         throw new AmbiguousOperationException($operation->id);
                     }
+                    Routing::assertCheckout([...($operation->observed_routing ?? []), ...$current->snapshot]);
                     $this->outcome($current, $operation);
                     $this->operations->succeed($operation);
 
@@ -478,7 +479,7 @@ class CheckoutManager
         if (($remote['id'] ?? null) !== $id || ($remote['billing_customer_id'] ?? null) !== $customer->remote_id || ($remote['mode'] ?? null) !== $mode || ($remote['ui_mode'] ?? null) !== 'HOSTED') {
             throw new OwnershipException('Checkout identity, mode or customer does not match its durable intent.');
         }
-        Routing::assertSnapshot($remote);
+        Routing::assertCheckout([...($operation->observed_routing ?? []), ...$remote]);
         foreach (['org_id' => $this->context->organizationId, 'organization_id' => $this->context->organizationId, 'environment' => $this->context->environment] as $key => $expected) {
             if (array_key_exists($key, $remote) && $remote[$key] !== $expected) {
                 throw new OwnershipException('Checkout response belongs to a foreign context.');

@@ -33,13 +33,14 @@ use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
  * @property int $revision
  * @property string $status
  * @property ?bool $cancel_at_period_end
+ * @property ?array<string,string> $observed_routing
  * @property array<string,mixed> $snapshot
  */
 class Subscription extends BillingModel
 {
     protected $table = 'airwallex_subscriptions';
 
-    protected $casts = ['snapshot' => LosslessJson::class, 'revision' => 'integer', 'cancel_at_period_end' => 'boolean', 'synced_at' => 'immutable_datetime', 'items_synced_at' => 'immutable_datetime'];
+    protected $casts = ['observed_routing' => LosslessJson::class, 'snapshot' => LosslessJson::class, 'revision' => 'integer', 'cancel_at_period_end' => 'boolean', 'synced_at' => 'immutable_datetime', 'items_synced_at' => 'immutable_datetime'];
 
     protected function immutable(): array
     {
