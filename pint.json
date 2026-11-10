@@ -1,0 +1,5 @@
+{
+    "preset": "laravel",
+    "exclude": ["vendor", ".agents", "build"],
+    "rules": {"declare_strict_types": true}
+}

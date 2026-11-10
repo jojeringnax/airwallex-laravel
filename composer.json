@@ -1,0 +1,58 @@
+{
+    "name": "jojeringnax/airwallex-laravel",
+    "description": "Cashier-style Laravel Billing integration for Airwallex.",
+    "type": "library",
+    "license": "MIT",
+    "homepage": "https://github.com/jojeringnax/airwallex-laravel",
+    "keywords": ["airwallex", "laravel", "billing", "subscriptions"],
+    "support": {
+        "issues": "https://github.com/jojeringnax/airwallex-laravel/issues",
+        "source": "https://github.com/jojeringnax/airwallex-laravel"
+    },
+    "require": {
+        "php": ">=8.3 <8.6",
+        "php-64bit": "*",
+        "ext-json": "*",
+        "ext-pdo": "*",
+        "ext-pdo_sqlite": "*",
+        "guzzlehttp/guzzle": "^7.15.2",
+        "guzzlehttp/psr7": "^2.13",
+        "illuminate/cache": "^12.69",
+        "illuminate/console": "^12.69",
+        "illuminate/database": "^12.69",
+        "illuminate/queue": "^12.69",
+        "illuminate/routing": "^12.69",
+        "illuminate/support": "^12.69",
+        "jojeringnax/airwallex-php-sdk": "^0.1.1"
+    },
+    "require-dev": {
+        "laravel/pint": "^1.27",
+        "orchestra/testbench": "^10.0",
+        "phpstan/phpstan": "^2.1",
+        "phpunit/phpunit": "^11.5.50"
+    },
+    "autoload": {
+        "psr-4": {"Jojeringnax\\AirwallexLaravel\\": "src/"}
+    },
+    "autoload-dev": {
+        "psr-4": {"Jojeringnax\\AirwallexLaravel\\Tests\\": "tests/"}
+    },
+    "extra": {
+        "laravel": {
+            "providers": ["Jojeringnax\\AirwallexLaravel\\AirwallexServiceProvider"],
+            "aliases": {"Airwallex": "Jojeringnax\\AirwallexLaravel\\Facades\\Airwallex"}
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "style": "pint --test",
+        "style:fix": "pint",
+        "analyse": "phpstan analyse --no-progress --memory-limit=512M",
+        "check": ["@test", "@style", "@analyse"],
+        "check:dependencies": "@composer audit --locked"
+    },
+    "config": {
+        "allow-plugins": {},
+        "sort-packages": true
+    }
+}
