@@ -11,8 +11,8 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (DB::connection()->getDriverName() !== 'sqlite' || version_compare(DB::selectOne('select sqlite_version() as version')->version, '3.35.0', '<')) {
-            throw new RuntimeException('Laravel Airwallex currently requires SQLite >=3.35.');
+        if (DB::connection()->getDriverName() !== 'sqlite' || version_compare(DB::selectOne('select sqlite_version() as version')->version, '3.43.2', '<')) {
+            throw new RuntimeException('Laravel Airwallex currently requires SQLite >=3.43.2.');
         }
         if ((int) DB::selectOne('PRAGMA foreign_keys')->foreign_keys !== 1) {
             throw new RuntimeException('Laravel Airwallex requires SQLite foreign keys enabled.');

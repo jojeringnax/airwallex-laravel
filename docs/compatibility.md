@@ -8,15 +8,15 @@ This policy is **provisional**, tracked in open [question #10](https://github.co
 | License / numbering | MIT; initial candidate 0.1.0; semantic versioning |
 | PHP | 64-bit 8.3, 8.4 and 8.5 (`>=8.3 <8.6`) |
 | Framework | Laravel 12.69+ (`^12.69`), Testbench 10 |
-| Database | SQLite >=3.35, foreign keys enabled, binary case-sensitive opaque identities; file-backed concurrency qualification |
+| Database | SQLite >=3.43.2, foreign keys enabled, binary case-sensitive opaque identities; file-backed concurrency qualification |
 | SDK | Packagist `jojeringnax/airwallex-php-sdk:^0.1.1`; v0.1.1 source `bd11abb67e2e5761b86a9ca9d4a1b7993900de6e` |
-| HTTP / cache | Guzzle `^7.15.2`, PSR7 `^2.13` PSR-18/17; Laravel configured cache via PSR-16 v3; no token or HTTP behavior duplicated |
+| HTTP / cache | Guzzle `^7.15.2`, PSR7 `^2.13` PSR-18/17; Laravel array/file cache via PSR-16 v3; no token or HTTP behavior duplicated |
 | Development / qualification | PHPUnit `^11.5.50`; Composer 2.11.2 with advisory blocking and locked-graph audit |
-| Queue | Laravel configured queue; database receipts remain recoverable after dispatch/worker failure |
+| Queue | Laravel sync/database queues; database receipts remain recoverable after dispatch/worker failure |
 | Package / billable keys | ULID package IDs; integer/UUID/ULID morph keys stored exactly as strings |
 | Provider time / quantity | Timezone-bearing text preserves precision/offset; SDK-decoded decimal strings, never floats |
 
-SQLite narrows initial qualification without inventing untested cross-engine collation/locking guarantees. More engines/framework majors require actual migration, concurrency and dependency evidence. The matrix is a target until every allowed combination passes; narrow constraints or record a new question if evidence fails. [Laravel support](https://laravel.com/docs/12.x/releases) and [package mechanics](https://laravel.com/docs/12.x/packages) inform this choice.
+The provisional engine floor is the oldest actually exercised engine, 3.43.2; the earlier 3.35 schema-feature target was not independently exercised. Lowering this floor requires actual engine/migration/concurrency qualification, not an inferred feature comparison. SQLite narrows initial qualification without inventing untested cross-engine collation/locking guarantees. More engines/framework majors require actual migration, concurrency and dependency evidence. Array/file caches and sync/database queues form the qualified backend set, including their four combinations. Other Laravel drivers remain extension points requiring separate qualification; Redis/SQS and other stores are not first-release support claims. The matrix is a target until every allowed combination passes; narrow constraints or record a new question if evidence fails. [Laravel support](https://laravel.com/docs/12.x/releases) and [package mechanics](https://laravel.com/docs/12.x/packages) inform this choice.
 
 Fresh consumers obtain the tagged SDK through Packagist, with no path repository/sibling checkout. Development locks capture exact resolutions; package archives omit that root lock. Test lowest/latest allowed dependency sets on each PHP line, including real registration, config caching, migrations, executable recipes and deterministic failures. Qualification uses Composer 2.11.2 with its default security-aware resolver: lowest means the lowest permitted graph that passes current advisory policy, not an insecure historical graph. The direct floors above exclude known affected Laravel/Guzzle/PHPUnit versions; transitive dependencies still require resolution and audit. This refinement remains provisional under [the support question](https://github.com/jojeringnax/airwallex-laravel/issues/10#issuecomment-6768780428).
 
