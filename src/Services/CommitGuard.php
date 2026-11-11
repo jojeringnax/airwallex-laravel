@@ -14,7 +14,10 @@ class CommitGuard
     public function during(Closure $guard, Closure $work): mixed
     {
         $previous = $this->guard;
-        $this->guard = $guard;
+        $this->guard = static function () use ($previous, $guard): void {
+            $previous?->__invoke();
+            $guard();
+        };
         try {
             return $work();
         } finally {

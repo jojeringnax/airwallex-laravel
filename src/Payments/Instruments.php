@@ -65,6 +65,34 @@ class Instruments
         return $this->observe($customer, $consentId);
     }
 
+    /** Canonical Method-only notifications never invent a Consent state or billing source. */
+    public function reconcileMethod(Customer $customer, string $methodId): void
+    {
+        $customer = $this->customer($customer);
+        if (! MethodObservation::query()->where([...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $methodId])->exists()) {
+            throw new OwnershipException('Payment Method has no known account-owned association.');
+        }
+        $method = $this->method($customer, $methodId);
+        DB::transaction(function () use ($customer, $methodId, $method): void {
+            $this->lockCustomer($customer);
+            $proof = MethodObservation::query()->where([...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $methodId])->firstOrFail();
+            if ($proof->provider_updated_at !== $method['updated_at'] || $proof->status !== $method['status']) {
+                throw new ConflictException('Payment Method changed during canonical notification processing.');
+            }
+            $instruments = Instrument::query()->where([...$this->context->attributes(), 'customer_id' => $customer->id, 'method_id' => $methodId])->get();
+            foreach ($instruments as $instrument) {
+                $snapshot = $instrument->getAttribute('snapshot');
+                $snapshot['method'] = ['id' => $methodId, 'customer_id' => $method['customer_id'], 'type' => $method['type'], 'status' => $method['status'], 'updated_at' => $method['updated_at'],
+                    'card' => array_intersect_key($method['card'] ?? [], array_flip(['last4', 'brand', 'expiry_month', 'expiry_year']))];
+                $instrument->forceFill(['method_status' => $method['status'], 'method_type' => $method['type'], 'snapshot' => $snapshot, 'revision' => $instrument->revision + 1])->save();
+                if ($method['status'] !== 'CREATED') {
+                    DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->where('instrument_id', $instrument->id)->update(['instrument_id' => null]);
+                }
+                app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status]);
+            }
+        });
+    }
+
     /** Strict saved-card eligibility for merchant-initiated unscheduled charges. */
     public function verified(Customer $customer, string $consentId): Instrument
     {

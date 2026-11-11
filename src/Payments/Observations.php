@@ -28,6 +28,13 @@ class Observations
         }
         $identity = [...$this->context->attributes(), 'observation_key' => hash('sha256', CanonicalJson::encode([$resource->getTable(), $resource->id, $payload]))];
 
-        return Observation::query()->firstOrCreate($identity, ['resource_type' => $resource->getTable(), 'resource_id' => $resource->id, 'payload' => $payload]);
+        $observation = Observation::query()->firstOrCreate($identity, ['resource_type' => $resource->getTable(), 'resource_id' => $resource->id, 'payload' => $payload]);
+        try {
+            DB::afterCommit(fn () => app(ObservationDispatcher::class)->enqueue($observation->id));
+        } catch (\Throwable) {
+            // Minimal bootstraps may lack after-commit callbacks; scheduled delivery recovers it.
+        }
+
+        return $observation;
     }
 }

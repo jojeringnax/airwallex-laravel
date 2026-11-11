@@ -23,6 +23,23 @@ return [
         'client_id' => env('AIRWALLEX_PAYMENTS_CLIENT_ID'),
         'api_key' => env('AIRWALLEX_PAYMENTS_API_KEY'),
         'cache_store' => env('AIRWALLEX_PAYMENTS_CACHE_STORE'),
+        'webhook' => [
+            'enabled' => false,
+            'path' => 'airwallex/payments/webhook',
+            'middleware' => [],
+            'secret' => env('AIRWALLEX_PAYMENTS_WEBHOOK_SECRET'),
+            'version' => '2026-08-21',
+            'tolerance_milliseconds' => 300000,
+            'retention_days' => 7,
+            'lease_seconds' => 300,
+            'queue' => env('AIRWALLEX_PAYMENTS_WEBHOOK_QUEUE'),
+            'queue_connection' => env('AIRWALLEX_PAYMENTS_WEBHOOK_QUEUE_CONNECTION'),
+        ],
+        'events' => [
+            'lease_seconds' => 300,
+            'queue' => env('AIRWALLEX_PAYMENTS_EVENTS_QUEUE'),
+            'queue_connection' => env('AIRWALLEX_PAYMENTS_EVENTS_QUEUE_CONNECTION'),
+        ],
     ],
     'models' => [
         'customer' => Models\Customer::class,
