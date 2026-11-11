@@ -302,6 +302,7 @@ class SubscriptionManager
         $customer = ModelRegistry::query('customer')->findOrFail($subscription->customer_id);
         $this->context->assertModel($customer);
         $operation = $this->existing($customer, $actionKey, $kind, $specification, $subscription);
+        $resumedRestoration = $operation?->status === 'prepared' && $kind === 'subscription.restore_renewal';
         if ($operation === null) {
             $subscription = $this->synchronizer->reconcile($subscription, financial: true);
             Routing::assertSubscription([...$subscription->snapshot, ...($subscription->observed_routing ?? [])]);
@@ -323,10 +324,14 @@ class SubscriptionManager
         if ($operation->status !== 'prepared') {
             return $this->recoverChange($subscription, $operation);
         }
-        $this->preflight($operation, function () use ($subscription, $customer, $operation): void {
+        $this->preflight($operation, function () use ($subscription, $customer, $operation, $resumedRestoration): void {
             $current = ModelRegistry::query('subscription')->findOrFail($subscription->id);
             if ($operation->kind === 'subscription.restore_renewal') {
                 $this->assertRestorationDispatch($current, $operation->intent['payload']);
+                if ($resumedRestoration) {
+                    $current = $this->synchronizer->reconcile($current, financial: true);
+                    $this->assertRestorationDispatch($current, $operation->intent['payload']);
+                }
             }
             Routing::assertSubscription([...$current->snapshot, ...($current->observed_routing ?? [])]);
             if ($this->fingerprint($current) !== $operation->intent['fingerprint']) {
