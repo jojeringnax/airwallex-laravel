@@ -87,7 +87,7 @@ try {
         exit;
     }
     $operation = $manager->prepare($customer, $command, 'create', ['price' => 'price'], [], name: 'default');
-    if (($argv[4] ?? '') === 'execute') {
+    if (in_array($argv[4] ?? '', ['execute', 'execute-unconfirmed'], true)) {
         // Finish both preparation transactions before racing the same durable claim.
         fwrite(STDOUT, "PREPARED\n");
         $deadline = microtime(true) + 10;
@@ -102,7 +102,9 @@ try {
             file_put_contents($barrier.'.writes', "WRITE\n", FILE_APPEND | LOCK_EX);
 
             return ['id' => 'sub-synthetic'];
-        }, fn (array $response) => $response['id']);
+        }, fn (array $response) => $argv[4] === 'execute-unconfirmed'
+            ? throw new RuntimeException('Synthetic local confirmation failure.')
+            : $response['id']);
     }
     fwrite(STDOUT, json_encode(['customer' => $customer->id, 'operation' => $operation->id], JSON_THROW_ON_ERROR));
 } catch (ConflictException|AmbiguousOperationException) {
