@@ -22,7 +22,7 @@ class Observations
         if (DB::transactionLevel() < 1) {
             throw new ConflictException('Payments observations must commit with their canonical projection.');
         }
-        $allowed = ['remote_id', 'status', 'amount', 'currency', 'captured_amount', 'payment_intent_id', 'financial_identity'];
+        $allowed = ['remote_id', 'status', 'amount', 'currency', 'captured_amount', 'payment_intent_id', 'financial_identity', 'method_status', 'payment_method_id'];
         if (array_diff(array_keys($payload), $allowed) !== [] || array_filter($payload, fn ($value) => $value !== null && ! is_string($value)) !== []) {
             throw new ConflictException('Payments observation payload must contain safe financial classifications.');
         }

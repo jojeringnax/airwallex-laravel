@@ -88,7 +88,7 @@ class Instruments
                 if ($method['status'] !== 'CREATED') {
                     DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->where('instrument_id', $instrument->id)->update(['instrument_id' => null]);
                 }
-                app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status]);
+                app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status, 'method_status' => $instrument->method_status, 'payment_method_id' => $instrument->method_id]);
             }
         });
     }
@@ -394,6 +394,7 @@ class Instruments
             if ($instrument->status !== 'VERIFIED' || $instrument->method_status !== 'CREATED' || $instrument->revoked_at !== null) {
                 DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->where('instrument_id', $instrument->id)->update(['instrument_id' => null]);
             }
+            app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status, 'method_status' => $instrument->method_status, 'payment_method_id' => $instrument->method_id]);
 
             return $instrument;
         });

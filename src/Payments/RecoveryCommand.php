@@ -28,7 +28,7 @@ class RecoveryCommand extends BillingCommand
             $after = $this->identifierOption('after');
             $candidate = $this->identifierOption('remote-id');
             if (($name === 'all' && ($id !== null || $after !== null)) || ($candidate !== null && ($name !== 'operation' || $id === null))
-                || ($this->option('replay') && ($name !== 'receipt' || $id === null)) || ($this->option('sweep') && ($id !== null || $after !== null || $candidate !== null || $this->option('replay')))) {
+                || ($this->option('replay') && ($name !== 'receipt' || $id === null)) || ($this->option('sweep') && ($id !== null || $after !== null))) {
                 throw new ConflictException('Select one explicit family for manual cursors, receipt replay or candidate association.');
             }
             if ($name === 'prune') {

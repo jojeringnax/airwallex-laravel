@@ -57,8 +57,7 @@ class Recovery
 
     public function process(string $family, Model $row, ?string $candidate = null): bool
     {
-        $class = self::MODELS[$family] ?? throw new ConfigurationException('Unknown Payments recovery family.');
-        if (! $row instanceof $class || ! $row instanceof PaymentModel) {
+        if (! isset(self::MODELS[$family]) || ! $row instanceof PaymentModel) {
             throw new ConflictException('Payments recovery row does not match its selected family.');
         }
         $this->context->assertModel($row);
