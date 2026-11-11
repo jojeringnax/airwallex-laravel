@@ -198,11 +198,16 @@ class Intents
             }
         }
 
-        return $this->operations->execute($operation,
-            fn () => app(Client::class)->sdk->payments()->paymentIntents()->{$action}($canonical->remote_id, [...$body, 'request_id' => $operation->request_id]),
-            fn () => $this->confirm($customer, $canonical, $operation, $canonical->remote_id),
-            $consentId === null ? null : fn () => app(Instruments::class)->assertUsableReservation($customer, $consentId),
-        );
+        try {
+            return $this->operations->execute($operation,
+                fn () => app(Client::class)->sdk->payments()->paymentIntents()->{$action}($canonical->remote_id, [...$body, 'request_id' => $operation->request_id]),
+                fn () => $this->confirm($customer, $canonical, $operation, $canonical->remote_id),
+                $consentId === null ? null : fn () => app(Instruments::class)->assertUsableReservation($customer, $consentId),
+            );
+        } catch (EvidenceException|ConflictException $exception) {
+            $this->operations->rejectPrepared($operation);
+            throw $exception;
+        }
     }
 
     private function confirm(Customer $customer, Intent $intent, Operation $operation, string $id): Intent
@@ -256,7 +261,7 @@ class Intents
                 throw new ConflictException('Intent changed during canonical observation.');
             }
             $previous = $current->snapshot['updated_at'] ?? null;
-            if (is_string($previous) && (! is_string($remote['updated_at'] ?? null) || Timestamp::compare($remote['updated_at'], $previous) < 0)) {
+            if (is_string($previous) && Timestamp::compare($remote['updated_at'], $previous) < 0) {
                 throw new EvidenceException('Payments intent observation is older than retained evidence.');
             }
             if (is_string($previous) && Timestamp::compare($remote['updated_at'], $previous) === 0

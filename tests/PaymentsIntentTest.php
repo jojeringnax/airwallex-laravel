@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Payments;
 use Jojeringnax\AirwallexLaravel\Payments\Amount;
 use Jojeringnax\AirwallexLaravel\Payments\Context;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
@@ -37,6 +38,8 @@ class PaymentsIntentTest extends TestCase
 
     private ?Closure $afterWrite = null;
 
+    private ?Closure $beforeRead = null;
+
     private int $version = 0;
 
     protected function setUp(): void
@@ -55,7 +58,13 @@ class PaymentsIntentTest extends TestCase
                 return FakeHttpClient::login();
             }
             if (str_contains($path, '/payment_methods/')) {
-                return FakeHttpClient::json(['id' => 'method-owned', 'customer_id' => 'customer-payments', 'status' => 'CREATED']);
+                return FakeHttpClient::json(['id' => 'method-owned', 'customer_id' => 'customer-payments', 'status' => 'CREATED', 'type' => 'card', 'updated_at' => '2026-11-11T12:00:00Z']);
+            }
+            if (str_contains($path, '/payment_consents/')) {
+                return FakeHttpClient::json(['id' => 'consent-owned', 'customer_id' => 'customer-payments', 'status' => 'VERIFIED', 'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'payment_method' => ['id' => 'method-owned', 'type' => 'card'], 'updated_at' => '2026-11-11T12:00:00Z']);
+            }
+            if ($request->getMethod() === 'GET' && $this->beforeRead !== null) {
+                ($this->beforeRead)();
             }
             if ($request->getMethod() === 'POST') {
                 $operation = Operation::where('status', 'in_flight')->firstOrFail();
@@ -230,6 +239,52 @@ class PaymentsIntentTest extends TestCase
         $this->advance(['status' => 'CANCELLED']);
         self::assertSame('CANCELLED', $this->payments->recoverIntent($operation->id)->status);
         self::assertSame('succeeded', $operation->fresh()->status);
+        self::assertSame($writes, $this->writes());
+    }
+
+    public function test_saved_card_claim_rechecks_revocation_after_canonical_preflight_without_a_charge(): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        $instrument = Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
+            'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
+        $this->beforeRead = function () use ($instrument): void {
+            if (Operation::where('kind', 'intent.confirm')->where('status', 'prepared')->exists()) {
+                $instrument->forceFill(['revoked_at' => now()])->save();
+            }
+        };
+        $writes = $this->writes();
+        try {
+            $this->payments->confirmIntent($intent, 'saved-charge', 'consent-owned');
+            self::fail('Revocation before the actual claim must stop the charge.');
+        } catch (EvidenceException) {
+            self::assertSame($writes, $this->writes());
+            $operation = Operation::where('action_key', 'saved-charge')->firstOrFail();
+            self::assertSame('failed', $operation->status);
+            self::assertNull($operation->lock_key);
+            self::assertFalse($intent->fresh()->paid());
+        }
+    }
+
+    public function test_saved_card_customer_action_requires_canonical_capture_after_browser_completion(): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
+            'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
+        $this->afterWrite = function (Operation $operation, array &$state): void {
+            self::assertSame('merchant', $operation->intent['body']['triggered_by']);
+            self::assertSame('consent-owned', $operation->intent['body']['payment_consent_id']);
+            $state['status'] = 'REQUIRES_CUSTOMER_ACTION';
+            $state['next_action'] = ['type' => 'redirect', 'url' => 'https://example.test/synthetic-3ds'];
+        };
+        $actionRequired = $this->payments->confirmIntent($intent, 'saved-charge', 'consent-owned');
+        self::assertFalse($actionRequired->paid());
+        self::assertSame('redirect', $this->payments->intentBootstrap($actionRequired)->expose()['next_action']['type']);
+        self::assertFalse($this->payments->continueIntent($actionRequired)->paid());
+        $writes = $this->writes();
+        $this->advance(['status' => 'SUCCEEDED', 'captured_amount' => '10.00']);
+        self::assertTrue($this->payments->continueIntent($actionRequired)->paid());
         self::assertSame($writes, $this->writes());
     }
 
