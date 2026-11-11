@@ -69,6 +69,12 @@ Schedule::command('airwallex:prune-receipts')->daily()->withoutOverlapping();
 
 Adapt batch cursors/frequency to your backlog; a permanently failing oldest row must not hide later work. Run the next batch with the emitted cursor and revisit failed IDs separately. Scheduler overlap locks require an application cache with lock support; multi-host scheduling requires infrastructure that actually shares those locks and the qualified database. Run Laravel's scheduler and queue supervision independently; registering schedules does not start workers.
 
+## Deferred transitions
+
+`php artisan airwallex:transitions --limit=100` executes only already authorized due subscription plans and resumes their original commands. Unlike reconciliation commands, it may submit a plan's first financial mutation. Schedule it explicitly, for example every minute, on the configured Billing context. It filters future candidates by a UTC index and compares exact stored timestamp text before execution. Batches are bounded and rotate by attempt count so unresolved work cannot permanently starve later plans. Output contains local IDs and safe outcome classifications; inspect encrypted intents through an authorized operator path.
+
+Persisted `scheduled` plans reserve one local generation but leave ordinary financial mutation locking available; a later source/item/renewal change causes expected-shape rejection rather than silently applying stale terms. `executing` survives a process interruption; the same derived operation key recovers or sends its first unattempted command. `ambiguous` retains the plan and original financial mutex/evidence as applicable. `completed` requires confirmed operation fulfillment. `blocked` requires an explicit cancel/replacement decision; missed windows do not authorize catch-up, compensation or recreation. Cancelling/replacing an attempted plan is rejected. A worker outage can miss the intended boundary; neither the scheduler nor local time stops provider renewal. [SDK question #161](https://github.com/jojeringnax/airwallex-php-sdk/issues/161) retains exact timing and unsupported free-period/renewal obligations.
+
 ## Uncertain actions
 
 Persist the original application command key before a financial call. On `AmbiguousOperationException`, retain its `operationId` and inspect it. Keep the original request ID, payload and name hold. A timeout, provider outage, 404 or expired worker lease never proves that the write failed and never permits automatic replacement/replay.

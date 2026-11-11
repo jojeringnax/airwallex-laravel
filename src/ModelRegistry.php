@@ -19,9 +19,10 @@ final class ModelRegistry
         'checkout' => Models\Checkout::class,
         'webhook_receipt' => Models\WebhookReceipt::class,
         'domain_event' => Models\DomainEvent::class,
+        'subscription_transition' => Models\SubscriptionTransition::class,
     ];
 
-    /** @return class-string<($key is 'customer' ? Models\Customer : ($key is 'subscription' ? Models\Subscription : ($key is 'subscription_item' ? Models\SubscriptionItem : ($key is 'subscription_slot' ? Models\SubscriptionSlot : ($key is 'operation' ? Models\Operation : ($key is 'checkout' ? Models\Checkout : ($key is 'webhook_receipt' ? Models\WebhookReceipt : ($key is 'domain_event' ? Models\DomainEvent : Model))))))))> */
+    /** @return class-string<($key is 'customer' ? Models\Customer : ($key is 'subscription' ? Models\Subscription : ($key is 'subscription_item' ? Models\SubscriptionItem : ($key is 'subscription_slot' ? Models\SubscriptionSlot : ($key is 'operation' ? Models\Operation : ($key is 'checkout' ? Models\Checkout : ($key is 'webhook_receipt' ? Models\WebhookReceipt : ($key is 'domain_event' ? Models\DomainEvent : ($key is 'subscription_transition' ? Models\SubscriptionTransition : Model)))))))))> */
     public static function class(string $key): string
     {
         $base = self::MODELS[$key] ?? throw new ConfigurationException('Unknown billing model key.');
@@ -33,14 +34,14 @@ final class ModelRegistry
         return $class;
     }
 
-    /** @return Builder<($key is 'customer' ? Models\Customer : ($key is 'subscription' ? Models\Subscription : ($key is 'subscription_item' ? Models\SubscriptionItem : ($key is 'subscription_slot' ? Models\SubscriptionSlot : ($key is 'operation' ? Models\Operation : ($key is 'checkout' ? Models\Checkout : ($key is 'webhook_receipt' ? Models\WebhookReceipt : ($key is 'domain_event' ? Models\DomainEvent : Model))))))))> */
+    /** @return Builder<($key is 'customer' ? Models\Customer : ($key is 'subscription' ? Models\Subscription : ($key is 'subscription_item' ? Models\SubscriptionItem : ($key is 'subscription_slot' ? Models\SubscriptionSlot : ($key is 'operation' ? Models\Operation : ($key is 'checkout' ? Models\Checkout : ($key is 'webhook_receipt' ? Models\WebhookReceipt : ($key is 'domain_event' ? Models\DomainEvent : ($key is 'subscription_transition' ? Models\SubscriptionTransition : Model)))))))))> */
     public static function query(string $key): Builder
     {
         return self::make($key)->newQuery();
     }
 
     /** @param array<string,mixed> $attributes
-     * @return ($key is 'customer' ? Models\Customer : ($key is 'subscription' ? Models\Subscription : ($key is 'subscription_item' ? Models\SubscriptionItem : ($key is 'subscription_slot' ? Models\SubscriptionSlot : ($key is 'operation' ? Models\Operation : ($key is 'checkout' ? Models\Checkout : ($key is 'webhook_receipt' ? Models\WebhookReceipt : ($key is 'domain_event' ? Models\DomainEvent : Model))))))))
+     * @return ($key is 'customer' ? Models\Customer : ($key is 'subscription' ? Models\Subscription : ($key is 'subscription_item' ? Models\SubscriptionItem : ($key is 'subscription_slot' ? Models\SubscriptionSlot : ($key is 'operation' ? Models\Operation : ($key is 'checkout' ? Models\Checkout : ($key is 'webhook_receipt' ? Models\WebhookReceipt : ($key is 'domain_event' ? Models\DomainEvent : ($key is 'subscription_transition' ? Models\SubscriptionTransition : Model)))))))))
      */
     public static function make(string $key, array $attributes = []): Model
     {

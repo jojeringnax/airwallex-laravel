@@ -179,7 +179,8 @@ class PersistenceTest extends TestCase
 
     public function test_schedule_migration_backfills_only_owned_raw_bound_proof(): void
     {
-        $this->artisan('migrate:rollback', ['--force' => true, '--step' => 2])->assertSuccessful();
+        $migration = require __DIR__.'/../database/migrations/2026_11_10_000003_add_confirmed_schedule_end.php';
+        $migration->down();
         $customer = Customer::create($this->identity('a', 'customer-test'));
         $proven = $this->subscription($customer, 'sub-proof');
         $proven->update(['cancel_at_period_end' => true, 'snapshot' => ['id' => 'sub-proof', 'billing_customer_id' => 'customer-test', 'status' => 'ACTIVE', 'cancel_at_period_end' => true, 'current_period_ends_at' => '2026-12-01T00:00:00.123456789+0000']]);
@@ -187,7 +188,7 @@ class PersistenceTest extends TestCase
         $unproven->update(['cancel_at_period_end' => true, 'ends_at' => '2027-01-01T00:00:00Z', 'snapshot' => ['id' => 'sub-unproven', 'billing_customer_id' => 'customer-test', 'status' => 'ACTIVE', 'cancel_at_period_end' => true]]);
         $foreign = $this->subscription($customer, 'sub-foreign');
         $foreign->update(['cancel_at_period_end' => true, 'snapshot' => ['id' => 'sub-foreign', 'billing_customer_id' => 'other-customer', 'status' => 'ACTIVE', 'cancel_at_period_end' => true, 'ends_at' => '2027-01-01T00:00:00Z']]);
-        $this->artisan('migrate', ['--force' => true])->assertSuccessful();
+        $migration->up();
         self::assertSame('2026-12-01T00:00:00.123456789+0000', $proven->fresh()->scheduled_ends_at);
         self::assertNull($unproven->fresh()->scheduled_ends_at);
         self::assertNull($foreign->fresh()->scheduled_ends_at);
@@ -195,13 +196,14 @@ class PersistenceTest extends TestCase
 
     public function test_routing_migration_backfills_only_owned_positive_provider_values(): void
     {
-        $this->artisan('migrate:rollback', ['--force' => true, '--step' => 1])->assertSuccessful();
+        $migration = require __DIR__.'/../database/migrations/2026_11_10_000004_add_observed_subscription_routing.php';
+        $migration->down();
         $customer = Customer::create($this->identity('a', 'customer-test'));
         $proven = $this->subscription($customer, 'sub-proof');
         $proven->update(['snapshot' => ['id' => 'sub-proof', 'billing_customer_id' => 'customer-test', 'linked_payment_account_id' => 'foreign']]);
         $unproven = $this->subscription($customer, 'sub-unproven');
         $unproven->update(['snapshot' => ['id' => 'sub-unproven', 'billing_customer_id' => 'other-customer', 'legal_entity_id' => 'entity-test']]);
-        $this->artisan('migrate', ['--force' => true])->assertSuccessful();
+        $migration->up();
         self::assertSame(['linked_payment_account_id' => 'foreign'], $proven->fresh()->observed_routing);
         self::assertNull($unproven->fresh()->observed_routing);
         self::assertArrayNotHasKey('legal_entity_id', $proven->fresh()->snapshot);
