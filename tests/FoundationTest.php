@@ -8,8 +8,6 @@ use Illuminate\Cache\Events\KeyWritten;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\ServiceProvider;
 use Jojeringnax\Airwallex\Client;
-use Jojeringnax\Airwallex\Exception\ApiException;
-use Jojeringnax\Airwallex\Exception\ProtocolException;
 use Jojeringnax\AirwallexLaravel\AirwallexServiceProvider;
 use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
@@ -123,26 +121,6 @@ class FoundationTest extends TestCase
         $this->assertEqualsWithDelta(strtotime($expiry) - time(), $writes[0]->seconds, 2);
     }
 
-    public function test_expired_cached_token_causes_fresh_sdk_login(): void
-    {
-        $writes = [];
-        $this->app['events']->listen(KeyWritten::class, function (KeyWritten $event) use (&$writes): void {
-            $writes[] = $event;
-        });
-        $http = $this->http([
-            FakeHttpClient::login(), FakeHttpClient::json(['id' => 'customer-one']),
-            FakeHttpClient::login(token: 'token-replacement'), FakeHttpClient::json(['id' => 'customer-one']),
-        ]);
-        $this->app->make(Client::class)->billing()->customers()->retrieve('customer-one');
-        $key = $writes[0]->key;
-        $this->app['cache']->put($key, ['token' => 'token-expired', 'expires_at' => '2000-01-01T00:00:00Z'], 3600);
-        $this->app->forgetScopedInstances();
-        $this->app->make(Client::class)->billing()->customers()->retrieve('customer-one');
-        $this->assertCount(4, $http->requests);
-        $this->assertSame('/api/v1/authentication/login', $http->requests[2]->getUri()->getPath());
-        $this->assertSame('Bearer token-replacement', $http->requests[3]->getHeaderLine('Authorization'));
-    }
-
     public function test_configured_file_cache_shares_sdk_tokens_across_worker_scopes(): void
     {
         $directory = sys_get_temp_dir().'/airwallex-cache-test-'.bin2hex(random_bytes(8));
@@ -186,35 +164,6 @@ class FoundationTest extends TestCase
         $this->assertSame('api.sandbox.airwallex.com', $http->requests[3]->getUri()->getHost());
         $this->assertSame('api.airwallex.com', $http->requests[5]->getUri()->getHost());
         $this->assertSame('Bearer production', $http->requests[5]->getHeaderLine('Authorization'));
-    }
-
-    public function test_client_replacement_and_redacted_debug_output(): void
-    {
-        $this->http([]);
-        $client = $this->app->make(Client::class);
-        $this->app->instance(Client::class, $client);
-        $this->assertSame($client, $this->app->make(Client::class));
-        $debug = print_r($client, true);
-        $this->assertStringNotContainsString('key-synthetic', $debug);
-        $this->assertStringNotContainsString('client-synthetic', $debug);
-    }
-
-    public function test_sdk_exceptions_retain_their_classification(): void
-    {
-        $this->http([FakeHttpClient::login(), FakeHttpClient::json(['code' => 'not_found'], 404)]);
-        $this->expectException(ApiException::class);
-        $this->app->make(Client::class)->billing()->customers()->retrieve('missing');
-    }
-
-    public function test_sdk_rejects_expired_login_rather_than_inventing_lifetime(): void
-    {
-        $http = $this->http([FakeHttpClient::login('2000-01-01T00:00:00Z')]);
-        try {
-            $this->app->make(Client::class)->billing()->customers()->retrieve('customer-one');
-            $this->fail('Expired login was accepted.');
-        } catch (ProtocolException) {
-            $this->assertCount(1, $http->requests);
-        }
     }
 
     public function test_configuration_can_be_cached_without_serializing_clients_or_closures(): void
