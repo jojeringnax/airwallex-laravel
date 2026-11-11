@@ -125,11 +125,11 @@ class InvoiceManager
         return $transaction;
     }
 
-    /** Compatibility boundary across the released SDK and the unreleased resource extension. */
+    /** Preserve baseline SDK compatibility while requiring the additive transaction API. */
     private function transactionsResource(object $billing): object
     {
         if (! method_exists($billing, 'transactions')) {
-            throw new ConfigurationException('Invoice transactions require the selected unreleased SDK transaction extension; qualify its exact archive before enabling this API.');
+            throw new ConfigurationException('Invoice transactions require airwallex-php-sdk v0.1.2 or later; select and qualify that released dependency before enabling this API.');
         }
 
         return call_user_func([$billing, 'transactions']);

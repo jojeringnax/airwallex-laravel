@@ -41,6 +41,16 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def validate_sdk_selection(repo: Path | None, candidate: str | None, version: str | None) -> None:
+    if bool(repo) != bool(candidate):
+        raise ValueError("Exact SDK qualification requires both --sdk-repo and --sdk-candidate.")
+    if version is not None:
+        if repo is not None or candidate is not None:
+            raise ValueError("Select either a released SDK version or an exact development archive.")
+        if re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version) is None:
+            raise ValueError("--sdk-version requires an exact stable version, for example 0.1.2.")
+
+
 def inspect_archive(archive: Path, required: set[str], *, package_name: str = PACKAGE) -> tuple[dict, dict]:
     """Check names before reading contents, so excluded credential files are never read."""
     manifest: dict[str, dict] = {}
@@ -144,8 +154,7 @@ class Qualification:
         return base
 
     def run(self) -> None:
-        if bool(self.args.sdk_repo) != bool(self.args.sdk_candidate):
-            raise ValueError("Exact SDK qualification requires both --sdk-repo and --sdk-candidate.")
+        validate_sdk_selection(self.args.sdk_repo, self.args.sdk_candidate, self.args.sdk_version)
         composer = self.args.composer.resolve()
         if digest(composer.read_bytes()) != COMPOSER_SHA256:
             raise ValueError("Composer PHAR does not match the verified 2.11.2 SHA256.")
@@ -240,6 +249,9 @@ class Qualification:
         if sdk_repository is not None:
             consumer_metadata["repositories"].insert(0, sdk_repository)
             consumer_metadata["require"][SDK] = "0.1.2-dev"
+        elif self.args.sdk_version is not None:
+            consumer_metadata["require"][SDK] = self.args.sdk_version
+            self.evidence["selected_sdk_version"] = self.args.sdk_version
         if self.args.track in ("subscriptions", "payments", "all"):
             consumer_metadata["autoload"] = {"psr-4": {"Jojeringnax\\AirwallexLaravel\\Tests\\": "tests/"}}
             consumer_metadata["require"].update({"laravel/cashier": "^16.9", "orchestra/testbench": "^10.0" if self.args.laravel == "12" else "^11.0", "phpunit/phpunit": "^11.5.50"})
@@ -298,8 +310,15 @@ class Qualification:
         packages = {value["name"]: value for value in lock["packages"]}
         sdk = packages[SDK]
         if sdk_manifest is None:
-            if sdk.get("dist", {}).get("type") != "zip" or sdk.get("source", {}).get("url") != "https://github.com/jojeringnax/airwallex-php-sdk.git":
+            source = sdk.get("source", {})
+            dist = sdk.get("dist", {})
+            if (dist.get("type") != "zip"
+                    or source.get("url") != "https://github.com/jojeringnax/airwallex-php-sdk.git"
+                    or re.fullmatch(r"[0-9a-f]{40}", source.get("reference", "")) is None
+                    or dist.get("reference") != source["reference"]):
                 raise ValueError("Installed SDK does not have the expected released Packagist/GitHub provenance.")
+            if self.args.sdk_version is not None and sdk.get("version", "").removeprefix("v") != self.args.sdk_version:
+                raise ValueError("Installed SDK is not the selected released version.")
         else:
             if sdk.get("dist", {}).get("reference") != sdk_commit or sdk.get("dist", {}).get("url") != sdk_archive.as_uri():
                 raise ValueError("Installed SDK is not the selected exact-commit archive.")
@@ -332,6 +351,7 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="Optional evidence base; a new directory is created per run")
     parser.add_argument("--sdk-repo", type=Path, help="Read-only repository used to archive an unreleased exact SDK commit")
     parser.add_argument("--sdk-candidate", help="Exact SDK commit/ref; requires --sdk-repo and records tagged release qualification pending")
+    parser.add_argument("--sdk-version", help="Exact stable SDK version from Packagist, for example 0.1.2; leaves the package's distributed constraint unchanged")
     parser.add_argument("--track", choices=("baseline", "subscriptions", "payments", "all"), default="baseline", help="Installed recipe tracks; all requires both tracks in the same candidate")
     parser.add_argument("--archive-only", action="store_true", help="Verify archive/descriptor only; never reports consumer qualification passed")
     args = parser.parse_args()

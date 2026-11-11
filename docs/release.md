@@ -12,6 +12,7 @@ python3 tools/test_qualify_candidate.py
 python3 tools/qualify-candidate.py \
   --candidate FULL_40_CHARACTER_COMMIT \
   --composer /absolute/path/composer-2.11.2.phar \
+  --sdk-version 0.1.2 --track all \
   --laravel 13 --database sqlite --dependencies latest \
   --workspace build/qualification \
   --output build/candidates
@@ -44,22 +45,23 @@ Inspect the dependency change in that application before adopting it. Follow the
 
 The final candidate's external evidence records its exact source/SDK revisions, passing checks, remaining upstream limitations, unexecuted provider scenarios and artifact hashes. A failed required check remains incomplete; a new source commit requires qualification of that commit. Keep publication, tags, merging and production operations separate from local preparation.
 
-## Adoption tracks and an unreleased SDK
+## Adoption tracks and SDK selection
 
-New Billing transaction inspection requires the SDK extension in [SDK PR #160](https://github.com/jojeringnax/airwallex-php-sdk/pull/160). Qualify its exact reviewed commit independently of a future tag:
+Billing transaction inspection requires released SDK v0.1.2 or later. Qualify the published v0.1.2 source through Packagist without a sibling repository:
 
 ```sh
 python3 tools/qualify-candidate.py \
   --candidate FULL_PACKAGE_COMMIT \
   --composer /absolute/path/composer-2.11.2.phar \
-  --sdk-repo /absolute/read-only/sdk-repository \
-  --sdk-candidate FULL_REVIEWED_SDK_COMMIT \
-  --track subscriptions --laravel 13 --database sqlite --dependencies latest
+  --sdk-version 0.1.2 \
+  --track all --laravel 13 --database sqlite --dependencies latest
 ```
 
-The SDK repository is read only: the tool exports its selected Git commit into a ZIP, records hashes/manifests and installs that archive with a visibly unreleased `0.1.2-dev` descriptor. The package's distributed `^0.1.1` constraint is preserved; the isolated consumer explicitly selects the development descriptor. Exact source/dist references and installed SDK/package bytes must match. A version label or sibling working tree never substitutes for those checks. Qualification against the final tagged SDK and published package remains pending.
+The optional `--sdk-version` accepts one exact stable version and adds it only to the isolated consumer's requirements. The package's distributed `^0.1.1` constraint is preserved. Composer must satisfy both requirements; the tool verifies the resolved version and matching GitHub source/dist commit and records the public distribution provenance. CI uses `--sdk-version 0.1.2` across its lowest/latest adoption consumers. Applications using transactions must select at least that version and qualify their own installed graph.
 
-`--track baseline` exercises the released recipe set. `subscriptions` adds the adoption subscription/accounting adapters and real optional Cashier fixture; `payments` adds its account-owned helper; `all` runs both against the same package/SDK/dependency graph. The driver requires the union of actually executed recipe names to match every shipped example. An omitted or unsupported track cannot be reported as a passing complete candidate. Each helper is extracted from the same selected package commit; a local uncommitted helper cannot qualify another candidate. The optional Cashier/Testbench/PHPUnit dependencies exist only in that disposable development consumer.
+For an unreleased SDK change, `--sdk-repo /absolute/read-only/sdk-repository --sdk-candidate FULL_REVIEWED_SDK_COMMIT` instead exports that exact Git commit into a ZIP with a visibly development `0.1.2-dev` descriptor. This mode records SDK hashes/manifests and compares installed SDK bytes; tagged-release qualification remains pending. It cannot be combined with `--sdk-version`.
+
+`--track baseline` exercises the released recipe set. `subscriptions` adds the adoption subscription/accounting adapters and real optional Cashier fixture; `payments` adds its account-owned helper; `all` runs both against the same package/SDK/dependency graph. The driver requires the union of actually executed recipe names to match every shipped example. Current candidates ship both adoption tracks and require `--track all`. Partial tracks are valid only for an exact historical candidate whose complete shipped example set matches those tracks. An omitted or unsupported track cannot be reported as a passing complete candidate. Each helper is extracted from the same selected package commit; a local uncommitted helper cannot qualify another candidate. The optional Cashier/Testbench/PHPUnit dependencies exist only in that disposable development consumer.
 
 Archive, migrate/rollback/reapply, config-cache and installed recipes run without provider credentials. The SQLite/MySQL selection is an explicit synthetic qualification profile; each application selects and verifies its own supported deployment profile. Passing this tool does not qualify an application deployment, browser clients, an application ledger, provider eligibility or an account journey. Keep `subscriptions-recipes.json`, `payments-recipes.json` when selected, the real-Cashier log and any precise external blockers with the evidence bundle.
 
