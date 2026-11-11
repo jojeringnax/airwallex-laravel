@@ -8,6 +8,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
+use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
@@ -163,6 +164,35 @@ class SubscriptionRestorationTest extends TestCase
             self::assertCount(4, $http->requests);
             self::assertNull(Operation::where('action_key', 'too-late')->first());
             self::assertFalse($subscription->fresh()->valid());
+        }
+    }
+
+    public function test_prepared_restoration_cannot_make_its_first_write_after_the_saved_schedule_boundary(): void
+    {
+        $subscription = $this->scheduledSubscription();
+        $this->app->instance(OperationManager::class, new class(app(BillingContext::class)) extends OperationManager
+        {
+            public function execute(Operation $operation, \Closure $write, \Closure $confirm): mixed
+            {
+                throw new RuntimeException('Synthetic interruption before first dispatch.');
+            }
+        });
+        $this->http($this->observation($this->scheduled()));
+        try {
+            $subscription->restoreRenewal('prepared-on', 'off');
+            self::fail('Expected synthetic interruption.');
+        } catch (RuntimeException) {
+            self::assertSame('prepared', Operation::where('action_key', 'prepared-on')->first()->status);
+        }
+        $this->app->instance(OperationManager::class, new OperationManager(app(BillingContext::class)));
+        Carbon::setTestNow('2026-12-01T00:00:00Z');
+        $http = $this->http([]);
+        try {
+            $subscription->restoreRenewal('prepared-on', 'off');
+            self::fail('Prepared restoration crossed its cancellation boundary.');
+        } catch (EvidenceException) {
+            self::assertCount(0, $http->requests);
+            self::assertSame('failed', Operation::where('action_key', 'prepared-on')->first()->status);
         }
     }
 
