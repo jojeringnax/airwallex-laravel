@@ -75,17 +75,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: jojeringnax/airwallex-php-sdk
-          ref: 2aad41591c3036c10916c9f9f8a56b737c5753f6
+          ref: e89a809e2a61c24c3ddc995e2986f1992ed37c5e
           path: .qualification-sdk
-      - name: Form explicit cumulative qualification candidate
-        env:
-          TRANSACTIONS_COMMIT: d36702475e44a60179be0b70838378403d7f6f7d
-        run: |
-          git fetch origin "$TRANSACTIONS_COMMIT"
-          printf '%s\n' "Package PR head: $(git rev-parse HEAD)" "Invoice transaction prerequisite: $TRANSACTIONS_COMMIT"
-          if ! git merge-base --is-ancestor "$TRANSACTIONS_COMMIT" HEAD; then
-            git -c user.name='Qualification fixture' -c user.email='fixture@example.test' merge --no-ff --no-edit "$TRANSACTIONS_COMMIT"
-          fi
       - name: Qualify exact archive in a fresh native consumer
         env:
           LARAVEL_MAJOR: ${{ matrix.laravel }}
@@ -97,7 +88,7 @@ jobs:
             --candidate "$(git rev-parse HEAD)" \
             --composer "$RUNNER_TEMP/airwallex-composer.phar" \
             --sdk-repo "$GITHUB_WORKSPACE/.qualification-sdk" \
-            --sdk-candidate 2aad41591c3036c10916c9f9f8a56b737c5753f6 \
+            --sdk-candidate e89a809e2a61c24c3ddc995e2986f1992ed37c5e \
             --track all \
             --laravel "$LARAVEL_MAJOR" --database "$DATABASE" \
             --dependencies "$DEPENDENCIES" \

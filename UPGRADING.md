@@ -1,8 +1,22 @@
-# First installation and future upgrades
+# Installation and upgrades
 
-This is the first Laravel package candidate, with no previous released Laravel schema to migrate. Its local Composer descriptor uses provisional version `0.1.0-RC1`; no Git tag or package publication is implied. The separate PHP SDK is already released as v0.1.1. Follow [candidate installation](docs/release.md) and [configuration](docs/usage.md#install-and-configure).
+Laravel v0.1.0 is the released baseline. The adoption additions below are unreleased. The local qualification descriptor still uses `0.1.0-RC1` solely to identify an exact review archive; it does not select a future release number. Follow [candidate installation](docs/release.md) and [configuration](docs/usage.md#install-and-configure).
 
-Back up the application database and encryption keys before applying package migrations. Automatic discovery loads all four migrations: base tables, subscription revision, checkout observations and confirmed scheduled-end projection. They are reversible for a clean uninstall, including removal of package history; rollback is not an offboarding workflow and must not be used to discard unresolved financial evidence. Rehearse changes against a copy of the application's data.
+Back up the application database and encryption keys before applying package migrations. Automatic discovery loads package migrations, including the observed-routing additions and the adoption tables. Migrations are reversible for a clean uninstall, including removal of package history; rollback is not an offboarding workflow and must not discard unresolved financial evidence. Rehearse changes against a disposable copy of the application's data.
+
+## Upgrading from 0.1.0
+
+Apply the pending migrations for persisted sweeps, subscription transitions and Payments customers, operations, instruments, intents, refunds, receipts and observations. Existing Billing mappings and financial history remain authoritative. If the application publishes migrations, compare the package's migration files with its recorded migration names before copying only missing files; preserve customizations and avoid duplicate table creation.
+
+Review the new configuration keys against the application's published configuration, then rebuild its configuration cache and restart workers. Billing's `webhook.queue_connection` and `events.queue_connection` default to null and retain the application default. Payments uses separate environment/account/credentials and an opt-in `payments.webhook.enabled` receiver; a Billing organization, Source or signing secret is not a Payments identity. Provision the application's database queue/cache/lock tables when choosing that profile, and register the recurring commands in [operations](docs/operations.md) and [Payments recovery](docs/payments-webhooks.md).
+
+Existing standalone `Billable` calls retain their contracts. Models already using Cashier should use `AirwallexBillable` for explicitly authorized Airwallex work and retain original-provider routes for historical renewals/refunds; see [coexistence](docs/adoption-handoff.md). Do not replace or infer Payments mappings from existing Billing or Stripe identifiers.
+
+Invoice transaction reads require an SDK release containing [PR #160](https://github.com/jojeringnax/airwallex-php-sdk/pull/160). The distributed constraint remains `^0.1.1`; v0.1.1 alone raises a configuration prerequisite for those reads. The exact-archive development profile is qualification evidence only. The SDK's merged opt-in object-preserving decoder is also unreleased and is not enabled by this adapter; numeric-key metadata recovery retains its documented conservative behavior.
+
+Use the restricted [renewal-restoration and transition contracts](docs/contracts.md#adoption-amounts-and-provider-routing) only for supported combinations. Imported/old scheduled subscriptions without the original saved bound cannot use renewal restoration. Keep existing command keys, encrypted intents, reservations, receipts and event delivery IDs through upgrades and rollback planning; a restored prepared row does not prove a write was never sent.
+
+## Identity, recovery and uninstall
 
 Keep environment/organization, billable morph identity and remote parent/resource IDs stable. Credential rotation does not change mapping identity. Changing an established morph map or custom table layout needs a coordinated application data/schema migration. Do not repoint a local mapping to another remote Customer or organization. Published migrations/custom subclasses must preserve the package's unique and foreign-key constraints, immutable fields and casts.
 
