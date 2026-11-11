@@ -184,7 +184,9 @@ class SubscriptionSynchronizer
                 }
                 $subscription ??= ModelRegistry::make('subscription', [...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $remoteId, 'name' => $name]);
                 $previousStatus = $subscription->status;
-                $scheduleEnd = ($subscription->cancel_at_period_end === true && $after['cancel_at_period_end']) ? $subscription->scheduled_ends_at : null;
+                $restorationPending = $subscription->exists && ModelRegistry::query('operation')->where('subscription_id', $subscription->id)
+                    ->where('kind', 'subscription.restore_renewal')->whereIn('status', ['prepared', 'in_flight', 'ambiguous'])->exists();
+                $scheduleEnd = (($subscription->cancel_at_period_end === true && $after['cancel_at_period_end']) || $restorationPending) ? $subscription->scheduled_ends_at : null;
                 if ($after['cancel_at_period_end']) {
                     foreach (['ends_at', 'current_period_ends_at'] as $key) {
                         if (is_string($after[$key] ?? null) && ($scheduleEnd === null || Timestamp::compare($after[$key], $scheduleEnd) < 0)) {
