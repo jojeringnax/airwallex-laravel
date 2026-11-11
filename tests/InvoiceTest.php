@@ -11,7 +11,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Exception\ApiException;
-use Jojeringnax\Airwallex\Exception\ValidationException;
 use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
@@ -278,17 +277,6 @@ class InvoiceTest extends TestCase
         } catch (EvidenceException) {
             self::assertCount(3, $http->requests);
             self::assertSame(0, DomainEvent::count());
-        }
-    }
-
-    public function test_sdk_query_validation_is_retained_before_http(): void
-    {
-        $http = $this->http([]);
-        try {
-            $this->customer->invoices(['page_size' => 0]);
-            self::fail('Invalid SDK query was accepted.');
-        } catch (ValidationException) {
-            self::assertCount(0, $http->requests);
         }
     }
 

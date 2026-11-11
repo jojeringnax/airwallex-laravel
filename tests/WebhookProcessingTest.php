@@ -99,10 +99,10 @@ class WebhookProcessingTest extends TestCase
         $families = ['subscription' => ['created', 'in_trial', 'active', 'unpaid', 'modified', 'cancelled'], 'billing_checkout' => ['created', 'completed', 'cancelled'], 'invoice' => ['created', 'finalized', 'updated', 'payment.paid', 'voided']];
         foreach ($families as $family => $events) {
             foreach ($events as $event) {
-                foreach ([true, false] as $wrapped) {
-                    yield $family.'.'.$event.($wrapped ? '-wrapped' : '-direct') => [$family.'.'.$event, $wrapped];
-                }
+                yield $family.'.'.$event.'-wrapped' => [$family.'.'.$event, true];
             }
+            // Resource extraction is shared by every suffix; exercise direct data once per family.
+            yield $family.'.created-direct' => [$family.'.created', false];
         }
     }
 

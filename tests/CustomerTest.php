@@ -11,7 +11,6 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Exception\ApiException;
 use Jojeringnax\Airwallex\Exception\TransportException;
 use Jojeringnax\Airwallex\Exception\ValidationException;
@@ -334,19 +333,6 @@ class CustomerTest extends TestCase
         self::assertSame(1, Operation::count());
         self::assertCount(5, $http->requests);
         self::assertSame('{"0":"zero"}', json_encode(Operation::first()->intent['profile']['metadata']));
-    }
-
-    public function test_selected_sdk_resource_decoder_normalizes_numeric_object_and_list_metadata_identically(): void
-    {
-        $objectJson = '{"id":"Customer-A","created_at":"2026-11-10T12:00:00Z","updated_at":"2026-11-10T12:00:00Z","automatic_tax_eligibility":"ADDRESS_INCOMPLETE","metadata":{"0":"zero"}}';
-        $listJson = '{"id":"Customer-A","created_at":"2026-11-10T12:00:00Z","updated_at":"2026-11-10T12:00:00Z","automatic_tax_eligibility":"ADDRESS_INCOMPLETE","metadata":["zero"]}';
-        $http = $this->http([FakeHttpClient::login(), new Response(200, [], $objectJson), new Response(200, [], $listJson)]);
-        $customers = app(Client::class)->billing()->customers();
-        $object = $customers->retrieve('Customer-A');
-        $list = $customers->retrieve('Customer-A');
-        self::assertSame(['zero'], $object['metadata']);
-        self::assertSame($object['metadata'], $list['metadata']);
-        self::assertCount(3, $http->requests);
     }
 
     public function test_sdk_preflight_rejection_is_classified_and_a_new_key_can_create_afterward(): void

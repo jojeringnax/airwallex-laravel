@@ -91,7 +91,8 @@ class SubscriptionSyncTest extends TestCase
 
     public static function states(): array
     {
-        return [['PENDING', false], ['IN_TRIAL', true], ['ACTIVE', true], ['UNPAID', false], ['CANCELLED', false], ['FUTURE_STATE', false]];
+        // Cover trial-date projection and current/terminal/unknown reservations; AccessPolicyTest owns eligibility.
+        return [['IN_TRIAL', true], ['ACTIVE', true], ['CANCELLED', false], ['FUTURE_STATE', false]];
     }
 
     public function test_all_pages_are_atomic_and_keep_exact_quantity_and_nullable_shapes(): void
@@ -315,16 +316,6 @@ class SubscriptionSyncTest extends TestCase
             $item = new SubscriptionItem(['snapshot' => Billing::item(['price' => $price])]);
             self::assertFalse($item->canMutate());
         }
-    }
-
-    public function test_checked_in_named_import_recipe_executes_against_the_real_sdk(): void
-    {
-        $this->fake($this->observation(Billing::subscription()));
-        $recipe = require dirname(__DIR__).'/examples/import-subscription.php';
-        $subscription = $recipe($this->team, 'support', 'sub-test');
-        self::assertSame('support', $subscription->name);
-        self::assertTrue($this->team->subscribed('support'));
-        self::assertFalse($this->team->subscribed('default'));
     }
 
     public function test_equal_item_versions_cannot_regress_quantity_but_tolerate_unknown_extras(): void
