@@ -11,7 +11,7 @@ The accepted product baseline is [release tracker #1](https://github.com/jojerin
 | Hosted setup and source selection/replacement | Billing Source identity/owner/collector verified; setup grants no subscription access |
 | Existing customer link and subscription import | Explicit authorized association and caller-supplied name, read-only import, no email-based adoption |
 | Subscription changes/cancellation | Exact values and explicit provider financial controls; no package proration calculation |
-| Invoice access | Owned remote invoice/line-item reads and provider PDF/hosted links; no local invoice ledger or inferred renewal clock |
+| Invoice access | Owned invoice/line-item reads and provider PDF/hosted links; transaction observations require the explicitly selected SDK extension under [public contracts](contracts.md#invoice-transaction-observations); no local cash ledger, allocation or settlement inference |
 | Webhooks and recovery | SDK signatures/decoding, durable receipts, canonical reconciliation, events, dispatch/replay/reconcile tools |
 | Extensibility | Configured model subclasses, billable profiles and replaceable access policy; raw SDK remains accessible |
 
