@@ -1,6 +1,7 @@
 # Account-owned Payments
 
 The separate opt-in [Payments receiver and recovery](payments-webhooks.md) reconciles canonical resources and delivers durable safe observations for application accounting.
+The separately authorized [Payments sandbox journey](payments-sandbox.md) records account/client qualification and unexecuted obligations.
 
 Standalone Payments uses one explicitly configured merchant login account, independently of the Billing organization. Set `airwallex.payments.environment`, `account_id`, `client_id`, `api_key` and optional `cache_store`. Configuration is lazy and cacheable. The SDK receives `loginAccountId` and partitions token reuse by environment, credentials and account. Connected-account delegation is outside this launch profile. A replacement `Payments\Client` binding must retain the same immutable context.
 
