@@ -17,7 +17,7 @@ python3 tools/qualify-candidate.py \
   --output build/candidates
 ```
 
-Replace the commit placeholder with the reviewed exact commit. The qualifier resolves it once, archives that immutable commit and records its identity, SHA256, runtime file hashes, tooling provenance, exact dependency lock/versions, commands and results. The tool fixes child-process timezone to UTC so Git ZIP timestamps do not vary with the host timezone. It rejects credential-file paths such as `.env*`, caches, development-only paths, symlinks/traversal, missing tracked runtime files and repository/path SDK overrides. Review tracked contents for embedded credentials before archiving; path checks do not scan arbitrary source/document contents for secrets. The candidate's declared SDK dependency resolves from Packagist; the installed source/dist provenance is recorded.
+Replace the commit placeholder with the reviewed exact commit. The qualifier resolves it once, archives that immutable commit and records its identity, SHA256, runtime file hashes, tooling provenance, exact dependency lock/versions, commands and results. The tool fixes child-process timezone to UTC so Git ZIP timestamps do not vary with the host timezone. It rejects credential-file paths such as `.env*`, caches, development-only paths, symlinks/traversal, missing tracked runtime files and repository/path SDK overrides. Review tracked contents for embedded credentials before archiving; path checks do not scan arbitrary source/document contents for secrets. By default the candidate's declared SDK dependency resolves from Packagist; the installed source/dist provenance is recorded. The explicit development mode below instead archives one exact SDK commit and keeps tagged-release qualification pending.
 
 Every run creates new private directories rather than overwriting existing work. Public Composer dependency downloads use an isolated Composer home/cache without inheriting provider credentials or Composer auth. The fresh native Laravel consumer installs the exact local ZIP, discovers the provider, caches configuration, applies/rolls back/reapplies migrations, and executes every shipped recipe with the real SDK and a synthetic transport that denies unexpected requests. It compares all installed runtime bytes against the archive manifest. `--archive-only` reports only `archive_verified_only`; it cannot establish consumer qualification.
 
@@ -40,9 +40,28 @@ php artisan migrate
 php artisan config:cache
 ```
 
-Inspect the dependency change in that application before adopting it. Follow the [consumer guide](usage.md) for real application configuration; generated qualification credentials and provider responses are synthetic. The descriptor intentionally has no fallback source/path repository. Do not substitute a sibling SDK checkout for the released dependency.
+Inspect the dependency change in that application before adopting it. Follow the [consumer guide](usage.md) for real application configuration; generated qualification credentials and provider responses are synthetic. The descriptor intentionally has no fallback source/path repository. Development SDK selection must use the explicit archived-commit mode below, never a sibling path repository.
 
 The final candidate's external evidence records its exact source/SDK revisions, passing checks, remaining upstream limitations, unexecuted provider scenarios and artifact hashes. A failed required check remains incomplete; a new source commit requires qualification of that commit. Keep publication, tags, merging and production operations separate from local preparation.
+
+## Adoption tracks and an unreleased SDK
+
+New Billing transaction inspection requires the SDK extension in [SDK PR #160](https://github.com/jojeringnax/airwallex-php-sdk/pull/160). Qualify its exact reviewed commit independently of a future tag:
+
+```sh
+python3 tools/qualify-candidate.py \
+  --candidate FULL_PACKAGE_COMMIT \
+  --composer /absolute/path/composer-2.11.2.phar \
+  --sdk-repo /absolute/read-only/sdk-repository \
+  --sdk-candidate FULL_REVIEWED_SDK_COMMIT \
+  --track subscriptions --laravel 13 --database sqlite --dependencies latest
+```
+
+The SDK repository is read only: the tool exports its selected Git commit into a ZIP, records hashes/manifests and installs that archive with a visibly unreleased `0.1.2-dev` descriptor. The package's distributed `^0.1.1` constraint is preserved; the isolated consumer explicitly selects the development descriptor. Exact source/dist references and installed SDK/package bytes must match. A version label or sibling working tree never substitutes for those checks. Qualification against the final tagged SDK and published package remains pending.
+
+`--track baseline` exercises the released recipe set. `subscriptions` adds the adoption subscription/accounting adapters and real optional Cashier fixture; `payments` adds its account-owned helper; `all` runs both against the same package/SDK/dependency graph. The driver requires the union of actually executed recipe names to match every shipped example. An omitted or unsupported track cannot be reported as a passing complete candidate. Each helper is extracted from the same selected package commit; a local uncommitted helper cannot qualify another candidate. The optional Cashier/Testbench/PHPUnit dependencies exist only in that disposable development consumer.
+
+Archive, migrate/rollback/reapply, config-cache and installed recipes run without provider credentials. The SQLite/MySQL selection is an explicit synthetic qualification profile; the actual downstream deployment profile is deferred under [#49](https://github.com/jojeringnax/airwallex-laravel/issues/49). Passing this tool does not qualify that environment, browser clients, an application ledger, provider eligibility or an account journey. Keep `subscriptions-recipes.json`, `payments-recipes.json` when selected, the real-Cashier log and any precise external blockers with the evidence bundle.
 
 ## First Packagist registration and updates
 

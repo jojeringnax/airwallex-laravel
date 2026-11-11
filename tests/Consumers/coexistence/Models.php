@@ -39,6 +39,7 @@ class StripeTransport implements ClientInterface
         $this->requests[] = [$method, $absUrl];
         $response = match ([$method, $absUrl]) {
             ['get', 'https://api.stripe.com/v1/invoices'] => ['object' => 'list', 'data' => [], 'has_more' => false],
+            ['post', 'https://api.stripe.com/v1/refunds'] => $params['payment_intent'] === 'pi_legacy' ? ['id' => 're_legacy', 'object' => 'refund', 'payment_intent' => 'pi_legacy', 'status' => 'succeeded'] : throw new \RuntimeException('Legacy refund changed provider identity.'),
             ['delete', 'https://api.stripe.com/v1/subscriptions/sub_legacy'] => ['id' => 'sub_legacy', 'object' => 'subscription', 'status' => 'canceled'],
             default => throw new \RuntimeException('Unexpected Stripe request rejected by qualification transport.'),
         };
