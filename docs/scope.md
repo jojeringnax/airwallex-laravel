@@ -44,7 +44,7 @@ Checkout/setup/browser success grants no independent access. Verify owned result
 
 ## Full-provider adoption contract
 
-[Programme #46](https://github.com/jojeringnax/airwallex-laravel/issues/46) expands reusable orchestration while preserving v0.1 behavior. The library is application-agnostic. This matrix specifies reusable capabilities and package/SDK/application boundaries; its examples do not prescribe a particular application, business model or deployment. The [ownership question #48](https://github.com/jojeringnax/airwallex-laravel/issues/48) remains open: provisionally this package owns durable Payments identities, commands, reservations and canonical recovery; the SDK owns transport/validation/precision/signatures; the application owns commercial policy, clients and ledgers.
+[Programme #46](https://github.com/jojeringnax/airwallex-laravel/issues/46) expands reusable orchestration while preserving v0.1 behavior. The library is application-agnostic. This matrix specifies reusable capabilities and package/SDK/application boundaries; its examples do not prescribe a particular application, business model or deployment. Under the [accepted ownership decision #48](https://github.com/jojeringnax/airwallex-laravel/issues/48), this package owns durable Payments identities, commands, reservations and canonical recovery; the SDK owns transport/validation/precision/signatures; the application owns commercial policy, clients and ledgers.
 
 | Consumer scenario | Required outcome, money effect and owner |
 | --- | --- |
@@ -84,7 +84,7 @@ The default access matrix above remains unchanged, including immediate UNPAID de
 
 ### Browser and saved-instrument migration
 
-Billing keeps its hosted checkout contract. Standalone Payments provisionally uses embedded Airwallex.js consent/intent bootstrap with transient client secrets returned only through an authorized endpoint; client secrets never enter durable intents, logs, events or serialization. A Billing setup checkout cannot supply a Payments Customer or consent. Mobile clients need their own native SDK/deep-link implementation and qualification; a web recipe does not establish mobile compatibility.
+Billing keeps its hosted checkout contract. Standalone Payments uses embedded Airwallex.js consent/intent bootstrap with transient client secrets returned only through an authorized endpoint; client secrets never enter durable intents, logs, events or serialization. [The accepted setup-secret policy](instruments.md) requires original recovery and a separately authorized new setup when the create response is lost. A Billing setup checkout cannot supply a Payments Customer or consent. Mobile clients need their own native SDK/deep-link implementation and qualification; a web recipe does not establish mobile compatibility.
 
 Recollection through fresh explicit setup is the viable default. Provider-assisted transfer is optional and externally gated: the merchant completes KYB and arranges an encrypted processor export and Airwallex migration report. The application migration owner maps processor customer/card identifiers to already authorized local owners, verifies resulting account-owned Customer/Consent/Method canonically, and quarantines unmatched/failed records. Package fixtures establish no completed migration. The commercial owner must plan recollection and retain old-provider servicing until the transfer/recollection coverage is proven. [Provider evidence](provider-contracts.md#saved-instrument-transfer) records the official prerequisites.
 
