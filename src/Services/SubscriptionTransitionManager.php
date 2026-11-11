@@ -57,6 +57,10 @@ class SubscriptionTransitionManager
                 ModelRegistry::query('customer')->whereKey($subscription->customer_id)->lockForUpdate()->firstOrFail();
                 $current = ModelRegistry::query('subscription')->findOrFail($subscription->id);
                 $this->context->assertModel($current);
+                $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $current->customer_id)->where('name', $current->name)->first();
+                if ($slot?->subscription_id !== $current->id) {
+                    throw new ConflictException('Only the current subscription generation can reserve a transition.');
+                }
                 if (self::shape($current) !== $intent['expected_shape']) {
                     throw new ConflictException('Subscription changed while preparing its transition.');
                 }
