@@ -17,6 +17,9 @@ return [
     'read_retry_attempts' => 1,
     'http_timeout' => 30,
     'http_connect_timeout' => 10,
+    'sweep' => [
+        'lease_seconds' => 300,
+    ],
     'models' => [
         'customer' => Models\Customer::class,
         'subscription' => Models\Subscription::class,
@@ -38,9 +41,11 @@ return [
         'retention_days' => 7,
         'lease_seconds' => 300,
         'queue' => env('AIRWALLEX_WEBHOOK_QUEUE'),
+        'queue_connection' => env('AIRWALLEX_WEBHOOK_QUEUE_CONNECTION'),
     ],
     'events' => [
         'lease_seconds' => 300,
         'queue' => env('AIRWALLEX_EVENTS_QUEUE'),
+        'queue_connection' => env('AIRWALLEX_EVENTS_QUEUE_CONNECTION'),
     ],
 ];
