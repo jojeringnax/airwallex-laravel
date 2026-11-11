@@ -204,7 +204,7 @@ class Refunds
     {
         $items = [];
         $seen = [];
-        for ($page = 0; ; $page++) {
+        for ($page = 0; $page < 10000; $page++) {
             $remote = app(Client::class)->sdk->payments()->refunds()->list(['payment_intent_id' => $intent->remote_id, 'page_num' => $page, 'page_size' => 100]);
             if (! is_array($remote['items'] ?? null) || ! array_is_list($remote['items']) || ! is_bool($remote['has_more'] ?? null)
                 || ($remote['has_more'] && $remote['items'] === [])) {
@@ -222,6 +222,7 @@ class Refunds
                 return $items;
             }
         }
+        throw new EvidenceException('Refund pagination exceeded the bounded verification budget.');
     }
 
     private function proof(array $remote, Intent $intent): void
