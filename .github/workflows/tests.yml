@@ -81,7 +81,7 @@ jobs:
             --candidate "$(git rev-parse HEAD)" \
             --composer "$RUNNER_TEMP/airwallex-composer.phar" \
             --laravel "$LARAVEL_MAJOR" --database "$DATABASE" \
-            --dependencies "$DEPENDENCIES" \
+            --dependencies "$DEPENDENCIES" --track payments \
             --workspace "$RUNNER_TEMP/airwallex-workspace" \
             --output "$RUNNER_TEMP/airwallex-evidence"
       - name: Record exact dependency resolution
