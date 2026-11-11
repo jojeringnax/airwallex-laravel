@@ -62,7 +62,8 @@ final class Amount
 
     public static function subtract(string $left, string $right): string
     {
-        if (self::compare($left, $right) < 0) {
+        if (! preg_match('/^(0|[1-9][0-9]*)$/D', $left) || ! preg_match('/^(0|[1-9][0-9]*)$/D', $right)
+            || self::compare($left, $right) < 0) {
             throw new EvidenceException('Exact unsigned subtraction cannot produce a negative reservation balance.');
         }
         $result = '';
