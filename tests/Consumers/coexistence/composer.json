@@ -1,0 +1,1 @@
+{"name":"airwallex-qualification/coexistence","description":"Isolated deterministic Cashier fixture","require":{"php":">=8.3 <8.6","laravel/cashier":"16.9.0"},"config":{"allow-plugins":{},"sort-packages":true}}
