@@ -14,6 +14,7 @@ use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Services\SweepManager;
 use Jojeringnax\AirwallexLaravel\Services\SweepRegistry;
@@ -120,9 +121,15 @@ class SweepTest extends TestCase
         $normal = $this->family($seen);
         $overlap = null;
         $family = new SweepFamily('test', 'sandbox', 'billing', 'org-test', $normal->query,
-            function () use ($normal, &$overlap): bool {
+            function (Model $row) use ($normal, &$overlap): bool {
                 $overlap = (new SweepManager)->run($normal, 1);
                 DB::table('airwallex_sweeps')->where('id', $normal->key())->update(['lease_token' => 'replacement-worker', 'lease_until' => now()->addMinute()]);
+
+                // An inner receipt-style guard must compose with the sweep guard.
+                app(CommitGuard::class)->during(fn () => null, fn () => DB::transaction(function () use ($row): void {
+                    app(CommitGuard::class)->assertMayCommit();
+                    $row->update(['owner' => 'stale-worker']);
+                }));
 
                 return true;
             });
@@ -133,6 +140,7 @@ class SweepTest extends TestCase
             self::assertSame('busy', $overlap['outcome']);
             self::assertNull(DB::table('airwallex_sweeps')->value('cursor'));
             self::assertSame('replacement-worker', DB::table('airwallex_sweeps')->value('lease_token'));
+            self::assertSame('org-test', SweepRow::findOrFail('02')->owner);
         }
         Carbon::setTestNow(now()->addMinutes(2));
         self::assertSame(1, (new SweepManager)->run($normal, 1)['attempted']);

@@ -66,7 +66,11 @@ class SweepManager
                 }
                 $id = (string) $row->getKey();
                 try {
-                    $outcome = ($family->process)($row) ? 'completed' : 'retained';
+                    $completed = app(CommitGuard::class)->during(
+                        fn () => $this->assertLease($family, $token),
+                        fn () => ($family->process)($row),
+                    );
+                    $outcome = $completed ? 'completed' : 'retained';
                 } catch (Throwable $error) {
                     $outcome = FailureClassification::of($error);
                 }
@@ -106,5 +110,16 @@ class SweepManager
     {
         return DB::table('airwallex_sweeps')->where('id', $family->key())->where('environment', $family->environment)
             ->where('owner_type', $family->ownerType)->where('owner_id', $family->ownerId)->where('family', $family->name);
+    }
+
+    private function assertLease(SweepFamily $family, string $token): void
+    {
+        $query = $this->query($family)->where('lease_token', $token)->where('lease_until', '>', now()->utc());
+        if (DB::transactionLevel() > 0) {
+            $query->lockForUpdate();
+        }
+        if ($query->first(['id']) === null) {
+            throw new ConflictException('Sweep lease expired or was superseded before projection commit.');
+        }
     }
 }
