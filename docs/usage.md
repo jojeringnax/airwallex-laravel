@@ -2,6 +2,8 @@
 
 For separately configured standalone merchant Payments, see [account-owned Payments](payments.md).
 
+Owned partial/full Payments refunds and their original-command recovery use the [refund workflow](refunds.md).
+
 Consent setup, explicit browser disclosure and saved-card defaults use the separate [instruments workflow](instruments.md); they do not automatically change Billing Sources.
 
 Start here when installing the package or writing application billing code. [Scope](scope.md) owns eligibility and deferrals; [contracts](contracts.md) own signatures and stored identities; [operations](operations.md) owns webhooks, queues, recovery and offboarding. Accepted policies are recorded in [#10](https://github.com/jojeringnax/airwallex-laravel/issues/10), [#34](https://github.com/jojeringnax/airwallex-laravel/issues/34), [#39](https://github.com/jojeringnax/airwallex-laravel/issues/39) and [#40](https://github.com/jojeringnax/airwallex-laravel/issues/40) and remain subject to the documented compatibility policy.

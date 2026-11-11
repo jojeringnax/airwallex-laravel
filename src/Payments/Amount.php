@@ -60,6 +60,22 @@ final class Amount
         return $sum;
     }
 
+    public static function subtract(string $left, string $right): string
+    {
+        if (self::compare($left, $right) < 0) {
+            throw new EvidenceException('Exact unsigned subtraction cannot produce a negative reservation balance.');
+        }
+        $result = '';
+        $borrow = 0;
+        for ($a = strlen($left) - 1, $b = strlen($right) - 1; $a >= 0; $a--, $b--) {
+            $digit = ord($left[$a]) - 48 - $borrow - ($b >= 0 ? ord($right[$b]) - 48 : 0);
+            $borrow = $digit < 0 ? 1 : 0;
+            $result = (string) ($digit + ($borrow ? 10 : 0)).$result;
+        }
+
+        return ltrim($result, '0') ?: '0';
+    }
+
     private static function exponent(string $currency): int
     {
         $values = json_decode(file_get_contents(__DIR__.'/../../resources/currency-exponents.json'), true, flags: JSON_THROW_ON_ERROR);
