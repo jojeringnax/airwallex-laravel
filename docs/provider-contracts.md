@@ -48,3 +48,9 @@ Lists return `items`, `page_after`, `page_before`; pass `page_after` as `page` w
 - Schedule reversal, reactivation, link regeneration, PDF rendering/mailing and broad resume conveniences remain unclaimed. No newly demonstrated SDK capability blocker was found for the accepted v1 operations; fresh metadata equality above remains evidence work, not a provisional provider fact.
 
 Validation must cover success and malformed/foreign-ID/owner/version cases with real SDK decoding, precise numbers/dates, direct/wrapped events, all-page failure, stale history, timed-out writes and queue recovery. Sanitized fixtures must name the selected version and be described as synthetic contract fixtures, never provider observations.
+
+## Saved-instrument transfer
+
+Rechecked on 2026-11-11: official [card data migration](https://www.airwallex.com/docs/payments/test-and-go-live/card-data-migration) describes processor-to-processor encrypted export, completed merchant KYB, merchant-provided customer/card correlation and a migration output report. The public process is not account approval or proof that any particular historical instrument is transferable. Canonical ownership verification and recollection of failed records remain required. No migration was requested or executed.
+
+Official [Payments data model](https://www.airwallex.com/docs/payments/about-airwallex-payments/payments-data-model) distinguishes Payments Customer, Method, Consent, Intent and Attempt. [Embedded saved details](https://www.airwallex.com/docs/payments/online-payments/embedded-elements/card-element/registered-user-checkout) supplies the browser integration direction; SDK selected-version endpoint schemas remain authoritative for server payloads. Merchant-initiated consent eligibility, wallet/domain activation and the selected account require separate qualification; a Billing Source is not imported as a Payments Consent.
