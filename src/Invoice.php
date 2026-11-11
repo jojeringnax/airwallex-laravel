@@ -50,6 +50,17 @@ final readonly class Invoice implements JsonSerializable
         return app(InvoiceManager::class)->lineItem($this, $id);
     }
 
+    /** @return Collection<int,InvoiceTransaction> */
+    public function transactions(array $query = []): Collection
+    {
+        return app(InvoiceManager::class)->transactions($this, $query);
+    }
+
+    public function transaction(string $id): InvoiceTransaction
+    {
+        return app(InvoiceManager::class)->transaction($this, $id);
+    }
+
     /** Explicit server-side access; includes provider links and customer snapshot. */
     public function toArray(): array
     {

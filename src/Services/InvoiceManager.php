@@ -8,14 +8,18 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\BillingContext;
+use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Invoice;
+use Jojeringnax\AirwallexLaravel\InvoiceTransaction;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Support\Pages;
+use Jojeringnax\AirwallexLaravel\Support\Routing;
+use Jojeringnax\AirwallexLaravel\Timestamp;
 
 class InvoiceManager
 {
@@ -89,6 +93,79 @@ class InvoiceManager
         $this->observed($owner, [$remote]);
 
         return SubscriptionSynchronizer::sanitize($item);
+    }
+
+    /** @return Collection<int,InvoiceTransaction> */
+    public function transactions(Invoice $invoice, array $query = []): Collection
+    {
+        $resource = $this->transactionsResource($this->client->billing());
+        if ((array_key_exists('invoice_id', $query) && $query['invoice_id'] !== $invoice->id) || array_key_exists('credit_note_id', $query)) {
+            throw new OwnershipException('Transaction filters cannot replace the owned invoice.');
+        }
+        [$owner, $remote] = $this->parent($invoice);
+        Routing::assertSubscription($remote);
+        $items = Pages::all(fn (array $page) => $resource->list($page), [...$query, 'invoice_id' => $invoice->id]);
+        $transactions = [];
+        foreach ($items as $item) {
+            $transactions[] = $this->ownedTransaction($invoice, $item);
+        }
+        $this->observed($owner, [$remote]);
+
+        return collect($transactions);
+    }
+
+    public function transaction(Invoice $invoice, string $id): InvoiceTransaction
+    {
+        $resource = $this->transactionsResource($this->client->billing());
+        [$owner, $remote] = $this->parent($invoice);
+        Routing::assertSubscription($remote);
+        $transaction = $this->ownedTransaction($invoice, $resource->retrieve($id), $id);
+        $this->observed($owner, [$remote]);
+
+        return $transaction;
+    }
+
+    /** Compatibility boundary across the released SDK and the unreleased resource extension. */
+    private function transactionsResource(object $billing): object
+    {
+        if (! method_exists($billing, 'transactions')) {
+            throw new ConfigurationException('Invoice transactions require the selected unreleased SDK transaction extension; qualify its exact archive before enabling this API.');
+        }
+
+        return call_user_func([$billing, 'transactions']);
+    }
+
+    private function ownedTransaction(Invoice $invoice, array $remote, ?string $expectedId = null): InvoiceTransaction
+    {
+        if (! is_string($remote['id'] ?? null) || $remote['id'] === '' || ($expectedId !== null && $remote['id'] !== $expectedId)
+            || ($remote['invoice_id'] ?? null) !== $invoice->id || ($remote['billing_customer_id'] ?? null) !== $invoice->billingCustomerId) {
+            throw new OwnershipException('Transaction identity or invoice/customer linkage is not proven.');
+        }
+        $this->remoteContext($remote);
+        Routing::assertSubscription($remote);
+        foreach (['amount', 'currency', 'status', 'created_at', 'updated_at'] as $key) {
+            if (! is_string($remote[$key] ?? null) || $remote[$key] === '') {
+                throw new EvidenceException('Transaction amount, currency, status or timing is malformed.');
+            }
+        }
+        foreach (['created_at', 'updated_at', 'succeeded_at', 'cancelled_at'] as $key) {
+            if (array_key_exists($key, $remote) && $remote[$key] !== null) {
+                if (! is_string($remote[$key])) {
+                    throw new EvidenceException('Transaction timing is malformed.');
+                }
+                Timestamp::compare($remote[$key], $remote[$key]);
+            }
+        }
+        foreach (['type', 'external_id', 'payment_source_id', 'credit_note_id'] as $key) {
+            if (array_key_exists($key, $remote) && (! is_string($remote[$key]) || $remote[$key] === '')) {
+                throw new EvidenceException('Transaction optional linkage or classification is malformed.');
+            }
+        }
+        if (array_key_exists('out_of_band', $remote) && ! is_bool($remote['out_of_band'])) {
+            throw new EvidenceException('Transaction out-of-band classification is malformed.');
+        }
+
+        return new InvoiceTransaction($remote['id'], $invoice->id, $invoice->billingCustomerId, $remote['amount'], $remote['currency'], $remote['status'], $remote['type'] ?? null, $remote['external_id'] ?? null, $remote['linked_payment_account_id'] ?? null, $remote['out_of_band'] ?? null, $this->context, SubscriptionSynchronizer::sanitize($remote));
     }
 
     /** @return array{Customer,?Subscription} */
