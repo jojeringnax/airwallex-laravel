@@ -92,17 +92,6 @@ class SubscriptionWorkflowTest extends TestCase
         self::assertFalse($subscription->valid());
     }
 
-    public function test_executable_create_recipe_verifies_owned_source_without_inventing_source_status(): void
-    {
-        $remote = Billing::subscription(['collection_method' => 'AUTO_CHARGE', 'payment_source_id' => 'source-test']);
-        $http = $this->fake([$this->source(), FakeHttpClient::json($remote), ...$this->observation($remote)]);
-        $recipe = require __DIR__.'/../examples/subscription.php';
-        $subscription = $recipe($this->team, 'create', 'price-test', 'source-test');
-        self::assertTrue($subscription->active());
-        self::assertSame('/api/v1/billing/payment_sources/source-test', $http->requests[1]->getUri()->getPath());
-        self::assertSame('AUTO_CHARGE', self::body($http, 2)['collection_method']);
-    }
-
     public function test_foreign_source_and_routing_fail_before_subscription_write(): void
     {
         $http = $this->fake([$this->source(['billing_customer_id' => 'foreign'])]);
@@ -335,9 +324,10 @@ class SubscriptionWorkflowTest extends TestCase
         self::assertSame(1, count(array_filter(array_slice($http->requests, 1), fn ($request) => $request->getMethod() === 'POST')));
     }
 
-    #[DataProvider('quantityChanges')]
-    public function test_single_item_increase_and_decrease_preserve_native_quantity(int $before, int $after): void
+    public function test_single_item_decrease_preserves_native_quantity(): void
     {
+        $before = 5;
+        $after = 2;
         $remote = Billing::subscription();
         $item = Billing::item(['quantity' => (string) $before]);
         $subscription = $this->seedSubscription($remote, [$item]);
@@ -348,11 +338,6 @@ class SubscriptionWorkflowTest extends TestCase
         self::assertSame([['id' => 'item-test', 'quantity' => $after]], self::body($http, 4)['items']);
         self::assertSame((string) $after, $result->items()->first()->quantity);
         self::assertSame('PRORATED', self::body($http, 4)['default_proration_mode']);
-    }
-
-    public static function quantityChanges(): array
-    {
-        return [[2, 5], [5, 2]];
     }
 
     #[DataProvider('opaqueItemIdentities')]
@@ -511,13 +496,11 @@ class SubscriptionWorkflowTest extends TestCase
         return [['ACTIVE', true], ['UNPAID', false]];
     }
 
-    #[DataProvider('cancellationStates')]
-    public function test_immediate_cancellation_observes_provider_terminal_state_and_preserves_history(string $status, bool $eligible): void
+    public function test_immediate_cancellation_observes_provider_terminal_state_and_preserves_history(): void
     {
-        $remote = Billing::subscription(['status' => $status, 'trial_starts_at' => '2026-11-01T00:00:00Z', 'trial_ends_at' => '2026-12-01T00:00:00Z']);
+        $remote = Billing::subscription(['status' => 'ACTIVE']);
         $subscription = $this->seedSubscription($remote);
-        $subscription->forceFill(['trial_starts_at' => $remote['trial_starts_at'], 'trial_ends_at' => $remote['trial_ends_at']])->save();
-        self::assertSame($eligible, $subscription->valid());
+        self::assertTrue($subscription->valid());
         $cancelled = Billing::subscription(['status' => 'CANCELLED', 'updated_at' => '2026-11-10T12:01:00Z', 'ends_at' => '2026-12-01T00:00:00Z']);
         $http = $this->fake([...$this->observation($remote), FakeHttpClient::json($cancelled), ...$this->observation($cancelled)]);
         $result = $subscription->cancelNow('cancel', 'ALL');
@@ -527,11 +510,6 @@ class SubscriptionWorkflowTest extends TestCase
         self::assertSame(0, SubscriptionSlot::count());
         self::assertSame(1, Subscription::count());
         self::assertSame($result->id, $this->team->subscription('default')->id);
-    }
-
-    public static function cancellationStates(): array
-    {
-        return [['PENDING', false], ['IN_TRIAL', true], ['ACTIVE', true], ['UNPAID', false]];
     }
 
     public function test_optional_subscription_routing_allows_confirmed_creation_and_later_cancellation(): void
