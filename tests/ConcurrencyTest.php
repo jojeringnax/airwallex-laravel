@@ -8,6 +8,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
+use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
@@ -45,6 +46,11 @@ class ConcurrencyTest extends TestCase
     public function test_two_processes_cannot_execute_the_same_prepared_operation_twice(): void
     {
         $this->race(false, sameCommand: true, execute: true);
+    }
+
+    public function test_competing_claims_retain_one_ambiguous_write_when_confirmation_fails(): void
+    {
+        $this->race(false, sameCommand: true, execute: true, failConfirmation: true);
     }
 
     public function test_stale_process_cannot_restore_old_access_or_displace_a_replacement_generation(): void
@@ -97,7 +103,7 @@ class ConcurrencyTest extends TestCase
         }
     }
 
-    private function race(bool $import, bool $delayCreate = false, bool $sameCommand = false, bool $execute = false): void
+    private function race(bool $import, bool $delayCreate = false, bool $sameCommand = false, bool $execute = false, bool $failConfirmation = false): void
     {
         $directory = sys_get_temp_dir().'/airwallex-race-'.bin2hex(random_bytes(8));
         mkdir($directory, 0700);
@@ -107,6 +113,8 @@ class ConcurrencyTest extends TestCase
         config(['database.connections.testing' => TestDatabase::connection($database)]);
         DB::purge('testing');
         $processes = [];
+        $originalOperation = null;
+        $originalSlot = null;
         try {
             $this->artisan('migrate', ['--force' => true])->assertSuccessful();
             Schema::create('local_teams', function (Blueprint $table): void {
@@ -118,10 +126,11 @@ class ConcurrencyTest extends TestCase
             }
             if ($execute) {
                 $customer = app(OperationManager::class)->reserveCustomer($team);
-                app(OperationManager::class)->prepare($customer, 'command-a', 'create', ['price' => 'price'], [], name: 'default');
+                $originalOperation = app(OperationManager::class)->prepare($customer, 'command-a', 'create', ['price' => 'price'], [], name: 'default');
+                $originalSlot = SubscriptionSlot::sole();
             }
             foreach (['command-a', $sameCommand ? 'command-a' : 'command-b'] as $index => $command) {
-                $process = new Process([PHP_BINARY, '-d', 'display_errors=stderr', __DIR__.'/Fixtures/race-worker.php', $database, $barrier, $command, $execute ? 'execute' : (($import && $index === 1) ? 'import' : ($delayCreate ? 'delayed-create' : 'create'))], dirname(__DIR__));
+                $process = new Process([PHP_BINARY, '-d', 'display_errors=stderr', __DIR__.'/Fixtures/race-worker.php', $database, $barrier, $command, $execute ? ($failConfirmation ? 'execute-unconfirmed' : 'execute') : (($import && $index === 1) ? 'import' : ($delayCreate ? 'delayed-create' : 'create'))], dirname(__DIR__));
                 $process->setTimeout(15);
                 $process->start();
                 $processes[] = $process;
@@ -154,25 +163,68 @@ class ConcurrencyTest extends TestCase
                 self::assertTrue($process->isSuccessful(), $process->getErrorOutput());
                 $results[] = json_decode(trim(str_replace(["READY\n", "PREPARED\n"], '', $process->getOutput())), true, flags: JSON_THROW_ON_ERROR);
             }
+            $operation = Operation::first();
+            $attempts = is_file($barrier.'.attempts') ? (file($barrier.'.attempts', FILE_IGNORE_NEW_LINES) ?: []) : [];
+            $writes = is_file($barrier.'.writes') ? (file($barrier.'.writes', FILE_IGNORE_NEW_LINES) ?: []) : [];
+            $diagnostics = json_encode(['results' => $results, 'status' => $operation?->status,
+                'remote_id' => $operation?->remote_id, 'lock_held' => $operation?->lock_key !== null,
+                'attempts' => count($attempts), 'writes' => count($writes)], JSON_THROW_ON_ERROR);
             self::assertSame($results[0]['customer'], $results[1]['customer']);
             self::assertSame(1, Customer::count());
             self::assertSame(1, Operation::count() + Subscription::count());
             self::assertSame(1, SubscriptionSlot::count());
             $successes = array_filter($results, fn (array $result) => isset($result['operation']) || isset($result['subscription']));
-            self::assertGreaterThanOrEqual(1, count($successes), json_encode($results, JSON_THROW_ON_ERROR));
+            if (! $execute) {
+                self::assertGreaterThanOrEqual(1, count($successes), $diagnostics);
+            }
             if ($sameCommand && ! $execute) {
                 $customer = Customer::first();
                 $recovered = app(OperationManager::class)->prepare($customer, 'command-a', 'create', ['price' => 'price'], [], name: 'default');
                 self::assertSame(Operation::first()->id, $recovered->id);
                 self::assertCount(1, array_unique(array_column($successes, 'operation')));
-            } else {
+            } elseif (! $execute) {
                 self::assertCount(1, $successes);
                 self::assertSame(1, count(array_filter($results, fn (array $result) => $result['conflict'] ?? false)));
             }
             if ($execute) {
-                self::assertSame(2, count(file($barrier.'.attempts', FILE_IGNORE_NEW_LINES)));
-                self::assertSame(1, count(file($barrier.'.writes', FILE_IGNORE_NEW_LINES)));
-                self::assertSame('succeeded', Operation::first()->status);
+                self::assertSame(['ATTEMPT', 'ATTEMPT'], $attempts, $diagnostics);
+                self::assertSame(['WRITE'], $writes, $diagnostics);
+                self::assertNotNull($originalOperation);
+                self::assertNotNull($originalSlot);
+                self::assertNotNull($operation);
+                $identity = ['id', 'environment', 'organization_id', 'customer_id', 'subscription_id', 'kind', 'action_key', 'request_id', 'intent_hash', 'intent'];
+                $slotIdentity = ['id', 'customer_id', 'name', 'operation_id', 'subscription_id'];
+                self::assertSame($originalOperation->only($identity), $operation->only($identity), $diagnostics);
+                self::assertSame($originalSlot->only($slotIdentity), SubscriptionSlot::sole()->only($slotIdentity), $diagnostics);
+                self::assertLessThanOrEqual(1, count($successes), $diagnostics);
+                self::assertContains($operation->status, ['succeeded', 'ambiguous'], $diagnostics);
+                if ($failConfirmation) {
+                    self::assertSame('ambiguous', $operation->status, $diagnostics);
+                }
+                if ($operation->status === 'succeeded') {
+                    self::assertCount(1, $successes, $diagnostics);
+                    self::assertSame('sub-synthetic', $operation->remote_id);
+                    self::assertNull($operation->lock_key);
+                } else {
+                    self::assertCount(0, $successes, $diagnostics);
+                    self::assertSame($originalOperation->lock_key, $operation->lock_key, $diagnostics);
+                    self::assertContains($operation->remote_id, [null, 'sub-synthetic'], $diagnostics);
+                    try {
+                        app(OperationManager::class)->execute($operation, function () use ($barrier): array {
+                            file_put_contents($barrier.'.writes', "REPLAY\n", FILE_APPEND | LOCK_EX);
+
+                            return ['id' => 'replacement-forbidden'];
+                        }, fn (array $response) => $response['id']);
+                        self::fail('An ambiguous original command must not execute again.');
+                    } catch (AmbiguousOperationException $exception) {
+                        self::assertSame($originalOperation->id, $exception->operationId);
+                    }
+                    self::assertSame(['WRITE'], file($barrier.'.writes', FILE_IGNORE_NEW_LINES));
+                    self::assertSame('ambiguous', $operation->fresh()->status);
+                    self::assertSame($originalOperation->lock_key, $operation->fresh()->lock_key);
+                    self::assertSame($originalSlot->only($slotIdentity), SubscriptionSlot::sole()->only($slotIdentity));
+                    self::assertSame($originalOperation->only($identity), $operation->fresh()->only($identity));
+                }
             }
             if ($delayCreate) {
                 self::assertArrayHasKey('subscription', $results[1]);
