@@ -8,6 +8,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
+use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
@@ -16,6 +17,7 @@ use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionTransition;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
+use Jojeringnax\AirwallexLaravel\Tests\Fixtures\InterleavingHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Psr\Http\Client\ClientInterface;
@@ -171,6 +173,64 @@ class SubscriptionTransitionTest extends TestCase
         self::assertSame('completed', $plan->run()->status);
         self::assertCount(4, $http->requests);
         self::assertSame('succeeded', Operation::first()->status);
+    }
+
+    public function test_prepared_transition_restarted_after_expiry_never_sends_its_first_write(): void
+    {
+        $this->http($this->observation());
+        $plan = $this->plan();
+        Carbon::setTestNow('2026-12-01T00:00:01Z');
+        $this->app->instance(OperationManager::class, new class(app(BillingContext::class)) extends OperationManager
+        {
+            public function execute(Operation $operation, \Closure $write, \Closure $confirm): mixed
+            {
+                throw new RuntimeException('Synthetic process interruption before first dispatch.');
+            }
+        });
+        $this->http($this->observation());
+        try {
+            $plan->run();
+            self::fail('Expected synthetic interruption.');
+        } catch (RuntimeException) {
+            self::assertSame('prepared', Operation::first()->status);
+        }
+        // A real process interruption leaves the pre-dispatch executing row; reconstruct exactly that durable state.
+        SubscriptionTransition::whereKey($plan->id)->update(['status' => 'executing']);
+        $this->app->instance(OperationManager::class, new OperationManager(app(BillingContext::class)));
+        Carbon::setTestNow('2026-12-02T00:00:00Z');
+        $http = $this->http([]);
+        try {
+            $plan->run();
+            self::fail('Prepared operation bypassed its expired window.');
+        } catch (EvidenceException) {
+            self::assertCount(0, $http->requests);
+            self::assertSame('failed', Operation::first()->status);
+            self::assertSame('blocked', $plan->fresh()->status);
+        }
+    }
+
+    public function test_source_preflight_crossing_expiry_stops_before_the_first_write(): void
+    {
+        $remote = Billing::subscription(['collection_method' => 'AUTO_CHARGE', 'payment_source_id' => 'source-test', 'updated_at' => '2026-11-10T12:01:00Z']);
+        $this->http($this->observation($remote));
+        $plan = $this->plan();
+        Carbon::setTestNow('2026-12-01T00:09:59Z');
+        $http = new InterleavingHttpClient([FakeHttpClient::login(), ...$this->observation($remote), function () {
+            Carbon::setTestNow('2026-12-01T00:10:01Z');
+
+            return FakeHttpClient::json(Billing::source());
+        }]);
+        app('cache')->flush();
+        $this->app->bind(ClientInterface::class, fn () => $http);
+        $this->app->forgetInstance(Client::class);
+        try {
+            $plan->run();
+            self::fail('Source preflight crossing expiry reached the mutation.');
+        } catch (EvidenceException) {
+            self::assertSame('failed', Operation::first()->status);
+            self::assertSame('blocked', $plan->fresh()->status);
+            self::assertCount(5, $http->requests);
+        }
     }
 
     private function plan(string $action = 'plan'): SubscriptionTransition
