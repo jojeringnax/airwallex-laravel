@@ -49,8 +49,7 @@ class SubscriptionTransitionTest extends TestCase
     public function test_exact_future_plan_is_durable_and_first_execution_uses_one_stable_financial_command(): void
     {
         $this->http($this->observation());
-        $recipe = require __DIR__.'/../examples/schedule-transition.php';
-        $plan = $recipe($this->subscription, 'downgrade', '2026-12-01T01:00:00.123456789+01:00', '2026-12-01T00:10:00Z', [['id' => 'item-test', 'quantity' => 2]]);
+        $plan = $this->subscription->scheduleTransition('downgrade', '2026-12-01T01:00:00.123456789+01:00', [['id' => 'item-test', 'quantity' => 2]], self::OPTIONS, '2026-12-01T00:10:00Z');
         self::assertSame('2026-12-01T01:00:00.123456789+01:00', $plan->effective_at);
         self::assertSame(0, Operation::count());
         $http = $this->http([]);
