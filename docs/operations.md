@@ -14,7 +14,11 @@ AIRWALLEX_ORGANIZATION_ID=your-billing-organization
 AIRWALLEX_WEBHOOK_SECRET=your-endpoint-secret
 AIRWALLEX_WEBHOOK_QUEUE=billing
 AIRWALLEX_EVENTS_QUEUE=billing
+AIRWALLEX_WEBHOOK_QUEUE_CONNECTION=billing-database
+AIRWALLEX_EVENTS_QUEUE_CONNECTION=billing-database
 ```
+
+`airwallex.webhook.queue_connection` and `airwallex.events.queue_connection` select existing Laravel queue connection names independently. Their default null preserves the application's default connection. Queue names remain independently configurable. For example, define `queue.connections.billing-database` using Laravel's database queue driver and the same qualified database as the package, then run `php artisan queue:work billing-database --queue=billing`. The application may keep a different default such as `sync`. A missing/invalid package connection prevents enqueueing: receipts retain `dispatch_configuration`, and committed outbox events remain undispatched for recovery. Fix configuration and restart workers before retrying; invalid routing never discards committed receipts/events.
 
 The default POST route is `/airwallex/webhook`, named `airwallex.webhook`. Publish `airwallex.php` to change its path, middleware or enablement. It is registered outside Laravel's `web` and authenticated browser middleware groups. If your application adds CSRF middleware globally or to this route, exempt only this receiver path in the application's CSRF configuration. Signature verification remains mandatory. For example, Laravel's application `bootstrap/app.php` can call `$middleware->validateCsrfTokens(except: ['airwallex/webhook']);` with your actual configured path. Keep browser return routes authorized separately: query parameters or a success page never confirm a financial result. Load an already-authorized local Checkout and call `reconcile()` server-side.
 
@@ -31,6 +35,10 @@ Unknown resources are ignored unless an attempted, recorded creation operation p
 Projection events are recorded in the same transaction as local state. The outbox dispatches `SubscriptionReconciled`, `CheckoutReconciled`, `InvoiceObserved` and `WebhookProcessed` after commit. Events carry a stable delivery ID, context, local resource identity and safe observation fields. They contain no customer profile, body, secret or document/checkout URL. Listeners must deduplicate the event delivery ID: a crash after listener delivery and before acknowledgement can redeliver the same row. A failed synchronous listener or queue dispatch leaves recoverable outbox work. Event delivery does not authorize a new financial command. Retrying one outbox row retains its delivery ID; explicitly replaying a receipt is a new canonical observation and can create new InvoiceObserved/WebhookProcessed delivery IDs. Use receipt_id/provider_event_id as an additional application deduplication boundary when that is appropriate for your listener.
 
 Use a configured persistent queue and run its worker for the selected queue names. A synchronous queue is supported for deterministic tests and small deployments, but executes canonical reads/listeners within the HTTP request after receipt acceptance. Use asynchronous workers to keep production acknowledgements prompt. Worker jobs bind their stored environment/organization to current configuration before processing; changing deployments never reroutes old jobs to another organization.
+
+The selected deterministic adoption profile uses Laravel database jobs, database token cache and database scheduler locks, backed by one qualified SQLite/MySQL database shared across HTTP/worker scopes. Provision the application's jobs, failed-jobs, cache and cache-lock tables separately from package migrations, select the explicit billing queue connections above, and set `airwallex.cache_store` to the configured database cache store. Queue reservation `retry_after`, job/worker timeout and package lease durations must cover the longest in-flight work; the consumer's configured values require deployment review. Local fixtures and installed-archive worker checks establish this isolated topology, not the deployed consumer's runtime, supervisors or shared lock setup. Redis/SQS and multi-host topology remain unqualified. Runtime/deployment upgrade work is deferred under #49.
+
+The recovery `airwallex:events` command (and sweep event family) deliberately invokes listeners synchronously for pending outbox rows. Queue selection governs automatically dispatched receipt/outbox jobs; it does not silently turn operator commands into asynchronous jobs. Laravel `ShouldQueue` listeners keep their own connection/queue policy and failed-job handling.
 
 The event classes live in `Jojeringnax\AirwallexLaravel\Events`. Each extends readonly `BillingEvent` with `id`, `environment`, `organizationId`, `resourceType` (local model table), `resourceId` (local mapping ID) and `payload` properties. Payload fields are nullable strings:
 
@@ -54,20 +62,36 @@ Commands operate only in the configured environment/organization. Output is safe
 | `airwallex:receipts` | Dispatch pending/failed receipts and expired processing leases. `--after=LOCAL_ID` resumes the batch. `--id=LOCAL_ID --replay` explicitly reprocesses an eligible retained receipt body. |
 | `airwallex:events` | Deliver pending outbox rows whose leases are available; `--after=LOCAL_ID` resumes the batch. |
 | `airwallex:prune-receipts` | Purge up to `--limit` expired terminal bodies, preserving identity/digest/outcome for duplicate detection. |
+| `airwallex:sweep` | Advance durable recurring progress for `customer`, `subscription`, `checkout`, attempted `operation`, eligible `receipt` and pending `event` families. `--family=NAME` selects one; default `all` gives each family its own bounded turn. `--limit=100` (1–1,000) and `--seconds=30` (1–3,600) apply **per family**. |
 
-Run these in the application's Laravel scheduler with overlap prevention. For example, in `routes/console.php`:
+Use `airwallex:sweep` for recurring recovery. Unlike the manual single-batch commands, it persists a separate cursor and high-water ID for each family/environment/owner. Every attempted row advances progress, including failures; a permanently failing first row cannot occupy every recurring batch. Reaching the high-water boundary completes the sweep and the next invocation starts another. An exact-limit batch can require one subsequent empty probe to record completion. Rows inserted above the boundary, or behind the current cursor, wait for the next sweep; deletion removes work without invalidating progress. Eligibility is evaluated when each row is selected, so a busy receipt/event can be revisited in a later sweep.
+
+The row budget limits attempts, including retained failures. The monotonic time budget stops starting more rows; an in-flight provider read/listener can finish later. Configure SDK timeouts/retries and worker timeouts accordingly. Total invocation work is bounded by selected family count × row budget; each family receives its own time budget. No sweep submits a prepared financial intent or replays an ambiguous write. Receipt dispatch and listener delivery retain their existing at-least-once behavior.
+
+Progress is committed after each attempted row. A crash before that checkpoint can repeat the last read or dispatch after its lease expires; canonical projections, receipt/event leases and listener deduplication remain required. Database compare-and-set leases coordinate overlapping sweep workers independently of scheduler cache locks. `airwallex.sweep.lease_seconds` defaults to 300 and must cover an individual read/listener; a superseded/expired worker cannot advance the cursor or clear another worker's lease. All workers must use the same qualified database and synchronized UTC clocks.
+
+Each JSON summary exposes a safe progress ID, cursor/boundary, attempts/failures, last failure classification, `last_completed_at` and completed sweep count. `sweep_completed` means the bounded scan finished, including retained failures; inspect failures separately. `busy` means another worker holds that family. Alert on stale completion times and repeated failure classifications. The single-batch commands remain available for inspection, targeted recovery and explicit terminal receipt replay.
+
+Register the recurring sweep and body pruning in the application's actual scheduler entry point. For applications using `routes/console.php`:
 
 ```php
 use Illuminate\Support\Facades\Schedule;
 
-Schedule::command('airwallex:receipts')->everyMinute()->withoutOverlapping();
-Schedule::command('airwallex:events')->everyMinute()->withoutOverlapping();
-Schedule::command('airwallex:operations --reconcile')->everyFiveMinutes()->withoutOverlapping();
-Schedule::command('airwallex:reconcile')->everyFiveMinutes()->withoutOverlapping();
+Schedule::command('airwallex:sweep --limit=100 --seconds=30')->everyMinute()->withoutOverlapping();
 Schedule::command('airwallex:prune-receipts')->daily()->withoutOverlapping();
 ```
 
-Adapt batch cursors/frequency to your backlog; a permanently failing oldest row must not hide later work. Run the next batch with the emitted cursor and revisit failed IDs separately. Scheduler overlap locks require an application cache with lock support; multi-host scheduling requires infrastructure that actually shares those locks and the qualified database. Run Laravel's scheduler and queue supervision independently; registering schedules does not start workers.
+The inspected consumer declares schedules through `bootstrap/app.php`'s existing `->withSchedule(function (Schedule $schedule) { ... })`; add `$schedule->command('airwallex:sweep --limit=100 --seconds=30')->everyMinute()->withoutOverlapping();` there. Its bootstrap does not load `routes/console.php`. Registration is downstream work, not a package-side migration claim.
+
+Adapt budgets/frequency to backlog and provider rate limits. Scheduler overlap locks require an application cache with lock support; multi-host scheduling requires infrastructure that actually shares those locks and the qualified database. Sweep database leases protect each family even when a scheduler lock is unavailable, but do not configure scheduler infrastructure. Run Laravel's scheduler and queue supervision independently; registering schedules does not start workers.
+
+Additional read-only resource families register a `Support\SweepFamily` with the scoped `Services\SweepRegistry` through the application container. Supply a unique bounded family name, environment, owner type and exact owner ID, a closure returning a context-filtered Eloquent query ordered by its stable string `id`, and a processor returning true for completion or false for retained work. Both closures must enforce that same immutable owner; the registry does not authorize arbitrary rows. A Payments account uses a distinct owner type/ID, never the Billing organization as an alias. The engine installs a composable `Services\CommitGuard`: processors must call `assertMayCommit()` inside each short projection transaction, as the existing canonical synchronizers do, to fence stale projection commits as well as progress. Nested receipt guards retain both checks. Listener side effects still require delivery-ID deduplication. Financial deferred commands require their separate operation workflow.
+
+## Deferred transitions
+
+`php artisan airwallex:transitions --limit=100` executes only already authorized due subscription plans and resumes their original commands. Unlike reconciliation commands, it may submit a plan's first financial mutation. Schedule it explicitly, for example every minute, on the configured Billing context. It filters future candidates by a UTC index and compares exact stored timestamp text before execution. Batches are bounded and rotate by attempt count so unresolved work cannot permanently starve later plans. Output contains local IDs and safe outcome classifications; inspect encrypted intents through an authorized operator path.
+
+Persisted `scheduled` plans reserve one local generation but leave ordinary financial mutation locking available; a later source/item/renewal change causes expected-shape rejection rather than silently applying stale terms. `executing` survives a process interruption; the same derived operation key recovers or sends its first unattempted command. `ambiguous` retains the plan and original financial mutex/evidence as applicable. `completed` requires confirmed operation fulfillment. `blocked` requires an explicit cancel/replacement decision; missed windows do not authorize catch-up, compensation or recreation. Cancelling/replacing an attempted plan is rejected. A worker outage can miss the intended boundary; neither the scheduler nor local time stops provider renewal. [SDK question #161](https://github.com/jojeringnax/airwallex-php-sdk/issues/161) retains exact timing and unsupported free-period/renewal obligations.
 
 ## Uncertain actions
 

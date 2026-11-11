@@ -19,6 +19,7 @@ use Jojeringnax\AirwallexLaravel\Jobs\ProcessWebhookReceipt;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\WebhookReceipt;
 use Jojeringnax\AirwallexLaravel\Support\BillingWebhookEnvelope;
+use Jojeringnax\AirwallexLaravel\Support\QueueRouting;
 use SensitiveParameter;
 use Throwable;
 
@@ -76,20 +77,20 @@ class ReceiptManager
         }
         try {
             $this->leaseSeconds();
-            $queue = config('airwallex.webhook.queue');
-            if ($queue !== null && (! is_string($queue) || $queue === '')) {
-                throw new ConfigurationException('Webhook queue must be a configured name or null.');
-            }
+            $routing = QueueRouting::for('webhook');
             $job = new ProcessWebhookReceipt($stored->id, $this->context->environment, $this->context->organizationId);
-            if ($queue !== null) {
-                $job->onQueue($queue);
+            if ($routing['queue'] !== null) {
+                $job->onQueue($routing['queue']);
+            }
+            if ($routing['connection'] !== null) {
+                $job->onConnection($routing['connection']);
             }
             app(Dispatcher::class)->dispatch($job);
 
             return true;
-        } catch (Throwable) {
+        } catch (Throwable $error) {
             try {
-                $this->query()->whereKey($stored->id)->whereIn('status', ['pending', 'failed'])->update(['last_error' => 'dispatch_failed']);
+                $this->query()->whereKey($stored->id)->whereIn('status', ['pending', 'failed'])->update(['last_error' => $error instanceof ConfigurationException ? 'dispatch_configuration' : 'dispatch_failed']);
             } catch (Throwable) {
                 // Durable pending work remains discoverable even if diagnostics fail.
             }

@@ -112,7 +112,13 @@ Item quantities supplied to writes must be native positive int32 integers. Obser
 
 Every item change needs explicit provider proration controls. `updateItems()` supports per-item `CUSTOM` values such as `['id' => $itemId, 'quantity' => 3, 'proration_mode' => 'CUSTOM', 'proration_value' => ['charge_amount' => '100.00', 'credit_amount' => '20.00']]`, with explicit `billing_action`/`proration_date` options where needed. The package does not calculate proration, fees or effective item history. A returned Subscription is the actual canonical projection; inspect operation status when requested effects are not observed. `acknowledged` is not proof of fulfillment or settlement and is never replayed. See the [item change](../examples/change-items.php) recipe and [acknowledgement runbook](operations.md#uncertain-actions).
 
-[Scheduled ending](../examples/schedule-ending.php) retains access only within positively confirmed effective bounds. [Immediate cancellation](../examples/cancel-subscription.php) requires an explicit proration behavior and denies default access after confirmed CANCELLED. No resume/reactivation or schedule-clear convenience is promised.
+[Scheduled ending](../examples/schedule-ending.php) retains access only within positively confirmed effective bounds. Call `$subscription->restoreRenewal($onCommandKey, $originalOffCommandKey)` before the confirmed scheduled end. It supports only saved-original finite ACTIVE OUT_OF_BAND schedules, with no payment source; old/imported schedules lacking the original bound and other collection/state combinations are unavailable. A false flag alone cannot clear the retained access cap: canonical exact-original-end proof is required. This request restores a finite lifetime and changes no items/source or proration controls; it promises no refund, charge, invoice void or settlement. [Contract evidence and limitations](contracts.md#adoption-amounts-and-provider-routing) remain explicit. [Immediate cancellation](../examples/cancel-subscription.php) requires an explicit proration behavior and denies default access after confirmed CANCELLED. Already-CANCELLED subscriptions cannot be reactivated.
+
+## Deferred item transitions
+
+`$subscription->scheduleTransition($actionKey, $effectiveAt, $items, $options, $expiresAt)` stores an exact future item update and an explicit latest execution time. Choose the target price/items and proration/billing policy in the application; for a next-cycle billing-only change, the existing immediate `swapPrice`/`updateItems` API with NONE may be appropriate instead. A due plan is a delayed local command, with no atomic provider-boundary guarantee. It preserves source/collection/auto-renew controls and blocks if the current generation or financial shape changed, ACTIVE is unconfirmed or its first execution misses the allowed window. `cancel()` or `replace(...)` works before execution; once attempted, ambiguity keeps the plan reserved and only canonical recovery can complete it.
+
+Schedule the [due command](operations.md#deferred-transitions) and supervise its outcomes. A trial can be followed by a downgrade when its canonical ACTIVE state and expected financial shape are available; an ACTIVE earned/free billing holiday still requires the [unresolved provider strategy](https://github.com/jojeringnax/airwallex-php-sdk/issues/161). Local free access alone never suspends collection. Application entitlements and invoice/cash accounting remain separate.
 
 ## Local eligibility and customization
 
@@ -139,3 +145,47 @@ Authorize the local billable before retrieving or delivering document links, inc
 Absent/null document links return null, as is common for drafts; present links are returned as observed independently of invoice status. SDK provider errors retain their original classification, including 404; handle them without treating absence as permission to recreate an invoice. The SDK's observed `pdf_url`/`hosted_url` values carry no package renewal or expiry guarantee. There is no PDF rendering/downloading, invoice email or regenerated-link promise. Default JSON/debug output excludes URLs/customer profiles; explicit `toArray()` exposes a sanitized provider snapshot for authorized server-side use. Treat that explicit data and links as sensitive. The [invoice recipe](../examples/invoices.php) returns nullable links explicitly.
 
 For timeout recovery, use [the operation recipe](../examples/recover-operation.php) in an authorized operator flow and the [commands/runbooks](operations.md). Applications should observe package events after committed changes and deduplicate their stable outbox IDs; events describe provider observations rather than automatic application entitlements.
+
+## Cashier coexistence
+
+Keep Cashier's `Billable` on the original model. Authorize it in the application and create a provider-qualified object; never import both Billable traits or alias only the public method names, because helper dispatch can still cross providers.
+
+```php
+$billing = new \Jojeringnax\AirwallexLaravel\AirwallexBillable($authorizedCustomer);
+$customer = $billing->createOrGetAirwallexCustomer('customer-command', ['name' => 'Example']);
+$subscription = $billing->newSubscription('membership', $airwallexPriceId)
+    ->create('subscription-command', ['collection_method' => 'OUT_OF_BAND']);
+$billing->subscription('membership'); // Airwallex current, otherwise history.
+$billing->invoices();                // Owned Airwallex invoices.
+$authorizedCustomer->subscription('membership'); // Existing Stripe contract.
+```
+
+The wrapper preserves the original morph identity, so use the same stable morph map and configured Airwallex model subclasses as the standalone trait. Identical subscription names can coexist across providers; Airwallex's own context/name reservation still prevents duplicate generations. Provider IDs, setup methods and remote source/consent identities never transfer merely because the local billable is shared. The application owns its explicit `billingProvider` routing, historical reads/refunds and access combination; do not choose a provider from an untrusted request parameter.
+
+The real Cashier fixture is an optional development dependency, isolated from package runtime. Install `tests/Consumers/coexistence/composer.json` into a disposable directory and run:
+
+```sh
+AIRWALLEX_CASHIER_AUTOLOAD=/absolute/fixture/vendor/autoload.php \
+  vendor/bin/phpunit --bootstrap tests/Consumers/coexistence/bootstrap.php tests/CashierCoexistenceTest.php
+```
+
+For installed-candidate qualification, also set `AIRWALLEX_PACKAGE_AUTOLOAD=/absolute/consumer/vendor/autoload.php` after installing the exact package archive and selected SDK revision in the isolated consumer. That path selects the installed package code; it does not install a sibling path repository. Preserve the consumer lock and exact archive/SDK references with the evidence. The three checks exercise real Cashier relations/builders/legacy invoice reads and cancellation, Airwallex current/history/import/create/setup/invoice/cancel/recovery, morph maps, configured subclasses and unsaved-model refusal. Both transports deny unexpected requests and use synthetic responses only. This fixture is shared by the subscription and Payments adoption qualification tracks; each must verify its own provider context and financial event boundary.
+
+## Application amount and accounting adapters
+
+The executable [application adapter factory](../examples/adoption-adapters.php) illustrates an injected, independently verified currency-exponent table and catalogue aliases, plus a database-unique financial listener. It adds no package ledger or commercial policy:
+
+```php
+$factory = require base_path('vendor/jojeringnax/airwallex-laravel/examples/adoption-adapters.php');
+$adapters = $factory($verifiedCurrencyExponents, $verifiedCatalogueAliases, 'application_cash_entries');
+$decimal = $adapters['major']('12345', 'USD'); // '123.45' for a verified exponent of 2.
+$minor = $adapters['minor']('123.4500', 'USD'); // '12345', with no rounding.
+$priceId = $adapters['price']('sandbox', 'membership', 'USD');
+$result = $adapters['cash']($ownedTransaction->toArray(), $independentApplicationAllocation);
+```
+
+Both amount callbacks reject floats even from weak PHP callers, unknown exponents and excess nonzero precision. The illustrative currency table in qualification does not establish account/payment-method eligibility. Keep coupon eligibility/redemption and initial trial/free-period date calculation in application policy. An ACTIVE billing holiday or exact provider renewal boundary remains unavailable without the evidence in the scope/provider references.
+
+The optional cash callback requires an application-owned table with unique/primary `financial_identity`, string `provider`, `environment`, `account_id`, `resource_id`, `invoice_id`, `currency`, `proof_reference`, `clearing_account`, and exact string/text `amount_minor`. Supply allocation evidence from trusted server-side reconciliation: owning environment/account, invoice and PaymentIntent IDs, currency/amount, independent proof reference, clearing account and an independently established exclusive-to-invoice allocation. A caller-supplied boolean is not that proof. Missing allocation, manual/refund/pending/failed observations and zero cash return `unallocated`; repeated canonical intent identity returns `duplicate`; contradictory existing allocation fails. Distinct webhook delivery IDs and Billing/Payments references must resolve to that same verified account/intent key. The application must adapt this example to its real atomic ledger, partial/cross-document allocations, credit notes, accounting configuration and retention policy.
+
+The [owned invoice transaction recipe](../examples/invoice-transactions.php), [finite restoration recipe](../examples/restore-renewal.php) and [due transition recipe](../examples/schedule-transition.php) are qualified through the selected subscription track. The latter two do not establish indefinite/AUTO_CHARGE restoration, active recurring free periods or atomic scheduled provider execution. Actual downstream catalogue/client/accounting implementation and separately authorized Sandbox evidence remain required.

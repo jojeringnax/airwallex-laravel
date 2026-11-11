@@ -27,6 +27,7 @@ class AirwallexServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/airwallex.php', 'airwallex');
         $this->app->register(Payments\PaymentsServiceProvider::class);
         $this->app->scoped(CommitGuard::class);
+        $this->app->scoped(Services\SweepRegistry::class);
         $this->app->scoped(BillingContext::class, fn (Application $app) => new BillingContext(
             $this->stringConfig($app, 'environment'),
             $this->stringConfig($app, 'organization_id'),
@@ -82,6 +83,8 @@ class AirwallexServiceProvider extends ServiceProvider
                 Console\ReceiptsCommand::class,
                 Console\EventsCommand::class,
                 Console\PruneReceiptsCommand::class,
+                Console\TransitionsCommand::class,
+                Console\SweepCommand::class,
             ]);
             $this->publishes([__DIR__.'/../config/airwallex.php' => config_path('airwallex.php')], 'airwallex-config');
             $this->publishes([__DIR__.'/../database/migrations' => database_path('migrations')], 'airwallex-migrations');
