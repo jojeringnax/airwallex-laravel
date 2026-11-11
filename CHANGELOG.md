@@ -1,5 +1,13 @@
 # Release notes
 
+## Unreleased
+
+Adds account-owned standalone Payments customers, saved instruments, explicit browser bootstrap, intent confirmation/capture/cancellation, partial/full refunds and separate signed receipts with durable observations. Original command identities and financial reservations survive ambiguity; recovery reads canonical resources without replay. Billing gains the provider-qualified Cashier coexistence wrapper, explicit queue connections, fair persisted sweeps, verified finite renewal restoration and durable deferred transitions.
+
+The 26 shipped recipes cover installed Billing/Payments APIs and application-owned accounting seams. Invoice transaction reads require a future SDK release containing the transaction extension; exact development archives do not satisfy that release prerequisite. See [upgrade guidance](UPGRADING.md#upgrading-from-010), [supported profiles](docs/compatibility.md) and [programme #46](https://github.com/jojeringnax/airwallex-laravel/issues/46) for exact qualification and remaining evidence. No new release number or publication is designated here.
+
+The restricted finite ACTIVE/OUT_OF_BAND renewal restoration does not establish indefinite or AUTO_CHARGE reversal. Deferred transitions require workers and an explicit execution window; exact provider-boundary timing remains unavailable. SLE high-level amounts remain refused pending precision clarification. Browser/wallet eligibility, provider financial effects and the separately authorized account journeys remain unverified by deterministic fixtures.
+
 ## 0.1.0 — 2026-11-10
 
 The first Laravel integration provides persisted Billable customer mappings, explicit customer link/subscription import, named multi-item subscriptions, direct and HOSTED checkout creation, SETUP source collection, verified source reads/replacement, explicit item/price/quantity/proration changes and scheduled/immediate cancellation. Browser/setup success grants no independent access; eligibility follows owned canonical subscription state and confirmed bounds.
@@ -12,6 +20,6 @@ Accepted decisions remain explicit: [#10](https://github.com/jojeringnax/airwall
 
 Deterministic tests and synthetic SDK fixtures establish package behavior. They do not establish Billing activation, account permissions, optional routing-field presence, hosted delivery timing, natural trial/renewal/ending, configured dunning, charge success/settlement, invoice-link renewal/expiry or Sandbox cleanup observations. [Provider evidence](docs/provider-contracts.md) and the supplemental Sandbox evidence record distinguish these gaps. Historical lowest dependencies excluded by current security floors are not supported; an upstream Symfony Translation 6.4.0 PHP 8.4 nullable deprecation remains visible in the allowed lowest test graph.
 
-Standalone Payments/refunds, multiple Billing organizations/connected routing, OAuth, catalogue administration, embedded components, customer portal UI, generic local trials, tax/coupons/usage billing, pause/reactivation and unverified resume/link/PDF/mailing conveniences remain deferred in [scope](docs/scope.md#deferrals). Raw SDK capabilities are still accessible within application authorization.
+At this release, standalone Payments/refunds, multiple Billing organizations/connected routing, OAuth, catalogue administration, embedded components, customer portal UI, generic local trials, tax/coupons/usage billing, pause/reactivation and unverified resume/link/PDF/mailing conveniences were deferred. [Scope](docs/scope.md) records current capabilities. Raw SDK capabilities remain accessible within application authorization.
 
 Release qualification and delivery are recorded in the [release tracker](https://github.com/jojeringnax/airwallex-laravel/issues/1). The local `0.1.0-RC1` descriptor remains an exact-commit review archive; registry publication is verified separately. See [upgrade guidance](UPGRADING.md), [security](SECURITY.md) and [reproduction instructions](docs/release.md).
