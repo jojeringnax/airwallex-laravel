@@ -17,6 +17,9 @@ return [
     'read_retry_attempts' => 1,
     'http_timeout' => 30,
     'http_connect_timeout' => 10,
+    'sweep' => [
+        'lease_seconds' => 300,
+    ],
     'payments' => [
         'environment' => env('AIRWALLEX_PAYMENTS_ENVIRONMENT', 'sandbox'),
         'account_id' => env('AIRWALLEX_PAYMENTS_ACCOUNT_ID'),
@@ -50,6 +53,7 @@ return [
         'checkout' => Models\Checkout::class,
         'webhook_receipt' => Models\WebhookReceipt::class,
         'domain_event' => Models\DomainEvent::class,
+        'subscription_transition' => Models\SubscriptionTransition::class,
     ],
     'webhook' => [
         'enabled' => true,
@@ -61,9 +65,11 @@ return [
         'retention_days' => 7,
         'lease_seconds' => 300,
         'queue' => env('AIRWALLEX_WEBHOOK_QUEUE'),
+        'queue_connection' => env('AIRWALLEX_WEBHOOK_QUEUE_CONNECTION'),
     ],
     'events' => [
         'lease_seconds' => 300,
         'queue' => env('AIRWALLEX_EVENTS_QUEUE'),
+        'queue_connection' => env('AIRWALLEX_EVENTS_QUEUE_CONNECTION'),
     ],
 ];

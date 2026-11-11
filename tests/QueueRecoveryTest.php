@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Jojeringnax\AirwallexLaravel\Tests;
 
+use Illuminate\Cache\Events\KeyWritten;
 use Illuminate\Contracts\Bus\Dispatcher;
+use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Artisan;
@@ -20,6 +22,7 @@ use Jojeringnax\AirwallexLaravel\Models\DomainEvent;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\WebhookReceipt;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
+use Jojeringnax\AirwallexLaravel\Services\Outbox;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
@@ -73,6 +76,16 @@ class QueueRecoveryTest extends TestCase
             $table->longText('exception');
             $table->timestamp('failed_at')->useCurrent();
         });
+        Schema::create('cache', function (Blueprint $table): void {
+            $table->string('key')->primary();
+            $table->mediumText('value');
+            $table->integer('expiration')->index();
+        });
+        Schema::create('cache_locks', function (Blueprint $table): void {
+            $table->string('key')->primary();
+            $table->string('owner');
+            $table->integer('expiration')->index();
+        });
         Schema::create('local_teams', fn (Blueprint $table) => $table->string('id')->primary());
         $this->team = Team::create(['id' => 'queue-team']);
         $this->customer = app(OperationManager::class)->reserveCustomer($this->team);
@@ -90,7 +103,7 @@ class QueueRecoveryTest extends TestCase
     private function cache(string $driver): void
     {
         config([
-            'cache.stores.billing-queue-test' => ['driver' => $driver, 'path' => $this->directory.'/cache'],
+            'cache.stores.billing-queue-test' => ['driver' => $driver, 'path' => $this->directory.'/cache', 'connection' => 'testing', 'table' => 'cache', 'lock_connection' => 'testing', 'lock_table' => 'cache_locks'],
             'airwallex.cache_store' => 'billing-queue-test',
         ]);
     }
@@ -121,7 +134,7 @@ class QueueRecoveryTest extends TestCase
     {
         $this->fake($this->observation(Billing::subscription(['status' => 'UNPAID'])));
         $subscription = $this->team->importSubscription('default', 'sub-test');
-        if (config('queue.default') === 'database') {
+        if ((config('airwallex.events.queue_connection') ?? config('queue.default')) === 'database') {
             $this->work('billing-events');
         }
 
@@ -200,7 +213,91 @@ class QueueRecoveryTest extends TestCase
 
     public static function runtimeStores(): array
     {
-        return [['sync', 'array'], ['sync', 'file'], ['database', 'array'], ['database', 'file']];
+        return [['sync', 'array'], ['sync', 'file'], ['database', 'array'], ['database', 'file'], ['database', 'database']];
+    }
+
+    public function test_package_connections_isolate_billing_from_sync_default_and_queued_listener_failure(): void
+    {
+        config(['queue.default' => 'sync', 'airwallex.webhook.queue_connection' => 'database', 'airwallex.events.queue_connection' => 'database']);
+        $this->cache('database');
+        $subscription = $this->knownSubscription();
+        Event::listen(SubscriptionReconciled::class, FailingQueuedListener::class);
+        $http = $this->fake($this->observation(Billing::subscription(['updated_at' => '2026-11-10T12:01:00Z'])));
+        $receipt = $this->acceptHttp('explicit-connection');
+        self::assertSame('pending', $receipt->status);
+        self::assertSame([], $http->requests);
+        self::assertSame(1, DB::table('jobs')->where('queue', 'billing-receipts')->count());
+        $this->work('billing-receipts', 1);
+        self::assertSame('processed', $receipt->fresh()->status);
+        self::assertSame('ACTIVE', $subscription->fresh()->status);
+        $this->app->forgetScopedInstances();
+        $this->work('billing-events');
+        $event = DomainEvent::where('event_name', 'SubscriptionReconciled')->latest('id')->firstOrFail();
+        self::assertNotNull($event->dispatched_at);
+        self::assertSame(1, DB::table('jobs')->where('queue', 'billing-listeners')->count());
+        $this->work('billing-listeners', 1);
+        self::assertSame(1, DB::table('failed_jobs')->where('queue', 'billing-listeners')->count());
+        self::assertNotNull($event->fresh()->dispatched_at);
+        self::assertSame(0, Artisan::call('airwallex:events'));
+        self::assertSame(0, DB::table('jobs')->count());
+        // Event handoff is acknowledged; Laravel owns failed queued-listener retry.
+    }
+
+    public function test_invalid_connection_retains_accepted_receipt_and_committed_event_for_recovery(): void
+    {
+        $this->cache('array');
+        config(['airwallex.webhook.queue_connection' => 'missing-connection', 'airwallex.events.queue_connection' => []]);
+        $receipt = $this->acceptHttp('invalid-connection');
+        self::assertSame('pending', $receipt->status);
+        self::assertSame('dispatch_configuration', $receipt->last_error);
+        self::assertSame(0, DB::table('jobs')->count());
+        $event = app(Outbox::class)->record('InvoiceObserved', $this->customer, ['remote_id' => 'invoice-synthetic']);
+        self::assertNull($event->fresh()->dispatched_at);
+        self::assertSame(0, DB::table('jobs')->count());
+        config(['airwallex.webhook.queue_connection' => 'database', 'airwallex.events.queue_connection' => 'database']);
+        self::assertSame(0, Artisan::call('airwallex:receipts'));
+        self::assertSame(1, DB::table('jobs')->where('queue', 'billing-receipts')->count());
+        self::assertSame(0, Artisan::call('airwallex:events'));
+        self::assertNotNull($event->fresh()->dispatched_at);
+    }
+
+    public function test_database_token_cache_expiry_rotation_and_shared_lock_ownership(): void
+    {
+        $this->cache('database');
+        $store = app('cache')->store('billing-queue-test');
+        $firstLock = $store->lock('billing-schedule-test', 30);
+        $secondLock = $store->lock('billing-schedule-test', 30);
+        self::assertTrue($firstLock->get());
+        self::assertFalse($secondLock->get());
+        self::assertTrue($firstLock->release());
+        self::assertTrue($secondLock->get());
+        self::assertTrue($secondLock->release());
+        $writes = [];
+        Event::listen(KeyWritten::class, function (KeyWritten $event) use (&$writes): void {
+            $writes[] = $event;
+        });
+        $http = new FakeHttpClient([
+            FakeHttpClient::login(), FakeHttpClient::json(['id' => 'customer-test']), FakeHttpClient::json(['id' => 'customer-test']),
+            FakeHttpClient::login(token: 'replacement'), FakeHttpClient::json(['id' => 'customer-test']),
+            FakeHttpClient::login(token: 'rotated'), FakeHttpClient::json(['id' => 'customer-test']),
+        ]);
+        $this->app->bind(ClientInterface::class, fn () => $http);
+        $this->app->forgetInstance(Client::class);
+        app(Client::class)->billing()->customers()->retrieve('customer-test');
+        $this->app->forgetScopedInstances();
+        app(Client::class)->billing()->customers()->retrieve('customer-test');
+        self::assertCount(3, $http->requests);
+        $key = $writes[0]->key;
+        $store->put($key, ['token' => 'expired', 'expires_at' => '2000-01-01T00:00:00Z'], 3600);
+        $this->app->forgetScopedInstances();
+        app(Client::class)->billing()->customers()->retrieve('customer-test');
+        self::assertSame('Bearer replacement', $http->requests[4]->getHeaderLine('Authorization'));
+        config(['airwallex.api_key' => 'synthetic-rotated-key']);
+        $this->app->forgetScopedInstances();
+        app(Client::class)->billing()->customers()->retrieve('customer-test');
+        self::assertSame('synthetic-rotated-key', $http->requests[5]->getHeaderLine('x-api-key'));
+        self::assertSame('Bearer rotated', $http->requests[6]->getHeaderLine('Authorization'));
+        self::assertSame('org-test', app(BillingContext::class)->organizationId);
     }
 
     public function test_receipts_command_recovers_database_queue_outage_in_bounded_context_scoped_batches(): void
@@ -317,5 +414,17 @@ class QueueRecoveryTest extends TestCase
         self::assertSame([], $http->requests);
         self::assertSame(1, DB::table('failed_jobs')->count());
         self::assertSame(0, DB::table('jobs')->count());
+    }
+}
+
+class FailingQueuedListener implements ShouldQueue
+{
+    public string $connection = 'database';
+
+    public string $queue = 'billing-listeners';
+
+    public function handle(SubscriptionReconciled $event): void
+    {
+        throw new RuntimeException('Synthetic queued listener failure');
     }
 }
