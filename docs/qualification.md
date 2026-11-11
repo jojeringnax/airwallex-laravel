@@ -19,6 +19,7 @@ Use this map to review the first-release capabilities against the exact candidat
 | Lease loss, restart/finalization failure, offboarding deletion and transactional deferred events | `WebhookReceiptTest`, `WebhookProcessingTest`, `RecoveryCommandTest` |
 | After-commit outbox delivery/rollback, immutable observation IDs, queue/listener failure and stable retry ID | `OutboxTest`, `QueueRecoveryTest` |
 | Actual database queue jobs/worker invocations, per-job scope reset, receipt/event restart phases and queue outage commands | File-backed `QueueRecoveryTest`, across sync/database queues × array/file caches |
+| Explicit billing database connection with a different application default; database token expiry/credential rotation, database locks and failed queued-listener ownership | `QueueRecoveryTest`; installed-archive `consumer-check.php` database job/cache/lock journey and real Laravel worker invocations |
 | Bounded context/cursor commands, strict candidate selectors, canonical recovery and terminal-only pruning | `RecoveryCommandTest`, `QueueRecoveryTest`, `WebhookReceiptTest` |
 | Owned Invoice/line paging, exact money, nullable observed links, configured/current owner checks and access after termination | `InvoiceTest`; installed invoice recipe and exact-money assertion |
 | Every shipped consumer recipe, deny-network real SDK, installed runtime byte equality and Packagist SDK provenance | `tools/qualify-candidate.py`, candidate-pinned consumer helpers and `consumer-recipes.json` |

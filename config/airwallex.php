@@ -40,9 +40,11 @@ return [
         'retention_days' => 7,
         'lease_seconds' => 300,
         'queue' => env('AIRWALLEX_WEBHOOK_QUEUE'),
+        'queue_connection' => env('AIRWALLEX_WEBHOOK_QUEUE_CONNECTION'),
     ],
     'events' => [
         'lease_seconds' => 300,
         'queue' => env('AIRWALLEX_EVENTS_QUEUE'),
+        'queue_connection' => env('AIRWALLEX_EVENTS_QUEUE_CONNECTION'),
     ],
 ];
