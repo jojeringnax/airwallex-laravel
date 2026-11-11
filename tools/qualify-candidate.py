@@ -212,8 +212,8 @@ class Qualification:
         if self.args.track in ("subscriptions", "all"):
             track_files += ["tools/subscription-consumer-check.php", "phpunit.xml", "tests/TestCase.php", "tests/CashierCoexistenceTest.php", "tests/Support/FakeHttpClient.php", "tests/Support/TestDatabase.php", "tests/Fixtures/Billing.php", "tests/Fixtures/Team.php", "tests/Fixtures/InterleavingHttpClient.php", "tests/InvoiceTransactionsTest.php", "tests/Consumers/coexistence/bootstrap.php", "tests/Consumers/coexistence/Models.php"]
         if self.args.track in ("payments", "all"):
-            track_files += ["tools/payments-consumer-check.php"]
-        helper_manifest = extract_tooling(committed_tool, helper_dir, Path(__file__).read_bytes(), tuple(track_files))
+            track_files += ["tests/Consumers/coexistence/bootstrap.php", "tools/payments-consumer-check.php", "tools/payments-consumer-fixtures.php", "tests/TestCase.php", "tests/Support/FakeHttpClient.php", "tests/Support/TestDatabase.php", "tests/PaymentsContextTest.php", "tests/PaymentsInstrumentTest.php", "tests/PaymentsIntentTest.php", "tests/PaymentsRefundTest.php", "tests/PaymentsWebhookTest.php", "tests/Fixtures/payments-receipt-worker.php"]
+        helper_manifest = extract_tooling(committed_tool, helper_dir, Path(__file__).read_bytes(), tuple(dict.fromkeys(track_files)))
         write_json(self.output / "tooling-manifest.json", helper_manifest)
         self.evidence["tooling"] = {"commit": commit, "source": "exact candidate Git blobs", "running_qualifier_matches_commit": True, "manifest_sha256": digest((self.output / "tooling-manifest.json").read_bytes()), "note": "Helpers are extracted from the candidate commit; export-ignore keeps them out of the runtime archive."}
         self.save()
@@ -230,6 +230,9 @@ class Qualification:
             if re.fullmatch(r"airwallex_test_[a-z0-9]+", database) is None:
                 raise ValueError("MySQL consumer requires a dedicated disposable airwallex_test_ database.")
             self.env.update({"DB_CONNECTION": "mysql", "DB_HOST": os.environ.get("AIRWALLEX_TEST_MYSQL_HOST", "127.0.0.1"), "DB_PORT": os.environ.get("AIRWALLEX_TEST_MYSQL_PORT", "33079"), "DB_DATABASE": database, "DB_USERNAME": os.environ.get("AIRWALLEX_TEST_MYSQL_USER", "root"), "DB_PASSWORD": os.environ.get("AIRWALLEX_TEST_MYSQL_PASSWORD", "")})
+        if self.args.track in ("subscriptions", "payments", "all"):
+            # Existing subprocess fixtures resolve vendor/autoload.php from their consumer root.
+            shutil.copytree(helper_dir / "tests", consumer / "tests")
         framework = "^12.69" if self.args.laravel == "12" else "^13.30"
         if not isinstance(framework, str):
             raise ValueError("Candidate has no declared Laravel support constraint.")
@@ -237,7 +240,8 @@ class Qualification:
         if sdk_repository is not None:
             consumer_metadata["repositories"].insert(0, sdk_repository)
             consumer_metadata["require"][SDK] = "0.1.2-dev"
-        if self.args.track in ("subscriptions", "all"):
+        if self.args.track in ("subscriptions", "payments", "all"):
+            consumer_metadata["autoload"] = {"psr-4": {"Jojeringnax\\AirwallexLaravel\\Tests\\": "tests/"}}
             consumer_metadata["require"].update({"laravel/cashier": "^16.9", "orchestra/testbench": "^10.0" if self.args.laravel == "12" else "^11.0", "phpunit/phpunit": "^11.5.50"})
         write_json(consumer / "composer.json", consumer_metadata)
         composer_argv = [php, str(composer), "--no-ansi", "--no-interaction"]
@@ -268,14 +272,19 @@ class Qualification:
         shipped = {Path(name).name for name in manifest if name.startswith("examples/") and name.endswith(".php")}
         if executed != shipped:
             raise ValueError("Selected tracks did not execute exactly the shipped recipes; missing: " + ", ".join(sorted(shipped - executed)))
-        if self.args.track in ("subscriptions", "all"):
+        if self.args.track in ("subscriptions", "payments", "all"):
             fixture_environment = {"AIRWALLEX_PACKAGE_AUTOLOAD": str(consumer / "vendor/autoload.php"), "AIRWALLEX_CASHIER_AUTOLOAD": str(consumer / "vendor/autoload.php"), "AIRWALLEX_TEST_DATABASE": self.args.database}
             if self.args.database == "mysql":
                 for suffix, native in (("HOST", "DB_HOST"), ("PORT", "DB_PORT"), ("DATABASE", "DB_DATABASE"), ("USER", "DB_USERNAME"), ("PASSWORD", "DB_PASSWORD")):
                     fixture_environment["AIRWALLEX_TEST_MYSQL_" + suffix] = self.env[native]
             self.env.update(fixture_environment)
-            self.command("consumer-real-cashier-coexistence", [php, str(consumer / "vendor/bin/phpunit"), "--no-configuration", "--bootstrap", str(helper_dir / "tests/Consumers/coexistence/bootstrap.php"), str(helper_dir / "tests/CashierCoexistenceTest.php"), str(helper_dir / "tests/InvoiceTransactionsTest.php"), "--fail-on-warning", "--fail-on-risky"], consumer)
-            self.evidence["installed_sdk_tests"] = {"database": self.args.database, "classes": ["CashierCoexistenceTest", "InvoiceTransactionsTest"], "status": "passed"}
+            classes = []
+            if self.args.track in ("subscriptions", "all"):
+                classes += ["CashierCoexistenceTest", "InvoiceTransactionsTest"]
+            if self.args.track in ("payments", "all"):
+                classes += ["PaymentsContextTest", "PaymentsInstrumentTest", "PaymentsIntentTest", "PaymentsRefundTest", "PaymentsWebhookTest"]
+            self.command("consumer-installed-resource-tests", [php, str(consumer / "vendor/bin/phpunit"), "--no-configuration", "--bootstrap", str(consumer / "tests/Consumers/coexistence/bootstrap.php"), *[str(consumer / "tests" / (name + ".php")) for name in classes], "--fail-on-warning", "--fail-on-risky"], consumer)
+            self.evidence["installed_sdk_tests"] = {"database": self.args.database, "classes": classes, "status": "passed"}
             for variable in fixture_environment:
                 self.env.pop(variable)
         installed = consumer / "vendor" / PACKAGE
