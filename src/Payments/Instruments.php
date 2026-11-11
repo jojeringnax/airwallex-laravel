@@ -13,6 +13,7 @@ use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Models\Customer as BillingCustomer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
+use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\PaymentSource;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
@@ -194,8 +195,8 @@ class Instruments
         }
         $instrument = $this->verified($customer, $consentId);
         $source = app(SourceManager::class)->retrieve($billingCustomer, $sourceId);
-        if (($source->toArray()['external_id'] ?? null) !== $instrument->method_id) {
-            throw new OwnershipException('Billing Source does not reference the verified Payments method.');
+        if ($source->linkedPaymentAccountId !== $this->context->accountId || ($source->toArray()['external_id'] ?? null) !== $instrument->method_id) {
+            throw new OwnershipException('Billing Source collector or method does not match the verified Payments account.');
         }
 
         return $source;
@@ -291,6 +292,10 @@ class Instruments
         if (($remote['customer_id'] ?? null) !== $customer->remote_id || ! is_string($remote['status'] ?? null)) {
             throw new OwnershipException('Consent customer or status is not canonically confirmed.');
         }
+        if (! is_string($remote['updated_at'] ?? null)) {
+            throw new EvidenceException('Canonical consent version is unavailable.');
+        }
+        Timestamp::compare($remote['updated_at'], $remote['updated_at']);
         if ($operation !== null) {
             $intent = $operation->intent;
             $proven = $operation->kind === 'consent.create'
@@ -315,13 +320,17 @@ class Instruments
                 throw new ConflictException('Consent projection changed while its canonical reads were in flight.');
             }
             $previousTime = $current?->getAttribute('snapshot')['consent']['updated_at'] ?? null;
-            if (is_string($previousTime) && is_string($remote['updated_at'] ?? null)) {
+            if (is_string($previousTime)) {
                 $order = Timestamp::compare($remote['updated_at'], $previousTime);
                 if ($order < 0) {
-                    return $current;
+                    throw new EvidenceException('A stale consent response cannot supply fresh eligibility proof.');
                 }
-                if ($order === 0 && $current->status !== $remote['status']) {
-                    throw new EvidenceException('Equal-version consent observations have conflicting states.');
+                $same = $current->status === $remote['status'] && $current->method_id === $methodId
+                    && $current->method_type === ($remote['payment_method']['type'] ?? null)
+                    && $current->next_triggered_by === ($remote['next_triggered_by'] ?? null)
+                    && $current->merchant_trigger_reason === ($remote['merchant_trigger_reason'] ?? null);
+                if ($order === 0 && ! $same) {
+                    throw new EvidenceException('Equal-version consent observations have conflicting eligibility fields.');
                 }
             }
             $instrument = $current ?? new Instrument([...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $id,
@@ -331,7 +340,7 @@ class Instruments
                 'next_triggered_by' => $remote['next_triggered_by'] ?? null, 'merchant_trigger_reason' => $remote['merchant_trigger_reason'] ?? null,
                 'correlation_key' => $remote['metadata'][self::MARKER] ?? $instrument->getAttribute('correlation_key'),
                 'snapshot' => ['consent' => array_intersect_key($remote, array_flip(['id', 'customer_id', 'status', 'next_triggered_by', 'merchant_trigger_reason', 'created_at', 'updated_at'])),
-                    'method' => $method === null ? null : ['id' => $methodId, 'customer_id' => $method['customer_id'], 'type' => $method['type'], 'status' => $method['status'],
+                    'method' => $method === null ? null : ['id' => $methodId, 'customer_id' => $method['customer_id'], 'type' => $method['type'], 'status' => $method['status'], 'updated_at' => $method['updated_at'],
                         'card' => array_intersect_key($method['card'] ?? [], array_flip(['last4', 'brand', 'expiry_month', 'expiry_year']))]],
                 'revision' => ($current->revision ?? 0) + 1, 'synced_at' => now()->utc()])->save();
             if ($instrument->status !== 'VERIFIED' || $instrument->method_status !== 'CREATED' || $instrument->revoked_at !== null) {
@@ -349,6 +358,27 @@ class Instruments
         if (($method['customer_id'] ?? null) !== $customer->remote_id || ! is_string($method['status'] ?? null) || ! is_string($method['type'] ?? null)) {
             throw new OwnershipException('Payment Method does not belong to the mapped customer.');
         }
+        if (! is_string($method['updated_at'] ?? null)) {
+            throw new EvidenceException('Canonical Payment Method version is unavailable.');
+        }
+        Timestamp::compare($method['updated_at'], $method['updated_at']);
+        // Preserve independent positive Method evidence even if the Consent observation
+        // is later rejected as stale. Other Consents cannot erase a known disable.
+        DB::transaction(function () use ($customer, $id, $method): void {
+            $this->lockCustomer($customer);
+            $proof = MethodObservation::query()->where([...$this->context->attributes(), 'remote_id' => $id])->first();
+            if ($proof !== null) {
+                if ($proof->customer_id !== $customer->id) {
+                    throw new OwnershipException('Payment Method is already associated with another customer.');
+                }
+                $order = Timestamp::compare($method['updated_at'], $proof->provider_updated_at);
+                if ($order < 0 || ($order === 0 && ($proof->status !== $method['status'] || $proof->method_type !== $method['type']))) {
+                    throw new EvidenceException('Payment Method version is stale or contradicts retained eligibility proof.');
+                }
+            }
+            $proof ??= new MethodObservation([...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $id]);
+            $proof->forceFill(['status' => $method['status'], 'method_type' => $method['type'], 'provider_updated_at' => $method['updated_at']])->save();
+        });
 
         return $method;
     }
@@ -363,6 +393,10 @@ class Instruments
     {
         if ($instrument->status !== 'VERIFIED' || $instrument->method_status !== 'CREATED' || $instrument->method_type !== 'card' || $instrument->method_id === null || $instrument->revoked_at !== null) {
             throw new EvidenceException('Saved card consent or method is not canonically usable.');
+        }
+        $method = MethodObservation::query()->where([...$this->context->attributes(), 'customer_id' => $instrument->customer_id, 'remote_id' => $instrument->method_id])->first();
+        if ($method === null || $method->status !== 'CREATED' || $method->method_type !== 'card') {
+            throw new EvidenceException('Retained Payment Method proof does not allow a charge reservation.');
         }
     }
 
