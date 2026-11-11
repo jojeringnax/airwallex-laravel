@@ -60,8 +60,7 @@ class SubscriptionRestorationTest extends TestCase
         self::assertSame('2026-12-01T00:00:00Z', $subscription->scheduled_ends_at);
         $restored = $this->original(['updated_at' => '2026-11-10T12:02:00Z']);
         $http = $this->http([...$this->observation($scheduled), FakeHttpClient::json($restored), ...$this->observation($restored)]);
-        $recipe = require __DIR__.'/../examples/restore-renewal.php';
-        $result = $recipe($subscription, 'on', 'off');
+        $result = $subscription->restoreRenewal('on', 'off');
         $on = Operation::where('action_key', 'on')->firstOrFail();
         self::assertSame(['cancel_at_period_end' => false, 'ends_at' => self::ORIGINAL_END, 'request_id' => $on->request_id],
             json_decode((string) $http->requests[4]->getBody(), true));
