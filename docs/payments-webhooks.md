@@ -37,7 +37,7 @@ Manual bounded reads/recovery use `airwallex:payments-recover`:
 
 Seven `payments_*` families join the shared sweep registry when the foundation and a Payments account are configured. `airwallex:payments-recover --sweep` also works in an account-only deployment without a Billing organization. [Native prerequisite #50](https://github.com/jojeringnax/airwallex-laravel/issues/50) owns fair progress; [#52](https://github.com/jojeringnax/airwallex-laravel/issues/52) owns the qualified queue profile. Manual recovery remains available without those optional sweep classes, and reports their absence if `--sweep` is requested.
 
-Add the recurring command to the application's actual scheduler entry point. The inspected consumer uses `bootstrap/app.php`'s `withSchedule` callback, not an automatically loaded `routes/console.php`:
+Register the recurring commands through the application's configured scheduler entry point. For example, inside a `withSchedule` callback in `bootstrap/app.php`, where `$schedule` is an `Illuminate\Console\Scheduling\Schedule` instance:
 
 ```php
 $schedule->command('airwallex:payments-recover --sweep --limit=100 --seconds=30')
