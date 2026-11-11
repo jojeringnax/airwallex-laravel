@@ -15,6 +15,7 @@ use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Services\InvoiceManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
+use Jojeringnax\AirwallexLaravel\Services\SubscriptionTransitionManager;
 
 /**
  * @property ?string $starts_at
@@ -107,6 +108,11 @@ class Subscription extends BillingModel
     public function restoreRenewal(string $actionKey, string $scheduleActionKey): Subscription
     {
         return app(SubscriptionManager::class)->restoreRenewal($this, $actionKey, $scheduleActionKey);
+    }
+
+    public function scheduleTransition(string $actionKey, string $effectiveAt, array $items, array $options, string $expiresAt): SubscriptionTransition
+    {
+        return app(SubscriptionTransitionManager::class)->schedule($this, $actionKey, $effectiveAt, $items, $options, $expiresAt);
     }
 
     public function cancelNow(string $actionKey, string $prorationBehavior): Subscription
