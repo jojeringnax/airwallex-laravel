@@ -24,6 +24,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Receipt;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 use Jojeringnax\AirwallexLaravel\Payments\Receipts;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Support\TestDatabase;
@@ -31,6 +32,7 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use RuntimeException;
+use Symfony\Component\Process\Process;
 
 class PaymentsWebhookTest extends TestCase
 {
@@ -281,5 +283,146 @@ class PaymentsWebhookTest extends TestCase
         self::assertNull(DB::table('airwallex_payment_instrument_defaults')->value('instrument_id'));
         self::assertSame('/api/v1/pa/payment_methods/mtd-one', $http->requests[1]->getUri()->getPath());
         self::assertCount(2, $http->requests);
+    }
+
+    public function test_unknown_creation_requires_an_attempted_record_and_canonical_original_request_without_write_replay(): void
+    {
+        $operation = Operation::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id, 'kind' => 'intent.create', 'action_key' => 'uncertain',
+            'request_id' => 'a318321b-350c-4ac7-ae98-04d202638b32', 'intent_hash' => hash('sha256', 'uncertain'), 'intent' => ['amount' => '10.00'], 'status' => 'ambiguous', 'lock_key' => 'customer/'.$this->customer->id]);
+        $intent = Intent::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id, 'operation_id' => $operation->id, 'merchant_order_id' => 'order-new', 'amount' => '10.00', 'currency' => 'USD']);
+        $this->state = [...$this->state, 'id' => 'int-new', 'merchant_order_id' => 'order-new', 'request_id' => $operation->request_id];
+        $http = $this->transport();
+        $receipt = $this->postDelivery($this->body('unknown-recovery', ['data' => ['object' => ['id' => 'int-new', 'request_id' => $operation->request_id]]]));
+        $this->work('payment-receipts');
+        self::assertSame('processed', $receipt->fresh()->status);
+        self::assertSame('recorded_creation_recovered', $receipt->fresh()->last_error);
+        self::assertSame('int-new', $intent->fresh()->remote_id);
+        self::assertSame('succeeded', $operation->fresh()->status);
+        self::assertNull($operation->fresh()->getAttribute('lock_key'));
+        self::assertSame(['POST', 'GET'], array_map(fn ($request) => $request->getMethod(), $http->requests));
+        $prepared = Operation::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id, 'kind' => 'intent.create', 'action_key' => 'unattempted',
+            'request_id' => 'c9993b66-20be-44a7-ac1c-cf75bd2e0579', 'intent_hash' => hash('sha256', 'unattempted'), 'intent' => [], 'status' => 'prepared']);
+        $unknown = $this->postDelivery($this->body('unknown-prepared', ['data' => ['object' => ['id' => 'int-forged', 'request_id' => $prepared->request_id]]]));
+        $this->work('payment-receipts');
+        self::assertSame('ignored', $unknown->fresh()->status);
+        self::assertSame(1, Artisan::call('airwallex:payments-recover', ['--family' => 'operation', '--id' => $prepared->id]));
+        self::assertCount(2, $http->requests);
+        self::assertSame('prepared', $prepared->fresh()->status);
+    }
+
+    public function test_refund_received_is_pending_and_accepted_settled_observations_keep_one_financial_identity(): void
+    {
+        $this->state = [...$this->state, 'status' => 'SUCCEEDED', 'captured_amount' => '10.00', 'updated_at' => '2026-11-11T09:00:01Z'];
+        $operation = Operation::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id, 'kind' => 'refund.create', 'action_key' => 'refund-command', 'remote_id' => 'rfd-one',
+            'request_id' => '2f3b38b6-c279-44ed-bce7-9250caf9b44f', 'intent_hash' => hash('sha256', 'refund'), 'intent' => ['amount' => '5.00', 'payment_intent_id' => 'int-one'], 'status' => 'ambiguous', 'lock_key' => 'customer/'.$this->customer->id]);
+        $refund = Refund::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id, 'intent_id' => $this->intent->id, 'operation_id' => $operation->id, 'remote_id' => 'rfd-one', 'amount' => '5.00', 'currency' => 'USD']);
+        $state = ['id' => 'rfd-one', 'payment_intent_id' => 'int-one', 'amount' => '5.00', 'currency' => 'USD', 'request_id' => $operation->request_id, 'status' => 'RECEIVED', 'updated_at' => '2026-11-11T09:00:02Z'];
+        $http = $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/refunds/') ? $state : $this->state));
+        $first = $this->postDelivery($this->body('refund-received', ['name' => 'refund.settled', 'data' => ['object' => ['id' => 'rfd-one']]]));
+        $this->work('payment-receipts');
+        self::assertSame('processed', $first->fresh()->status);
+        self::assertSame('RECEIVED', $refund->fresh()->status);
+        self::assertFalse($refund->fresh()->completed());
+        self::assertSame('succeeded', $operation->fresh()->status); // Known request accepted, refund outcome remains pending.
+        foreach (['ACCEPTED', 'SETTLED'] as $index => $status) {
+            $state = [...$state, 'status' => $status, 'updated_at' => '2026-11-11T09:00:0'.($index + 3).'Z'];
+            $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/refunds/') ? $state : $this->state));
+            $receipt = $this->postDelivery($this->body('refund-'.$status, ['name' => 'refund.received', 'data' => ['object' => ['id' => 'rfd-one']]]));
+            $this->work('payment-receipts');
+            self::assertSame('processed', $receipt->fresh()->status);
+            self::assertTrue($refund->fresh()->completed());
+        }
+        $rows = Observation::where('resource_type', 'airwallex_payment_refunds')->get();
+        self::assertCount(3, $rows);
+        self::assertSame(['refund/rfd-one'], $rows->map(fn ($row) => $row->getAttribute('payload')['financial_identity'])->unique()->values()->all());
+        foreach (array_slice($http->requests, 1) as $request) {
+            self::assertSame('GET', $request->getMethod());
+        }
+    }
+
+    public function test_terminal_body_retention_preserves_deduplication_and_blocks_purged_replay(): void
+    {
+        $this->transport();
+        $receipt = $this->postDelivery($this->body('old-terminal'));
+        $this->work('payment-receipts');
+        Receipt::whereKey($receipt->id)->update(['updated_at' => now()->subDays(8)]);
+        $pending = $this->postDelivery($this->body('pending-retained'));
+        Receipt::whereKey($pending->id)->update(['updated_at' => now()->subDays(8)]);
+        self::assertSame(0, Artisan::call('airwallex:payments-recover', ['--family' => 'prune', '--limit' => '1']));
+        self::assertNull($receipt->fresh()->body);
+        self::assertNotNull($pending->fresh()->body);
+        self::assertSame($receipt->digest, $receipt->fresh()->digest);
+        self::assertSame(1, Artisan::call('airwallex:payments-recover', ['--family' => 'receipt', '--id' => $receipt->id, '--replay' => true]));
+    }
+
+    public function test_optional_fair_sweeps_advance_each_account_family_or_report_missing_foundation(): void
+    {
+        if (! class_exists('Jojeringnax\\AirwallexLaravel\\Services\\SweepManager')) {
+            self::assertSame(1, Artisan::call('airwallex:payments-recover', ['--family' => 'receipt', '--sweep' => true]));
+
+            return;
+        }
+        Schema::rename('jobs', 'offline_jobs');
+        try {
+            foreach (range(1, 5) as $index) {
+                $this->postDelivery($this->body('sweep-'.$index));
+            }
+        } finally {
+            Schema::rename('offline_jobs', 'jobs');
+        }
+        foreach (range(1, 3) as $run) {
+            self::assertSame(0, Artisan::call('airwallex:payments-recover', ['--family' => 'receipt', '--sweep' => true, '--limit' => '2']));
+        }
+        self::assertSame(5, DB::table('jobs')->where('queue', 'payment-receipts')->count());
+        $progress = DB::table('airwallex_sweeps')->where('owner_type', 'payments')->where('owner_id', 'account-payments')->where('family', 'payments_receipt')->first();
+        self::assertNotNull($progress->last_completed_at);
+        self::assertSame(5, $progress->attempted);
+    }
+
+    public function test_two_real_receivers_converge_on_one_account_scoped_receipt(): void
+    {
+        $body = $this->body('receiver-race');
+        $fixture = $this->directory.'/body.json';
+        file_put_contents($fixture, $body);
+        $timestamp = (string) (int) floor(microtime(true) * 1000);
+        $processes = [];
+        try {
+            foreach ([1, 2] as $index) {
+                $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/payments-receipt-worker.php', $this->directory.'/db.sqlite', $this->directory.'/go', $fixture, $timestamp], dirname(__DIR__));
+                $process->setTimeout(15);
+                $process->start();
+                $processes[] = $process;
+            }
+            $deadline = microtime(true) + 5;
+            do {
+                $ready = count(array_filter($processes, fn (Process $process) => str_contains($process->getOutput(), 'READY')));
+                if ($ready === 2) {
+                    break;
+                }
+                usleep(1000);
+            } while (microtime(true) < $deadline);
+            self::assertSame(2, $ready);
+            touch($this->directory.'/go');
+            $ids = [];
+            foreach ($processes as $process) {
+                $process->wait();
+                self::assertTrue($process->isSuccessful(), $process->getOutput().$process->getErrorOutput());
+                $result = json_decode(trim(str_replace("READY\n", '', $process->getOutput())), true, flags: JSON_THROW_ON_ERROR);
+                if ($result['outcome'] === 'accepted') {
+                    $ids[] = $result['id'];
+                }
+            }
+            self::assertNotEmpty($ids);
+            self::assertCount(1, array_unique($ids));
+            self::assertSame(1, Receipt::count());
+            self::assertSame('account-payments', Receipt::first()->getAttribute('account_id'));
+            // A fresh retry after concurrent storage pressure reuses the original row.
+            $retried = $this->postDelivery($body);
+            self::assertSame($ids[0], $retried->id);
+        } finally {
+            foreach ($processes as $process) {
+                $process->stop();
+            }
+        }
     }
 }

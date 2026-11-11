@@ -37,7 +37,11 @@ class WebhookProcessor
         };
         if ($model !== null) {
             $customer = Customer::query()->where($this->context->attributes())->findOrFail($model->getAttribute('customer_id'));
-            $operations = Operation::query()->where($this->context->attributes())->where('customer_id', $customer->id)->where('target_id', $id);
+            $prefix = match ($family) {
+                'payment_intent' => 'intent.', 'refund' => 'refund.', 'payment_consent' => 'consent.', default => 'method.',
+            };
+            $operations = Operation::query()->where($this->context->attributes())->where('customer_id', $customer->id)->where('kind', 'like', $prefix.'%');
+            $operations->where(fn ($query) => $query->where('target_id', $id)->orWhere('remote_id', $id));
             $operations->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged'])->whereNotNull('lock_key');
             $operation = $operations->first();
             if ($operation !== null && $family !== 'payment_method') {
@@ -47,8 +51,7 @@ class WebhookProcessor
                     $model instanceof Intent => app(Intents::class)->reconcile($customer, $model),
                     $model instanceof Refund => app(Refunds::class)->reconcile($customer, $model),
                     $model instanceof Instrument => app(Instruments::class)->complete($customer, $id),
-                    $model instanceof MethodObservation => app(Instruments::class)->reconcileMethod($customer, $id),
-                    default => throw new OwnershipException('Unsupported known Payments webhook resource.'),
+                    default => app(Instruments::class)->reconcileMethod($customer, $id),
                 };
             }
 
