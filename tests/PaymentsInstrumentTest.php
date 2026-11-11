@@ -403,4 +403,34 @@ class PaymentsInstrumentTest extends TestCase
             $instrument->refresh()->update(['snapshot' => []]);
         }
     }
+
+    public function test_offboarded_customer_retains_canonical_consent_reads_and_original_recovery_while_new_actions_stay_blocked(): void
+    {
+        $instrument = $this->seedInstrument();
+        $operation = Operation::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id, 'kind' => 'consent.verify', 'action_key' => 'original-verify', 'target_id' => 'cst-one',
+            'request_id' => 'f43ba121-f0b8-47bb-9d61-b432a777416c', 'intent_hash' => hash('sha256', 'original-verify'), 'intent' => ['payment_method' => ['id' => 'mtd-one', 'type' => 'card']],
+            'status' => 'ambiguous', 'lock_key' => 'customer/'.$this->customer->id]);
+        $http = $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent(['request_id' => $operation->request_id])));
+        $this->customer->update(['disabled_at' => now()->utc()]);
+        self::assertSame($instrument->id, app(Instruments::class)->complete($this->customer, 'cst-one')->id);
+        self::assertSame($instrument->id, app(Instruments::class)->recover($operation)->id);
+        self::assertSame('succeeded', $operation->fresh()->status);
+        $count = count($http->requests);
+        foreach ([fn () => app(Instruments::class)->createSetup($this->customer, 'new-setup'),
+            fn () => app(Instruments::class)->disable($this->customer, 'new-disable', 'cst-one'),
+            fn () => app(Instruments::class)->verified($this->customer, 'cst-one'),
+            fn () => app(Instruments::class)->assertUsableReservation($this->customer, 'cst-one'),
+            fn () => app(Instruments::class)->assertMethodReservation($this->customer, 'mtd-one')] as $action) {
+            try {
+                $action();
+                self::fail('Offboarded customer started a fresh setup, mutation or charge reservation.');
+            } catch (ConflictException) {
+                self::assertCount($count, $http->requests);
+            }
+        }
+        self::assertSame(1, Operation::count());
+        foreach (array_slice($http->requests, 1) as $request) {
+            self::assertSame('GET', $request->getMethod());
+        }
+    }
 }
