@@ -5,9 +5,7 @@ declare(strict_types=1);
 namespace Jojeringnax\AirwallexLaravel\Console;
 
 use Jojeringnax\AirwallexLaravel\BillingContext;
-use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
-use Jojeringnax\AirwallexLaravel\Models\SubscriptionTransition;
 use Throwable;
 
 class TransitionsCommand extends BillingCommand
@@ -26,9 +24,6 @@ class TransitionsCommand extends BillingCommand
             $rows = $query->get();
             $failed = false;
             foreach ($rows as $row) {
-                if (! $row instanceof SubscriptionTransition) {
-                    throw new ConflictException('Configured transition model is unsupported.');
-                }
                 try {
                     $result = $row->run();
                     $this->reportRow(['id' => $row->id, 'outcome' => $result->status]);
@@ -38,7 +33,7 @@ class TransitionsCommand extends BillingCommand
                     $this->reportRow(['id' => $row->id, 'outcome' => $this->classification($error)]);
                 }
                 // An unresolved early row must not permanently starve later authorized plans.
-                $row->increment('attempts');
+                ModelRegistry::query('subscription_transition')->whereKey($row->id)->increment('attempts');
             }
 
             return $failed ? self::FAILURE : self::SUCCESS;
