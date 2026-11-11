@@ -3,7 +3,7 @@
 A Cashier-style Laravel Billing integration built on [airwallex-php-sdk](https://github.com/jojeringnax/airwallex-php-sdk). Targets Laravel 12/13 with SQLite and MySQL backends; [release readiness](https://github.com/jojeringnax/airwallex-laravel/issues/1) records the current checks.
 
 - [Installation, billables and executable billing recipes](docs/usage.md)
-- [Accepted scope and access rules](docs/scope.md)
+- [Accepted scope, access rules and full-provider adoption contract](docs/scope.md)
 - [Public interfaces, schema and lifecycles](docs/contracts.md)
 - [Compatibility, distribution and release gates](docs/compatibility.md)
 - [Reproduce or install the exact review candidate](docs/release.md) and [claim-to-evidence map](docs/qualification.md)

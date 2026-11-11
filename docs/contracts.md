@@ -1,6 +1,6 @@
 # Public interfaces and persistence contract
 
-This reference describes the first-release implementation contract. Accepted invariants are in [scope](scope.md); public choices are accepted under [#34](https://github.com/jojeringnax/airwallex-laravel/issues/34), support under [#10](https://github.com/jojeringnax/airwallex-laravel/issues/10), and provider facts under [provider contracts](provider-contracts.md). The [consumer guide](usage.md) links executable recipes; [release qualification](compatibility.md#release-evidence) defines their evidence requirements.
+This reference describes the released implementation contract and explicitly identified adoption interfaces. Accepted invariants are in [scope](scope.md); public choices are accepted under [#34](https://github.com/jojeringnax/airwallex-laravel/issues/34), support under [#10](https://github.com/jojeringnax/airwallex-laravel/issues/10), and provider facts under [provider contracts](provider-contracts.md). The [consumer guide](usage.md) links executable recipes; [release qualification](compatibility.md#release-evidence) defines their evidence requirements.
 
 ## Consumer API
 
@@ -87,3 +87,9 @@ Domain events use a stable correlation ID, local resource ID, context and prior/
 ## Operational API
 
 Operational commands and their exact options are defined in [webhooks and recovery](operations.md#bounded-commands). Each uses bounded batches, context filtering and safe progress identifiers. Recovery never submits prepared intents or repeats remote mutations. Inspect acknowledged item effects separately from unknown HTTP outcomes. Operator candidate association for unknown-ID subscription/checkout creation still requires canonical identity, customer, routing and reserved metadata proof. Queue workers, listener idempotency, scheduling, body retention and offboarding procedures are in the same reference.
+
+## Adoption amounts and provider routing
+
+The application boundary converts its integer minor-unit representation to exact decimal strings using an explicitly verified currency exponent; the SDK preserves the resulting major-unit value. For exponent 2, `"12345"` becomes `"123.45"`; exponent 0 retains `"12345"`; exponent 3 becomes `"12.345"`. Conversion uses digit/string operations, never floats, locale formatting or scientific notation. Reject unknown currencies, unsupported exponents, fractional minor units and out-of-range business amounts before command creation; reverse conversion rejects excess nonzero fractional precision rather than rounding. Zero is handled according to the [consumer scope](scope.md#full-provider-adoption-contract), never as invented provider success. The application owns any currency table/version and must verify the selected currency and method with the provider.
+
+Billing organization and Payments account are independent immutable contexts. Separate mapping types, command identities, remote IDs and webhook routes prevent accidental cross-family adoption even where provider IDs have the same spelling. Consumer ledgers key deduplication by provider + environment + owning context + canonical financial resource ID + financial event type, not browser status or webhook event ID alone. Old-provider history/refunds stay routed to their original provider.
