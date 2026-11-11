@@ -26,7 +26,7 @@ SDK = "jojeringnax/airwallex-php-sdk"
 # Official 2.11.2 PHAR, independently verified during foundation qualification.
 # https://getcomposer.org/download/2.11.2/composer.phar.sha256sum
 COMPOSER_SHA256 = "dd158c0afd41d15fac89e1b4e47b5d42911fe316c3687cd5edac98319b25d028"
-RUNTIME_PREFIXES = ("src/", "config/", "database/migrations/", "routes/", "examples/")
+RUNTIME_PREFIXES = ("src/", "config/", "database/migrations/", "routes/", "examples/", "resources/")
 ALLOWED_PREFIXES = (*RUNTIME_PREFIXES, "docs/")
 ALLOWED_FILES = {"composer.json", "LICENSE", "README.md", "SECURITY.md", "CHANGELOG.md", "UPGRADING.md"}
 EXCLUDED_PARTS = {".git", ".github", ".agents", "vendor", "node_modules", "tests", "tools", "build", ".phpstan-cache", ".phpunit.cache", "__pycache__"}
