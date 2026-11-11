@@ -176,3 +176,22 @@ AIRWALLEX_CASHIER_AUTOLOAD=/absolute/fixture/vendor/autoload.php \
 ```
 
 For installed-candidate qualification, also set `AIRWALLEX_PACKAGE_AUTOLOAD=/absolute/consumer/vendor/autoload.php` after installing the exact package archive and selected SDK revision in the isolated consumer. That path selects the installed package code; it does not install a sibling path repository. Preserve the consumer lock and exact archive/SDK references with the evidence. The three checks exercise real Cashier relations/builders/legacy invoice reads and cancellation, Airwallex current/history/import/create/setup/invoice/cancel/recovery, morph maps, configured subclasses and unsaved-model refusal. Both transports deny unexpected requests and use synthetic responses only. This fixture is shared by the subscription and Payments adoption qualification tracks; each must verify its own provider context and financial event boundary.
+
+## Application amount and accounting adapters
+
+The executable [application adapter factory](../examples/adoption-adapters.php) illustrates an injected, independently verified currency-exponent table and catalogue aliases, plus a database-unique financial listener. It adds no package ledger or commercial policy:
+
+```php
+$factory = require base_path('vendor/jojeringnax/airwallex-laravel/examples/adoption-adapters.php');
+$adapters = $factory($verifiedCurrencyExponents, $verifiedCatalogueAliases, 'application_cash_entries');
+$decimal = $adapters['major']('12345', 'USD'); // '123.45' for a verified exponent of 2.
+$minor = $adapters['minor']('123.4500', 'USD'); // '12345', with no rounding.
+$priceId = $adapters['price']('sandbox', 'membership', 'USD');
+$result = $adapters['cash']($ownedTransaction->toArray(), $independentApplicationAllocation);
+```
+
+Both amount callbacks reject floats even from weak PHP callers, unknown exponents and excess nonzero precision. The illustrative currency table in qualification does not establish account/payment-method eligibility. Keep coupon eligibility/redemption and initial trial/free-period date calculation in application policy. An ACTIVE billing holiday or exact provider renewal boundary remains unavailable without the evidence in the scope/provider references.
+
+The optional cash callback requires an application-owned table with unique/primary `financial_identity`, string `provider`, `environment`, `account_id`, `resource_id`, `invoice_id`, `currency`, `proof_reference`, `clearing_account`, and exact string/text `amount_minor`. Supply allocation evidence from trusted server-side reconciliation: owning environment/account, invoice and PaymentIntent IDs, currency/amount, independent proof reference, clearing account and an independently established exclusive-to-invoice allocation. A caller-supplied boolean is not that proof. Missing allocation, manual/refund/pending/failed observations and zero cash return `unallocated`; repeated canonical intent identity returns `duplicate`; contradictory existing allocation fails. Distinct webhook delivery IDs and Billing/Payments references must resolve to that same verified account/intent key. The application must adapt this example to its real atomic ledger, partial/cross-document allocations, credit notes, accounting configuration and retention policy.
+
+The [owned invoice transaction recipe](../examples/invoice-transactions.php), [finite restoration recipe](../examples/restore-renewal.php) and [due transition recipe](../examples/schedule-transition.php) are qualified through the selected subscription track. The latter two do not establish indefinite/AUTO_CHARGE restoration, active recurring free periods or atomic scheduled provider execution. Actual downstream catalogue/client/accounting implementation and separately authorized Sandbox evidence remain required.
