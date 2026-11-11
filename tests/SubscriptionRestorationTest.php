@@ -152,6 +152,21 @@ class SubscriptionRestorationTest extends TestCase
         $subscription->restoreRenewal('on', 'missing-historical-off');
     }
 
+    public function test_new_restoration_cannot_be_submitted_at_an_already_effective_scheduled_end(): void
+    {
+        $subscription = $this->scheduledSubscription();
+        Carbon::setTestNow('2026-12-01T00:00:00Z');
+        $http = $this->http($this->observation($this->scheduled()));
+        try {
+            $subscription->restoreRenewal('too-late', 'off');
+            self::fail('An elapsed cancellation boundary was reversed.');
+        } catch (EvidenceException) {
+            self::assertCount(4, $http->requests);
+            self::assertNull(Operation::where('action_key', 'too-late')->first());
+            self::assertFalse($subscription->fresh()->valid());
+        }
+    }
+
     private function original(array $overrides = []): array
     {
         return Billing::subscription(['currency' => 'EUR', 'ends_at' => self::ORIGINAL_END,
