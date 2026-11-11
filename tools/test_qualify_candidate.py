@@ -43,6 +43,24 @@ class ArchiveBoundaryTest(unittest.TestCase):
         self.assertNotIn("autoload-dev", repository["package"])
         self.assertNotIn("source", repository["package"])
 
+    def test_development_sdk_archive_is_exact_and_explicitly_unreleased(self):
+        self.metadata = {"name": qualifier.SDK, "require": {"php": ">=8.3 <8.6"}, "autoload": {"psr-4": {"Jojeringnax\\Airwallex\\": "src/"}}}
+        self.make({"resources/contracts/payments.json": "{}"})
+        manifest, metadata = qualifier.inspect_archive(self.archive, {"resources/contracts/payments.json"}, package_name=qualifier.SDK)
+        repository = qualifier.package_repository(metadata, self.archive, "b" * 40, version="0.1.2-dev")
+        self.assertEqual("0.1.2-dev", repository["package"]["version"])
+        self.assertEqual("b" * 40, repository["package"]["dist"]["reference"])
+        self.assertEqual(self.archive.as_uri(), repository["package"]["dist"]["url"])
+        self.assertIn("resources/contracts/payments.json", manifest)
+        self.assertNotIn("source", repository["package"])
+
+    def test_selected_track_helpers_are_pinned_and_preserve_test_paths(self):
+        files = {"tools/qualify-candidate.py": b"driver", "tools/consumer-check.php": b"baseline", "tools/consumer-fixtures.php": b"fixtures", "tools/payments-consumer-check.php": b"payment helper", "tests/fixture.php": b"test helper"}
+        destination = Path(self.directory.name) / "selected-track"
+        qualifier.extract_tooling(files.__getitem__, destination, b"driver", ("tools/payments-consumer-check.php", "tests/fixture.php"))
+        self.assertEqual(b"payment helper", (destination / "payments-consumer-check.php").read_bytes())
+        self.assertEqual(b"test helper", (destination / "tests/fixture.php").read_bytes())
+
     def test_development_credentials_and_cache_names_are_rejected(self):
         for name in [".env", ".env.production", ".gitattributes", "pint.json", "composer.lock", "tests/Test.php", "tools/fixture.php", "vendor/autoload.php", ".github/workflows/check.yml", "src/.env", ".phpstan-cache/cache.php"]:
             with self.subTest(name=name):
