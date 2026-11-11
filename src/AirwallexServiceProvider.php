@@ -82,6 +82,7 @@ class AirwallexServiceProvider extends ServiceProvider
                 Console\ReceiptsCommand::class,
                 Console\EventsCommand::class,
                 Console\PruneReceiptsCommand::class,
+                Console\TransitionsCommand::class,
                 Console\SweepCommand::class,
             ]);
             $this->publishes([__DIR__.'/../config/airwallex.php' => config_path('airwallex.php')], 'airwallex-config');
