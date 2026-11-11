@@ -17,6 +17,9 @@ return [
     'read_retry_attempts' => 1,
     'http_timeout' => 30,
     'http_connect_timeout' => 10,
+    'sweep' => [
+        'lease_seconds' => 300,
+    ],
     'models' => [
         'customer' => Models\Customer::class,
         'subscription' => Models\Subscription::class,
