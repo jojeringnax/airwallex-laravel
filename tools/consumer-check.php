@@ -274,7 +274,7 @@ try {
         $competingLock = $app->make('cache')->store('billing-proof')->lock('installed-billing-schedule', 30);
         check($lock->get() && ! $competingLock->get() && $lock->release() && $competingLock->get() && $competingLock->release(), 'Installed database lock ownership failed.');
         $http = $bind(Fixtures::observation($import, [Fixtures::item('item-import', 'sub-import', '1.000000000000000000001')]));
-        $body = json_encode(['id' => 'installed-queue-event', 'name' => 'subscription.active', 'org_id' => 'org-synthetic', 'version' => '2026-08-21', 'data' => ['object' => $import]], JSON_THROW_ON_ERROR);
+        $body = json_encode(['id' => 'installed-queue-event', 'name' => 'subscription.active', 'org_id' => 'org-synthetic', 'version' => '2026-08-21', 'created_at' => '2026-11-10T12:00:00Z', 'data' => ['object' => $import]], JSON_THROW_ON_ERROR);
         $timestamp = (string) now()->getTimestampMs();
         $receipt = app(ReceiptManager::class)->accept($body, $timestamp, hash_hmac('sha256', $timestamp.$body, 'synthetic-installed-secret'));
         check(app(ReceiptManager::class)->dispatch($receipt), 'Installed receipt enqueue failed.');
