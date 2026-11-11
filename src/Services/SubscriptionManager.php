@@ -116,14 +116,7 @@ class SubscriptionManager
     public function applyTransition(Subscription $subscription, string $actionKey, array $items, array $options, string $expectedShape, string $expiresAt): Subscription
     {
         return $this->change($subscription, $actionKey, 'subscription.items', ['items' => $items, 'options' => $options, 'transition_shape' => $expectedShape, 'expires_at' => $expiresAt], function (Subscription $current) use ($items, $options, $expectedShape, $expiresAt): array {
-            if ($current->status !== 'ACTIVE' || SubscriptionTransitionManager::shape($current) !== $expectedShape
-                || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $expiresAt) > 0) {
-                throw new EvidenceException('Transition window, source state or expected financial shape no longer matches.');
-            }
-            $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $current->customer_id)->where('name', $current->name)->first();
-            if ($slot?->subscription_id !== $current->id) {
-                throw new ConflictException('A historic subscription generation cannot execute a transition.');
-            }
+            $this->assertTransitionDispatch($current, $expectedShape, $expiresAt);
             $this->mutableItems($current);
             foreach ($items as $item) {
                 if (is_array($item) && isset($item['id']) && is_string($item['id'])) {
@@ -132,7 +125,19 @@ class SubscriptionManager
             }
 
             return $this->itemPayload($items, $options);
-        });
+        }, fn (Subscription $current) => $this->assertTransitionDispatch($current, $expectedShape, $expiresAt));
+    }
+
+    private function assertTransitionDispatch(Subscription $current, string $expectedShape, string $expiresAt): void
+    {
+        if ($current->status !== 'ACTIVE' || SubscriptionTransitionManager::shape($current) !== $expectedShape
+            || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $expiresAt) > 0) {
+            throw new EvidenceException('Transition window, source state or expected financial shape no longer matches.');
+        }
+        $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $current->customer_id)->where('name', $current->name)->first();
+        if ($slot?->subscription_id !== $current->id) {
+            throw new ConflictException('A historic subscription generation cannot execute a transition.');
+        }
     }
 
     public function cancelAtPeriodEnd(Subscription $subscription, string $actionKey): Subscription
@@ -317,7 +322,7 @@ class SubscriptionManager
         return $this->synchronizer->confirm($customer, $name, $id, $operation);
     }
 
-    private function change(Subscription $subscription, string $actionKey, string $kind, array $specification, Closure $build): Subscription
+    private function change(Subscription $subscription, string $actionKey, string $kind, array $specification, Closure $build, ?Closure $dispatchGuard = null): Subscription
     {
         $this->context->assertModel($subscription);
         $subscription = ModelRegistry::query('subscription')->findOrFail($subscription->getKey());
@@ -326,6 +331,7 @@ class SubscriptionManager
         $this->context->assertModel($customer);
         $operation = $this->existing($customer, $actionKey, $kind, $specification, $subscription);
         $resumedRestoration = $operation?->status === 'prepared' && $kind === 'subscription.restore_renewal';
+        $resumedPrepared = $operation?->status === 'prepared';
         if ($operation === null) {
             $subscription = $this->synchronizer->reconcile($subscription, financial: true);
             Routing::assertSubscription([...$subscription->snapshot, ...($subscription->observed_routing ?? [])]);
@@ -347,13 +353,20 @@ class SubscriptionManager
         if ($operation->status !== 'prepared') {
             return $this->recoverChange($subscription, $operation);
         }
-        $this->preflight($operation, function () use ($subscription, $customer, $operation, $resumedRestoration): void {
+        $this->preflight($operation, function () use ($subscription, $customer, $operation, $resumedRestoration, $dispatchGuard, $resumedPrepared): void {
             $current = ModelRegistry::query('subscription')->findOrFail($subscription->id);
             if ($operation->kind === 'subscription.restore_renewal') {
                 $this->assertRestorationDispatch($current, $operation->intent['payload']);
                 if ($resumedRestoration) {
                     $current = $this->synchronizer->reconcile($current, financial: true);
                     $this->assertRestorationDispatch($current, $operation->intent['payload']);
+                }
+            }
+            if ($dispatchGuard !== null) {
+                $dispatchGuard($current);
+                if ($resumedPrepared) {
+                    $current = $this->synchronizer->reconcile($current, financial: true);
+                    $dispatchGuard($current);
                 }
             }
             Routing::assertSubscription([...$current->snapshot, ...($current->observed_routing ?? [])]);
@@ -382,11 +395,17 @@ class SubscriptionManager
             if ($this->fingerprint($latest) !== $operation->intent['fingerprint']) {
                 throw new EvidenceException('Subscription changed during preflight; prepare a new financial intent.');
             }
+            if ($dispatchGuard !== null) {
+                $dispatchGuard($latest);
+            }
         });
 
-        return $this->operations->execute($operation, function () use ($subscription, $operation): array {
+        return $this->operations->execute($operation, function () use ($subscription, $operation, $dispatchGuard): array {
             if ($operation->kind === 'subscription.restore_renewal') {
                 $this->assertRestorationDispatch(ModelRegistry::query('subscription')->findOrFail($subscription->id), $operation->intent['payload']);
+            }
+            if ($dispatchGuard !== null) {
+                $dispatchGuard(ModelRegistry::query('subscription')->findOrFail($subscription->id));
             }
             $payload = [...$operation->intent['payload'], 'request_id' => $operation->request_id];
             $resource = app(Client::class)->billing()->subscriptions();
