@@ -27,7 +27,7 @@ class DefaultSubscriptionAccessPolicy implements SubscriptionAccessPolicy
                     return false;
                 }
             }
-            if ($subscription->cancel_at_period_end) {
+            if ($subscription->cancel_at_period_end || $subscription->scheduled_ends_at !== null) {
                 $end = $subscription->scheduled_ends_at;
                 if (! is_string($end) || Timestamp::compare($now, $end) >= 0) {
                     return false;

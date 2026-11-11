@@ -29,6 +29,7 @@ return [
         'checkout' => Models\Checkout::class,
         'webhook_receipt' => Models\WebhookReceipt::class,
         'domain_event' => Models\DomainEvent::class,
+        'subscription_transition' => Models\SubscriptionTransition::class,
     ],
     'webhook' => [
         'enabled' => true,
