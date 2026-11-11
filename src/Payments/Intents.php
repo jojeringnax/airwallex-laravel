@@ -88,24 +88,25 @@ class Intents
     /** Merchant-initiated saved-instrument charge; no raw card credentials accepted. */
     public function confirmWithConsent(Customer $customer, Intent $intent, string $key, string $consentId, array $options = []): Intent
     {
-        $instrument = app(Instruments::class)->verified($customer, $consentId);
+        $customer = $this->confirmedCustomer($customer);
         $this->options($options, ['return_url', 'payment_method_options']);
+        if ($this->requiresInstrumentProof($key)) {
+            app(Instruments::class)->verified($customer, $consentId);
+        }
 
-        return $this->action($customer, $intent, $key, 'confirm', [...$options, 'payment_consent_id' => $instrument->remote_id, 'triggered_by' => 'merchant'], $consentId);
+        return $this->action($customer, $intent, $key, 'confirm', [...$options, 'payment_consent_id' => $consentId, 'triggered_by' => 'merchant'], $consentId);
     }
 
     /** Customer-present tokenized method, collected by an eligible authorized browser client. */
     public function confirmWithMethod(Customer $customer, Intent $intent, string $key, string $methodId, array $options = []): Intent
     {
         $this->options($options, ['return_url', 'payment_method_options', 'device_data']);
-        $method = app(Client::class)->sdk->payments()->paymentMethods()->retrieve($methodId);
-        Proof::identity($method, $methodId, $this->context);
         $customer = $this->confirmedCustomer($customer);
-        if (($method['customer_id'] ?? null) !== $customer->remote_id || ($method['status'] ?? null) !== 'CREATED') {
-            throw new OwnershipException('Customer-present method is not owned and usable by this Payments customer.');
+        if ($this->requiresInstrumentProof($key)) {
+            app(Instruments::class)->observeMethod($customer, $methodId);
         }
 
-        return $this->action($customer, $intent, $key, 'confirm', [...$options, 'payment_method' => ['id' => $methodId], 'triggered_by' => 'customer']);
+        return $this->action($customer, $intent, $key, 'confirm', [...$options, 'payment_method' => ['id' => $methodId], 'triggered_by' => 'customer'], methodId: $methodId);
     }
 
     /** Browser 3DS/wallet return is a locator, never financial proof or a server PIN call. */
@@ -157,19 +158,22 @@ class Intents
         }
     }
 
-    private function action(Customer $customer, Intent $intent, string $key, string $action, array $body, ?string $consentId = null): Intent
+    private function action(Customer $customer, Intent $intent, string $key, string $action, array $body, ?string $consentId = null, ?string $methodId = null): Intent
     {
         $customer = $this->confirmedCustomer($customer);
         $intent = $this->owned($customer, $intent);
         if ($intent->remote_id === null) {
             throw new ConflictException('Original intent must be recovered before another action.');
         }
-        $operation = DB::transaction(function () use ($customer, $intent, $key, $action, $body, $consentId): Operation {
+        $operation = DB::transaction(function () use ($customer, $intent, $key, $action, $body, $consentId, $methodId): Operation {
             $operation = $this->operations->prepare($customer, $key, 'intent.'.$action, ['body' => $body, 'before_captured' => $intent->captured_amount], $intent->remote_id, 'customer/'.$customer->id, $body);
             if ($consentId !== null && $operation->status === 'prepared') {
                 // Revocation uses the same customer lock. It cannot silently substitute
                 // another instrument after this explicit command has been reserved.
                 app(Instruments::class)->assertUsableReservation($customer, $consentId);
+            }
+            if ($methodId !== null && $operation->status === 'prepared') {
+                app(Instruments::class)->assertMethodReservation($customer, $methodId);
             }
 
             return $operation;
@@ -202,7 +206,14 @@ class Intents
             return $this->operations->execute($operation,
                 fn () => app(Client::class)->sdk->payments()->paymentIntents()->{$action}($canonical->remote_id, [...$body, 'request_id' => $operation->request_id]),
                 fn () => $this->confirm($customer, $canonical, $operation, $canonical->remote_id),
-                $consentId === null ? null : fn () => app(Instruments::class)->assertUsableReservation($customer, $consentId),
+                ($consentId === null && $methodId === null) ? null : function () use ($customer, $consentId, $methodId): void {
+                    if ($consentId !== null) {
+                        app(Instruments::class)->assertUsableReservation($customer, $consentId);
+                    }
+                    if ($methodId !== null) {
+                        app(Instruments::class)->assertMethodReservation($customer, $methodId);
+                    }
+                },
             );
         } catch (EvidenceException|ConflictException $exception) {
             $this->operations->rejectPrepared($operation);
@@ -302,6 +313,15 @@ class Intents
         }
 
         return $customer;
+    }
+
+    private function requiresInstrumentProof(string $key): bool
+    {
+        Operations::validateKey($key);
+        $operation = Operation::query()->where([...$this->context->attributes(), 'action_key' => $key])->first();
+
+        // The action still verifies the original customer/target/body hash before recovering.
+        return $operation === null || $operation->status === 'prepared';
     }
 
     private function options(array $options, array $allowed): void

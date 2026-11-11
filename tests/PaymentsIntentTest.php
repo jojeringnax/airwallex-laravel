@@ -18,6 +18,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Context;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
+use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
@@ -149,6 +150,10 @@ class PaymentsIntentTest extends TestCase
     public function test_customer_present_confirmation_and_pending_capture_hold_original_financial_identity(): void
     {
         $intent = $this->payments->createIntent('create', 'order', '100', 'USD');
+        // A revoked Consent does not detach an otherwise usable Method from an explicit CIT action.
+        Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'revoked-consent', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
+            'revoked_at' => now(), 'snapshot' => []]);
         $this->afterWrite = function (Operation $operation, array &$state): void {
             if ($operation->kind === 'intent.confirm') {
                 $state['status'] = 'REQUIRES_CAPTURE';
@@ -284,8 +289,59 @@ class PaymentsIntentTest extends TestCase
         self::assertFalse($this->payments->continueIntent($actionRequired)->paid());
         $writes = $this->writes();
         $this->advance(['status' => 'SUCCEEDED', 'captured_amount' => '10.00']);
-        self::assertTrue($this->payments->continueIntent($actionRequired)->paid());
+        $complete = $this->payments->continueIntent($actionRequired);
+        self::assertTrue($complete->paid());
         self::assertSame($writes, $this->writes());
+        Instrument::query()->where('remote_id', 'consent-owned')->update(['revoked_at' => now()]);
+        MethodObservation::query()->where('remote_id', 'method-owned')->update(['status' => 'DISABLED', 'provider_updated_at' => '2026-11-11T12:01:00Z']);
+        $beforeRepeat = count($this->requests);
+        self::assertTrue($this->payments->confirmIntent($complete, 'saved-charge', 'consent-owned')->paid());
+        foreach (array_slice($this->requests, $beforeRepeat) as $request) {
+            self::assertSame('GET', $request->getMethod());
+            self::assertStringContainsString('/payment_intents/', $request->getUri()->getPath());
+        }
+        try {
+            $this->payments->confirmIntent($complete, 'new-charge-after-disable', 'consent-owned');
+            self::fail('A fresh command bypassed revoked/disabled instrument proof.');
+        } catch (EvidenceException) {
+            self::assertSame($writes, $this->writes());
+        }
+    }
+
+    public function test_stale_created_method_cannot_bypass_retained_disable_for_customer_present_payment(): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        MethodObservation::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'method-owned', 'status' => 'DISABLED', 'method_type' => 'card', 'provider_updated_at' => '2026-11-11T12:01:00Z']);
+        $writes = $this->writes();
+        try {
+            $this->payments->confirmIntentWithMethod($intent, 'stale-method-charge', 'method-owned');
+            self::fail('A stale CREATED Method erased a known disable.');
+        } catch (EvidenceException) {
+            self::assertSame($writes, $this->writes());
+            self::assertSame('DISABLED', MethodObservation::first()->status);
+            self::assertNull(Operation::where('action_key', 'stale-method-charge')->first());
+        }
+    }
+
+    public function test_customer_present_claim_rechecks_global_method_disable_after_preflight(): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        $this->beforeRead = function (): void {
+            if (Operation::where('kind', 'intent.confirm')->where('status', 'prepared')->exists()) {
+                MethodObservation::query()->where('remote_id', 'method-owned')->update(['status' => 'DISABLED', 'provider_updated_at' => '2026-11-11T12:01:00Z']);
+            }
+        };
+        $writes = $this->writes();
+        try {
+            $this->payments->confirmIntentWithMethod($intent, 'disabled-before-claim', 'method-owned');
+            self::fail('A Method disabled before the claim reached payment confirmation.');
+        } catch (EvidenceException) {
+            $operation = Operation::where('action_key', 'disabled-before-claim')->firstOrFail();
+            self::assertSame($writes, $this->writes());
+            self::assertSame('failed', $operation->status);
+            self::assertNull($operation->lock_key);
+        }
     }
 
     private function writes(): int
