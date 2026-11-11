@@ -54,6 +54,20 @@ class ArchiveBoundaryTest(unittest.TestCase):
         self.assertIn("resources/contracts/payments.json", manifest)
         self.assertNotIn("source", repository["package"])
 
+    def test_released_sdk_selection_rejects_development_or_ambiguous_sources(self):
+        qualifier.validate_sdk_selection(None, None, "0.1.2")
+        qualifier.validate_sdk_selection(None, None, None)
+        qualifier.validate_sdk_selection(Path("/read-only/sdk"), "a" * 40, None)
+        for repo, candidate, version in [
+            (Path("/read-only/sdk"), "a" * 40, "0.1.2"),
+            (None, "a" * 40, None),
+            (Path("/read-only/sdk"), None, None),
+            *[(None, None, version) for version in ["^0.1.2", "v0.1.2", "0.1.2-dev", "dev-main", "0.1", "01.1.2", "../sdk", ""]],
+        ]:
+            with self.subTest(repo=repo, candidate=candidate, version=version):
+                with self.assertRaises(ValueError):
+                    qualifier.validate_sdk_selection(repo, candidate, version)
+
     def test_selected_track_helpers_are_pinned_and_preserve_test_paths(self):
         files = {"tools/qualify-candidate.py": b"driver", "tools/consumer-check.php": b"baseline", "tools/consumer-fixtures.php": b"fixtures", "tools/payments-consumer-check.php": b"payment helper", "tests/fixture.php": b"test helper"}
         destination = Path(self.directory.name) / "selected-track"

@@ -29,7 +29,7 @@ class InvoiceTransactionsTest extends TestCase
     {
         parent::setUp();
         if (! method_exists(Billing::class, 'transactions')) {
-            self::markTestSkipped('Requires exact SDK PR160 archive4d24a1a; final released-SDK qualification remains pending.');
+            self::markTestSkipped('Invoice transaction tests require SDK v0.1.2 or later; the legacy v0.1.1 graph is qualified separately.');
         }
         $this->artisan('migrate', ['--force' => true])->assertSuccessful();
         Schema::create('local_teams', fn (Blueprint $table) => $table->string('id')->primary());

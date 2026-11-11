@@ -71,12 +71,6 @@ jobs:
       - name: Prepare isolated MySQL consumer schema
         if: matrix.database == 'mysql'
         run: php -r '(new PDO("mysql:host=127.0.0.1;port=3306", "root", ""))->exec("CREATE DATABASE airwallex_test_consumer");'
-      - name: Select reviewed transaction SDK source for development archives
-        uses: actions/checkout@v4
-        with:
-          repository: jojeringnax/airwallex-php-sdk
-          ref: 3ceab5178af39202379ac0891bc80d78419db127
-          path: .qualification-sdk
       - name: Qualify exact archive in a fresh native consumer
         env:
           LARAVEL_MAJOR: ${{ matrix.laravel }}
@@ -87,8 +81,7 @@ jobs:
           python3 tools/qualify-candidate.py \
             --candidate "$(git rev-parse HEAD)" \
             --composer "$RUNNER_TEMP/airwallex-composer.phar" \
-            --sdk-repo "$GITHUB_WORKSPACE/.qualification-sdk" \
-            --sdk-candidate 3ceab5178af39202379ac0891bc80d78419db127 \
+            --sdk-version 0.1.2 \
             --track all \
             --laravel "$LARAVEL_MAJOR" --database "$DATABASE" \
             --dependencies "$DEPENDENCIES" \
