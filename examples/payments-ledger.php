@@ -56,6 +56,13 @@ return static function (PaymentObserved $event, string $expectedCustomerId, stri
         DB::table($ledgerTable.'_entries')->insert(['id' => hash('sha256', $identity.'/'.$total), 'financial_identity' => $identity,
             'delivery_id' => $event->id, 'kind' => $kind, 'currency' => $resource->currency, 'delta_minor' => $delta]);
 
+        if ($resource instanceof Refund) {
+            // Application handoff only: accounting must authorize tax/order adjustments and issue the credit note.
+            DB::table($ledgerTable.'_credit_notes')->insertOrIgnore(['financial_identity' => $identity,
+                'refund_id' => $resource->remote_id, 'intent_id' => $resource->intent_id, 'currency' => $resource->currency,
+                'amount_minor' => $total, 'status' => 'pending_review']);
+        }
+
         return ['outcome' => 'recorded', 'delta_minor' => $delta, 'kind' => $kind, 'financial_identity' => $identity];
     });
 };

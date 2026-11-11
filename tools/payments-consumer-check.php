@@ -11,9 +11,9 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
-use Jojeringnax\Airwallex\Config\ConfigException;
 use Jojeringnax\AirwallexLaravel\Events\PaymentObserved;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
+use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Payments;
 use Jojeringnax\AirwallexLaravel\Payments\Client;
@@ -77,6 +77,19 @@ try {
             $table->string($column);
         }
     });
+    Schema::create('candidate_payment_ledger_credit_notes', static function (Blueprint $table): void {
+        $table->string('financial_identity', 64)->primary();
+        foreach (['refund_id', 'intent_id', 'currency', 'amount_minor', 'status'] as $column) {
+            $table->string($column);
+        }
+    });
+    Schema::create('candidate_payables', static function (Blueprint $table): void {
+        $table->string('id')->primary();
+        $table->string('amount_minor');
+        $table->string('status');
+    });
+    DB::table('candidate_payables')->insert([['id' => 'zero-payable', 'amount_minor' => '0', 'status' => 'completed_without_charge'],
+        ['id' => 'payable-one', 'amount_minor' => '10000', 'status' => 'awaiting_payment']]);
     $owner = PaymentsOwner::create(['id' => 'payable-owner', 'stripe_id' => 'cus_legacy']);
     $payments = Payments::for($owner);
     $package = $consumer.'/vendor/jojeringnax/airwallex-laravel';
@@ -91,7 +104,7 @@ try {
     try {
         $recipe('payments-customer.php')($owner, 'customer-original');
         throw new RuntimeException('Missing local credentials reached a provider mutation.');
-    } catch (ConfigException) {
+    } catch (ConfigurationException) {
         $prepared = Operation::where('action_key', 'customer-original')->sole();
         check($prepared->status === 'prepared' && $http->requests === [], 'Configuration failure changed the original prepared operation.');
     }
@@ -159,6 +172,9 @@ try {
     $larger = Observation::where('resource_id', $intent->id)->get()->first(fn ($row) => ($row->payload['captured_amount'] ?? null) === '60.00');
     check($larger !== null && $deliver($larger)['delta_minor'] === '2000', 'Cumulative capture observations lost or duplicated a delta.');
     check(DB::table('candidate_payment_ledger_entries')->where('kind', 'cash_received')->count() === 2, 'Partial capture accounting was not incremental.');
+    DB::table('candidate_payables')->where('id', 'payable-one')->update(['status' => 'partially_funded']);
+    check(DB::table('candidate_payables')->where('id', 'zero-payable')->value('status') === 'completed_without_charge'
+        && DB::table('candidate_payables')->where('id', 'payable-one')->value('status') === 'partially_funded', 'Application business completion confused zero and partial funding.');
     // Listener crash after its application commit redelivers the same delivery ID safely.
     $crash = true;
     Event::listen(PaymentObserved::class, static function (PaymentObserved $event) use (&$crash, $ledger, $customer): void {
@@ -188,6 +204,7 @@ try {
         check($observation !== null, 'Canonical refund observation was missing.');
         $deliver($observation);
     }
+    check(DB::table('candidate_payment_ledger_credit_notes')->where('status', 'pending_review')->count() === 1, 'Refund completion did not hand off one credit-note review.');
     check(DB::table('candidate_payment_ledger_entries')->where('kind', 'refund_completed')->count() === 1, 'Accepted-to-settled refund booked two credits.');
     // Full remaining refund uses one amount persisted before calling, stable on repeats.
     $remaining = $payments->refundableAmount($intent);
@@ -196,7 +213,7 @@ try {
     $writes = $http->writes();
     check($recipe('payments-refund.php')($owner, $intent, 'refund-remaining', $remaining)->id === $remainingRefund->id && $writes === $http->writes(), 'Full-remaining retry replaced its original financial intent.');
     // Signed duplicate/reordered event names are locators; canonical state still governs.
-    $raw = json_encode(['id' => 'evt-payments-qualified', 'name' => 'payment_intent.failed', 'version' => '2026-08-21', 'account_id' => 'account-synthetic-payments', 'data' => ['object' => ['id' => $intent->remote_id]]], JSON_THROW_ON_ERROR);
+    $raw = json_encode(['id' => 'evt-payments-qualified', 'name' => 'payment_intent.payment_failed', 'created_at' => '2026-11-11T12:00:00Z', 'version' => '2026-08-21', 'account_id' => 'account-synthetic-payments', 'data' => ['object' => ['id' => $intent->remote_id]]], JSON_THROW_ON_ERROR);
     $timestamp = (string) now()->getTimestampMs();
     $signature = hash_hmac('sha256', $timestamp.$raw, 'secret-synthetic-payments');
     $receipt = $recipe('payments-receipt.php')($raw, $timestamp, $signature);
@@ -212,8 +229,24 @@ try {
     }
     $lost = Operation::where('action_key', 'lost-create')->sole();
     $writes = $http->writes();
+    try {
+        $intentRecipe($owner, 'replace-lost', 'payable-replacement', '123', 'USD');
+        throw new RuntimeException('Unresolved creation allowed a replacement.');
+    } catch (ConflictException) {
+    }
+    check($lost->status === 'ambiguous' && $writes === $http->writes(), 'Unresolved original creation was replayed or replaced.');
+    $writes = $http->writes();
     $recovered = $recipe('payments-recovery.php')($owner, 'intent', $lost->id, 'int-2');
     check($recovered->remote_id === 'int-2' && $lost->fresh()->request_id === $lost->request_id && $writes === $http->writes(), 'Ambiguous create recovery changed identity or replayed.');
+    // Synthetic customer-present wallet methods exercise the public PHP seam, never real client availability.
+    foreach (['applepay', 'googlepay'] as $wallet) {
+        $http->methods['mtd-'.$wallet] = ['id' => 'mtd-'.$wallet, 'customer_id' => $customer->remote_id, 'status' => 'CREATED', 'type' => $wallet, 'updated_at' => $http->time()];
+        $walletIntent = $intentRecipe($owner, 'create-'.$wallet, 'order-'.$wallet, '200', 'USD');
+        $walletIntent = $recipe('payments-confirm.php')($owner, $walletIntent, 'confirm-'.$wallet, 'mtd-'.$wallet, 'customer');
+        check(! $walletIntent->paid() && $recipe('payments-browser.php')($owner, $walletIntent)->expose()['payment_intent_id'] === $walletIntent->remote_id, 'Wallet seam bypassed owned client bootstrap.');
+        $http->advanceIntent($walletIntent->remote_id, ['status' => 'CANCELLED']);
+        check(! $payments->continueIntent($walletIntent)->paid(), 'Unpaid cancelled wallet callback fulfilled a payable.');
+    }
     // Original provider is an application-owned route, even when this billable has a Payments customer.
     $route = static fn (string $provider) => match ($provider) {
         'stripe' => $owner->refund('pi_legacy', ['amount' => 100]), 'airwallex' => $remainingRefund, default => throw new RuntimeException('Unknown original provider.')
@@ -225,7 +258,7 @@ try {
             check(! str_contains((string) $stored, 'SYNTHETIC-PRIVATE'), 'A durable snapshot exposed browser secrets.');
         }
     }
-    $report['checks'] = ['cached_native_consumer', 'original_model_cashier_refund', 'prepared_configuration_repair', 'ephemeral_setup_and_intent_bootstrap', 'zero_no_charge', 'merchant_initiated_saved_card', 'synthetic_3ds_canonical_return', 'pending_capture_no_replay', 'partial_cumulative_capture_ledger', 'billing_hint_canonical_dedup', 'listener_redelivery', 'pending_partial_full_remaining_refund', 'accepted_settled_single_credit', 'signed_duplicate_reordered_receipt', 'ambiguous_create_read_only_recovery'];
+    $report['checks'] = ['cached_native_consumer', 'original_model_cashier_refund', 'prepared_configuration_repair', 'ephemeral_setup_and_intent_bootstrap', 'zero_no_charge', 'merchant_initiated_saved_card', 'customer_present_wallet_php_seams', 'refund_credit_note_review_handoff', 'synthetic_3ds_canonical_return', 'pending_capture_no_replay', 'partial_cumulative_capture_ledger', 'billing_hint_canonical_dedup', 'listener_redelivery', 'pending_partial_full_remaining_refund', 'accepted_settled_single_credit', 'signed_duplicate_reordered_receipt', 'ambiguous_create_read_only_recovery'];
     $report['limitations'] = ['Synthetic transport only; no account, browser, wallet, 3DS, settlement, target deployment or accounting policy qualification.', 'Billing hint is synthetic; exact installed Billing transaction reads are qualified by the separate subscriptions track.', 'Application payable remains partially funded; canonical paid() is not an order-total assertion.'];
     file_put_contents($options['evidence'], json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
     echo json_encode(['status' => 'passed', 'recipes' => count($report['recipes']), 'checks' => count($report['checks'])])."\n";

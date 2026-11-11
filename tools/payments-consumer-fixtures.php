@@ -34,7 +34,7 @@ final class PaymentsTransport implements ClientInterface
 
     public function time(): string
     {
-        return sprintf('2026-11-11T12:00:%02d.123456789Z', ++$this->version);
+        return gmdate('Y-m-d\TH:i:s', 1794398400 + ++$this->version).'.123456789Z';
     }
 
     public function advanceIntent(string $id, array $changes): void
@@ -88,6 +88,9 @@ final class PaymentsTransport implements ClientInterface
         }
         if ($method !== 'GET') {
             throw new RuntimeException('Unexpected synthetic HTTP method.');
+        }
+        if (in_array($path, ['/api/v1/pa/payment_consents', '/api/v1/pa/payment_methods'], true)) {
+            return $this->response(['items' => array_values(str_ends_with($path, 'payment_consents') ? $this->consents : $this->methods), 'has_more' => false]);
         }
         if ($path === '/api/v1/pa/refunds') {
             parse_str($request->getUri()->getQuery(), $query);
