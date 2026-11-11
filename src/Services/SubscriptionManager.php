@@ -131,6 +131,8 @@ class SubscriptionManager
                 || $current->status !== 'ACTIVE' || ($current->snapshot['collection_method'] ?? null) !== 'OUT_OF_BAND'
                 || isset($current->snapshot['payment_source_id']) || $current->cancel_at_period_end !== true
                 || ! is_string($original['ends_at'] ?? null)
+                || ! is_string($current->scheduled_ends_at)
+                || Timestamp::compare($current->scheduled_ends_at, now()->format('Y-m-d\TH:i:s.uP')) <= 0
                 || Timestamp::compare($original['ends_at'], now()->format('Y-m-d\TH:i:s.uP')) <= 0) {
                 throw new EvidenceException('Renewal restoration requires an owned saved finite ACTIVE OUT_OF_BAND schedule.');
             }
