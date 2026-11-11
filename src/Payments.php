@@ -12,6 +12,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Customers;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 
 /** Explicit provider-qualified entry point; the application authorizes the model first. */
 final readonly class Payments
@@ -112,6 +113,26 @@ final readonly class Payments
     public function recoverIntent(string $operationId, ?string $operatorKnownId = null): Intent
     {
         return app(Payments\Intents::class)->recover($this->requiredCustomer(), Operation::query()->findOrFail($operationId), $operatorKnownId);
+    }
+
+    public function refundIntent(Intent $intent, string $actionKey, mixed $amount, array $options = []): Refund
+    {
+        return app(Payments\Refunds::class)->create($this->requiredCustomer(), $intent, $actionKey, $amount, $options);
+    }
+
+    public function refundableAmount(Intent $intent): string
+    {
+        return app(Payments\Refunds::class)->refundableAmount($this->requiredCustomer(), $intent);
+    }
+
+    public function reconcileRefund(Refund $refund): Refund
+    {
+        return app(Payments\Refunds::class)->reconcile($this->requiredCustomer(), $refund);
+    }
+
+    public function recoverRefund(string $operationId, ?string $operatorKnownId = null): Refund
+    {
+        return app(Payments\Refunds::class)->recover($this->requiredCustomer(), Operation::query()->findOrFail($operationId), $operatorKnownId);
     }
 
     public function __serialize(): array
