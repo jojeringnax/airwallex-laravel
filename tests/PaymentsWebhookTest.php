@@ -388,7 +388,7 @@ class PaymentsWebhookTest extends TestCase
         $processes = [];
         try {
             foreach ([1, 2] as $index) {
-                $process = new Process([PHP_BINARY, __DIR__.'/Fixtures/payments-receipt-worker.php', $this->directory.'/db.sqlite', $this->directory.'/go', $fixture, $timestamp], dirname(__DIR__));
+                $process = new Process([PHP_BINARY, '-d', 'display_errors=stderr', __DIR__.'/Fixtures/payments-receipt-worker.php', $this->directory.'/db.sqlite', $this->directory.'/go', $fixture, $timestamp], dirname(__DIR__));
                 $process->setTimeout(15);
                 $process->start();
                 $processes[] = $process;
