@@ -39,6 +39,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
       - uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
@@ -70,6 +71,21 @@ jobs:
       - name: Prepare isolated MySQL consumer schema
         if: matrix.database == 'mysql'
         run: php -r '(new PDO("mysql:host=127.0.0.1;port=3306", "root", ""))->exec("CREATE DATABASE airwallex_test_consumer");'
+      - name: Select reviewed transaction SDK source for development archives
+        uses: actions/checkout@v4
+        with:
+          repository: jojeringnax/airwallex-php-sdk
+          ref: 4d24a1a0aa586e68edbceb7a07f00e6ebe5f7eac
+          path: .qualification-sdk
+      - name: Form explicit subscription qualification candidate
+        env:
+          TRANSACTIONS_COMMIT: d36702475e44a60179be0b70838378403d7f6f7d
+        run: |
+          git fetch origin "$TRANSACTIONS_COMMIT"
+          printf '%s\n' "Package PR head: $(git rev-parse HEAD)" "Invoice transaction prerequisite: $TRANSACTIONS_COMMIT"
+          if ! git merge-base --is-ancestor "$TRANSACTIONS_COMMIT" HEAD; then
+            git -c user.name='Qualification fixture' -c user.email='fixture@example.test' merge --no-ff --no-edit "$TRANSACTIONS_COMMIT"
+          fi
       - name: Qualify exact archive in a fresh native consumer
         env:
           LARAVEL_MAJOR: ${{ matrix.laravel }}
@@ -80,6 +96,9 @@ jobs:
           python3 tools/qualify-candidate.py \
             --candidate "$(git rev-parse HEAD)" \
             --composer "$RUNNER_TEMP/airwallex-composer.phar" \
+            --sdk-repo "$GITHUB_WORKSPACE/.qualification-sdk" \
+            --sdk-candidate 4d24a1a0aa586e68edbceb7a07f00e6ebe5f7eac \
+            --track subscriptions \
             --laravel "$LARAVEL_MAJOR" --database "$DATABASE" \
             --dependencies "$DEPENDENCIES" \
             --workspace "$RUNNER_TEMP/airwallex-workspace" \

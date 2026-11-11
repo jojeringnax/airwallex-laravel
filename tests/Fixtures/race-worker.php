@@ -88,6 +88,15 @@ try {
     }
     $operation = $manager->prepare($customer, $command, 'create', ['price' => 'price'], [], name: 'default');
     if (($argv[4] ?? '') === 'execute') {
+        // Finish both preparation transactions before racing the same durable claim.
+        fwrite(STDOUT, "PREPARED\n");
+        $deadline = microtime(true) + 10;
+        while (! file_exists($barrier.'.execute')) {
+            if (microtime(true) > $deadline) {
+                throw new RuntimeException('Execution barrier timeout.');
+            }
+            usleep(1000);
+        }
         file_put_contents($barrier.'.attempts', "ATTEMPT\n", FILE_APPEND | LOCK_EX);
         $manager->execute($operation, function () use ($barrier): array {
             file_put_contents($barrier.'.writes', "WRITE\n", FILE_APPEND | LOCK_EX);
