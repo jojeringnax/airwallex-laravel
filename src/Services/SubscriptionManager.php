@@ -30,7 +30,7 @@ use Throwable;
 
 class SubscriptionManager
 {
-    private const CHANGE_KINDS = ['subscription.quantity', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item', 'subscription.items', 'subscription.schedule_ending', 'subscription.cancel', 'subscription.payment_source'];
+    private const CHANGE_KINDS = ['subscription.quantity', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item', 'subscription.items', 'subscription.schedule_ending', 'subscription.restore_renewal', 'subscription.cancel', 'subscription.payment_source'];
 
     public function __construct(private readonly BillingContext $context, private readonly OperationManager $operations, private readonly SubscriptionSynchronizer $synchronizer, private readonly CustomerManager $customers) {}
 
@@ -115,6 +115,34 @@ class SubscriptionManager
     public function cancelAtPeriodEnd(Subscription $subscription, string $actionKey): Subscription
     {
         return $this->change($subscription, $actionKey, 'subscription.schedule_ending', [], fn () => ['cancel_at_period_end' => true]);
+    }
+
+    public function restoreRenewal(Subscription $subscription, string $actionKey, string $scheduleActionKey): Subscription
+    {
+        return $this->change($subscription, $actionKey, 'subscription.restore_renewal', ['schedule_action_key' => $scheduleActionKey], function (Subscription $current) use ($scheduleActionKey): array {
+            $schedule = ModelRegistry::query('operation')->where([
+                ...$this->context->attributes(), 'subscription_id' => $current->id,
+                'action_key' => $scheduleActionKey, 'kind' => 'subscription.schedule_ending', 'status' => 'succeeded',
+            ])->first();
+            $original = $schedule?->intent['original_bounds'] ?? null;
+            if (! is_array($original) || $schedule->remote_id !== $current->remote_id
+                || ($original['status'] ?? null) !== 'ACTIVE' || ($original['collection_method'] ?? null) !== 'OUT_OF_BAND'
+                || ($original['cancel_at_period_end'] ?? null) !== false || isset($original['payment_source_id'])
+                || $current->status !== 'ACTIVE' || ($current->snapshot['collection_method'] ?? null) !== 'OUT_OF_BAND'
+                || isset($current->snapshot['payment_source_id']) || $current->cancel_at_period_end !== true
+                || ! is_string($original['ends_at'] ?? null)
+                || Timestamp::compare($original['ends_at'], now()->format('Y-m-d\TH:i:s.uP')) <= 0) {
+                throw new EvidenceException('Renewal restoration requires an owned saved finite ACTIVE OUT_OF_BAND schedule.');
+            }
+            $latest = ModelRegistry::query('operation')->where('subscription_id', $current->id)
+                ->where('kind', 'subscription.schedule_ending')->where('status', '!=', 'failed')->orderByDesc('id')->first();
+            $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $current->customer_id)->where('name', $current->name)->first();
+            if ($latest?->id !== $schedule->id || $slot?->subscription_id !== $current->id) {
+                throw new ConflictException('The cancellation action is not the current owned subscription generation.');
+            }
+
+            return ['cancel_at_period_end' => false, 'ends_at' => $original['ends_at']];
+        });
     }
 
     public function cancelNow(Subscription $subscription, string $actionKey, string $prorationBehavior): Subscription
@@ -284,7 +312,11 @@ class SubscriptionManager
             $payload = $build($subscription);
             $this->managed($payload, ['request_id', 'billing_customer_id', 'id']);
             Routing::defaults($payload);
-            $operation = $this->operations->prepare($customer, $actionKey, $kind, $specification, ['payload' => $payload, 'remote_id' => $subscription->remote_id, 'routing' => Routing::defaults(), 'fingerprint' => $this->fingerprint($subscription), 'prior_item_ids' => $subscription->items()->pluck('remote_id')->all()], $subscription);
+            $intent = ['payload' => $payload, 'remote_id' => $subscription->remote_id, 'routing' => Routing::defaults(), 'fingerprint' => $this->fingerprint($subscription), 'prior_item_ids' => $subscription->items()->pluck('remote_id')->all()];
+            if ($kind === 'subscription.schedule_ending') {
+                $intent['original_bounds'] = array_intersect_key($subscription->snapshot, array_flip(['status', 'collection_method', 'cancel_at_period_end', 'starts_at', 'ends_at', 'duration', 'remaining_duration', 'payment_source_id', 'current_period_starts_at', 'current_period_ends_at']));
+            }
+            $operation = $this->operations->prepare($customer, $actionKey, $kind, $specification, $intent, $subscription);
         }
         if ($operation->status !== 'prepared') {
             return $this->recoverChange($subscription, $operation);
@@ -339,6 +371,24 @@ class SubscriptionManager
     {
         $payload = $operation->intent['payload'];
         $controlsConfirmed = $operation->status === 'acknowledged';
+        if ($operation->kind === 'subscription.restore_renewal') {
+            $snapshot = $subscription->snapshot;
+            if ($subscription->status !== 'ACTIVE' || ($snapshot['collection_method'] ?? null) !== 'OUT_OF_BAND'
+                || isset($snapshot['payment_source_id']) || ($snapshot['cancel_at_period_end'] ?? null) !== false
+                || ! is_string($snapshot['ends_at'] ?? null)
+                || Timestamp::compare($snapshot['ends_at'], $payload['ends_at']) !== 0) {
+                throw new EvidenceException('The original finite renewal bound is not yet canonically restored.');
+            }
+            DB::transaction(function () use ($subscription): void {
+                app(CommitGuard::class)->assertMayCommit();
+                $changed = ModelRegistry::query('subscription')->whereKey($subscription->id)->where('revision', $subscription->revision)
+                    ->update(['scheduled_ends_at' => null]);
+                if ($changed !== 1) {
+                    throw new ConflictException('Subscription changed during restoration confirmation.');
+                }
+                $subscription->scheduled_ends_at = null;
+            });
+        }
         if (! $controlsConfirmed && $operation->kind === 'subscription.cancel' && $subscription->status !== 'CANCELLED') {
             throw new EvidenceException('Immediate cancellation is not yet confirmed by the provider state.');
         }
