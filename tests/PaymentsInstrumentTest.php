@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Context;
 use Jojeringnax\AirwallexLaravel\Payments\Instruments;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
+use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Psr\Http\Client\ClientInterface;
@@ -49,7 +50,7 @@ class PaymentsInstrumentTest extends TestCase
 
     private function method(array $overrides = []): array
     {
-        return array_replace(['id' => 'mtd-one', 'customer_id' => 'cus-one', 'status' => 'CREATED', 'type' => 'card',
+        return array_replace(['id' => 'mtd-one', 'customer_id' => 'cus-one', 'status' => 'CREATED', 'type' => 'card', 'updated_at' => '2026-11-11T09:00:00Z',
             'card' => ['last4' => '0008', 'brand' => 'visa', 'expiry_month' => '12', 'expiry_year' => '2030']], $overrides);
     }
 
@@ -244,7 +245,12 @@ class PaymentsInstrumentTest extends TestCase
         $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $remote));
         app(Instruments::class)->complete($this->customer, 'cst-one');
         $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent(['status' => 'DISABLED', 'updated_at' => '2026-11-11T08:00:00Z'])));
-        self::assertSame('VERIFIED', app(Instruments::class)->complete($this->customer, 'cst-one')->status);
+        try {
+            app(Instruments::class)->complete($this->customer, 'cst-one');
+            self::fail('Stale consent supplied fresh eligibility proof.');
+        } catch (EvidenceException) {
+            self::assertSame('VERIFIED', $instrument->fresh()->status);
+        }
         $this->transport(function (RequestInterface $request) use ($instrument, $remote): ResponseInterface {
             if (str_contains($request->getUri()->getPath(), '/payment_consents/')) {
                 Instrument::query()->whereKey($instrument->id)->increment('revision');
@@ -311,6 +317,76 @@ class PaymentsInstrumentTest extends TestCase
         } catch (OwnershipException) {
             self::assertSame(2, Instrument::count());
         }
+    }
+
+    public function test_equal_consent_version_cannot_change_method_or_upgrade_merchant_eligibility_and_missing_version_fails(): void
+    {
+        $this->seedInstrument();
+        $remote = $this->consent(['next_triggered_by' => 'customer']);
+        $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $remote));
+        app(Instruments::class)->complete($this->customer, 'cst-one');
+        foreach ([$this->consent(), $this->consent(['next_triggered_by' => 'customer', 'payment_method' => ['id' => 'mtd-other', 'type' => 'card']])] as $changed) {
+            $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method(['id' => $changed['payment_method']['id']]) : $changed));
+            try {
+                app(Instruments::class)->verified($this->customer, 'cst-one');
+                self::fail('Equal-version eligibility changed.');
+            } catch (EvidenceException) {
+                self::assertSame('customer', Instrument::first()->next_triggered_by);
+                self::assertSame('mtd-one', Instrument::first()->method_id);
+            }
+        }
+        $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? array_diff_key($this->method(), ['updated_at' => true]) : $remote));
+        $this->expectException(EvidenceException::class);
+        app(Instruments::class)->complete($this->customer, 'cst-one');
+    }
+
+    public function test_fresh_method_disable_survives_stale_consent_and_older_method_cannot_restore_eligibility(): void
+    {
+        $instrument = $this->seedInstrument();
+        $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent()));
+        app(Instruments::class)->complete($this->customer, 'cst-one');
+        $disabled = $this->method(['status' => 'DISABLED', 'updated_at' => '2026-11-11T09:01:00Z']);
+        $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $disabled : $this->consent(['updated_at' => '2026-11-11T08:00:00Z'])));
+        try {
+            app(Instruments::class)->verified($this->customer, 'cst-one');
+            self::fail('Stale consent returned retained CREATED method eligibility.');
+        } catch (EvidenceException) {
+            self::assertSame('CREATED', $instrument->fresh()->method_status);
+            self::assertSame('DISABLED', MethodObservation::first()->status);
+        }
+        $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent()));
+        try {
+            app(Instruments::class)->verified($this->customer, 'cst-one');
+            self::fail('Discarded Consent proof erased independently observed Method disable.');
+        } catch (EvidenceException) {
+            self::assertSame('DISABLED', MethodObservation::first()->status);
+        }
+        $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $disabled : $this->consent()));
+        app(Instruments::class)->complete($this->customer, 'cst-one');
+        self::assertSame('DISABLED', $instrument->fresh()->method_status);
+        $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent()));
+        try {
+            app(Instruments::class)->verified($this->customer, 'cst-one');
+            self::fail('Older CREATED method overwrote known disable.');
+        } catch (EvidenceException) {
+            self::assertSame('DISABLED', $instrument->fresh()->method_status);
+        }
+    }
+
+    public function test_billing_source_bridge_requires_same_collector_account_even_when_opaque_method_id_matches(): void
+    {
+        $this->seedInstrument();
+        $billing = \Jojeringnax\AirwallexLaravel\Models\Customer::create(['environment' => 'sandbox', 'organization_id' => 'org-test', 'billable_type' => 'instrument_owner', 'billable_id' => 'one', 'remote_id' => 'billing-one']);
+        $this->transport(function (RequestInterface $request): ResponseInterface {
+            $path = $request->getUri()->getPath();
+            if (str_contains($path, '/billing/payment_sources/')) {
+                return FakeHttpClient::json(['id' => 'source-one', 'billing_customer_id' => 'billing-one', 'linked_payment_account_id' => 'collector-test', 'external_id' => 'mtd-one', 'created_at' => '2026-11-01T00:00:00Z', 'updated_at' => '2026-11-11T09:00:00Z']);
+            }
+
+            return FakeHttpClient::json(str_contains($path, '/payment_methods/') ? $this->method() : $this->consent());
+        });
+        $this->expectException(OwnershipException::class);
+        app(Instruments::class)->billingSource($this->customer, 'cst-one', $billing, 'source-one');
     }
 
     public function test_failed_expired_or_customer_triggered_consents_are_not_saved_charge_eligibility(): void

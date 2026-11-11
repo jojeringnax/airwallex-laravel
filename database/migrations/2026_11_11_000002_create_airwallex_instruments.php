@@ -11,6 +11,23 @@ return new class extends Migration
 {
     public function up(): void
     {
+        Schema::create('airwallex_payment_method_observations', function (Blueprint $table): void {
+            $this->storage($table);
+            $table->ulid('id')->primary();
+            $environment = $table->string('environment', 10);
+            if (DB::connection()->getDriverName() === 'mysql') {
+                $environment->charset('ascii')->collation('ascii_bin');
+            }
+            $table->string('account_id');
+            $table->ulid('customer_id');
+            $table->string('remote_id');
+            $table->string('status');
+            $table->string('method_type');
+            $table->text('provider_updated_at');
+            $table->timestamps(6);
+            $table->unique(['environment', 'account_id', 'remote_id'], 'aw_pa_method_observation_remote');
+            $table->foreign(['customer_id', 'environment', 'account_id'], 'aw_pa_method_observation_owner')->references(['id', 'environment', 'account_id'])->on('airwallex_payment_customers')->restrictOnDelete();
+        });
         Schema::create('airwallex_payment_instruments', function (Blueprint $table): void {
             $this->storage($table);
             $table->ulid('id')->primary();
@@ -58,5 +75,6 @@ return new class extends Migration
     {
         Schema::dropIfExists('airwallex_payment_instrument_defaults');
         Schema::dropIfExists('airwallex_payment_instruments');
+        Schema::dropIfExists('airwallex_payment_method_observations');
     }
 };
