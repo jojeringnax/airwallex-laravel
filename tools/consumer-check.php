@@ -9,6 +9,8 @@ use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\AirwallexServiceProvider;
@@ -16,6 +18,7 @@ use Jojeringnax\AirwallexLaravel\Contracts\SubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\Models\Checkout;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
+use Jojeringnax\AirwallexLaravel\Services\ReceiptManager;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use RuntimeException;
@@ -58,7 +61,7 @@ try {
         $routes->refreshNameLookups();
         check($routes->getByName('airwallex.webhook') !== null, 'Installed webhook route was not registered.');
         $commands = $app->make(Kernel::class)->all();
-        foreach (['airwallex:reconcile', 'airwallex:operations', 'airwallex:receipts', 'airwallex:events', 'airwallex:prune-receipts'] as $command) {
+        foreach (['airwallex:reconcile', 'airwallex:operations', 'airwallex:receipts', 'airwallex:events', 'airwallex:prune-receipts', 'airwallex:sweep'] as $command) {
             check(isset($commands[$command]), 'Installed recovery command was not registered.');
         }
         check(! $app->resolved(Client::class), 'Route/command registration eagerly resolved SDK credentials.');
@@ -67,7 +70,7 @@ try {
     if ($options['mode'] === 'boot') {
         check(Schema::getTables($app->make('db')->getDriverName() === 'mysql' ? $app->make('db')->connection()->getDatabaseName() : null) === [], 'Native consumer requires an empty disposable database.');
     }
-    $tables = ['customers', 'subscriptions', 'subscription_items', 'subscription_slots', 'operations', 'checkouts', 'webhook_receipts', 'domain_events'];
+    $tables = ['customers', 'subscriptions', 'subscription_items', 'subscription_slots', 'operations', 'checkouts', 'webhook_receipts', 'domain_events', 'sweeps'];
     if (in_array($options['mode'], ['migrated', 'rolled-back', 'recipes'], true)) {
         foreach ($tables as $table) {
             check(Schema::hasTable('airwallex_'.$table) === ($options['mode'] !== 'rolled-back'), 'Package migration table state mismatch: '.$table);
@@ -243,6 +246,53 @@ try {
             $executed['recover-operation.php']['ambiguous_update_canonical_get_without_mutation'] = true;
         }
         check(array_diff(array_keys($recipes), array_keys($executed)) === [], 'Not every baseline recipe executed.');
+
+        // Selected deterministic profile: package database jobs/cache/locks, application sync default.
+        Schema::create('candidate_jobs', static function (Blueprint $table): void {
+            $table->bigIncrements('id');
+            $table->string('queue')->index();
+            $table->longText('payload');
+            $table->unsignedTinyInteger('attempts');
+            $table->unsignedInteger('reserved_at')->nullable();
+            $table->unsignedInteger('available_at');
+            $table->unsignedInteger('created_at');
+        });
+        Schema::create('candidate_cache', static function (Blueprint $table): void {
+            $table->string('key')->primary();
+            $table->mediumText('value');
+            $table->integer('expiration')->index();
+        });
+        Schema::create('candidate_cache_locks', static function (Blueprint $table): void {
+            $table->string('key')->primary();
+            $table->string('owner');
+            $table->integer('expiration')->index();
+        });
+        config([
+            'queue.default' => 'sync',
+            'queue.connections.billing-proof' => ['driver' => 'database', 'connection' => config('database.default'), 'table' => 'candidate_jobs', 'queue' => 'default', 'retry_after' => 300, 'after_commit' => false],
+            'cache.stores.billing-proof' => ['driver' => 'database', 'connection' => config('database.default'), 'table' => 'candidate_cache', 'lock_connection' => config('database.default'), 'lock_table' => 'candidate_cache_locks'],
+            'airwallex.cache_store' => 'billing-proof',
+            'airwallex.webhook.secret' => 'synthetic-installed-secret',
+            'airwallex.webhook.queue_connection' => 'billing-proof', 'airwallex.webhook.queue' => 'billing-receipts',
+            'airwallex.events.queue_connection' => 'billing-proof', 'airwallex.events.queue' => 'billing-events',
+        ]);
+        $lock = $app->make('cache')->store('billing-proof')->lock('installed-billing-schedule', 30);
+        $competingLock = $app->make('cache')->store('billing-proof')->lock('installed-billing-schedule', 30);
+        check($lock->get() && ! $competingLock->get() && $lock->release() && $competingLock->get() && $competingLock->release(), 'Installed database lock ownership failed.');
+        $http = $bind(Fixtures::observation($import, [Fixtures::item('item-import', 'sub-import', '1.000000000000000000001')]));
+        $body = json_encode(['id' => 'installed-queue-event', 'name' => 'subscription.active', 'org_id' => 'org-synthetic', 'version' => '2026-08-21', 'created_at' => '2026-11-10T12:00:00Z', 'data' => ['object' => $import]], JSON_THROW_ON_ERROR);
+        $timestamp = (string) now()->getTimestampMs();
+        $receipt = app(ReceiptManager::class)->accept($body, $timestamp, hash_hmac('sha256', $timestamp.$body, 'synthetic-installed-secret'));
+        check(app(ReceiptManager::class)->dispatch($receipt), 'Installed receipt enqueue failed.');
+        check($http->requests === 0 && $receipt->fresh()->status === 'pending' && DB::table('candidate_jobs')->where('queue', 'billing-receipts')->count() === 1, 'Package connection did not isolate the application sync default.');
+        foreach (['billing-receipts', 'billing-events'] as $queue) {
+            $app->forgetScopedInstances();
+            check(Artisan::call('queue:work', ['connection' => 'billing-proof', '--queue' => $queue, '--stop-when-empty' => true, '--sleep' => 0, '--tries' => 1, '--timeout' => 0]) === 0, 'Installed database worker failed.');
+        }
+        check($receipt->fresh()->status === 'processed' && DB::table('candidate_jobs')->count() === 0, 'Installed queued receipt did not converge.');
+        $http->assertConsumed();
+        $report['queue_profile'] = ['application_default' => 'sync', 'billing_connection' => 'billing-proof', 'queue_driver' => 'database', 'cache_driver' => 'database', 'lock_driver' => 'database', 'topology' => 'one disposable qualified database shared by HTTP and worker scopes', 'actual_queue_workers' => ['billing-receipts', 'billing-events'], 'synthetic_sdk_requests' => $http->requests];
+        $report['checks'][] = 'explicit_database_jobs_cache_locks_and_worker_scope_restart';
         $report['recipes'] = $executed;
         $report['checks'][] = 'installed_closures_executed_with_real_sdk_deny_network_transport';
         Carbon::setTestNow();
