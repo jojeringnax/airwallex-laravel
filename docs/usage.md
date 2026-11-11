@@ -137,3 +137,28 @@ Authorize the local billable before retrieving or delivering document links, inc
 Absent/null document links return null, as is common for drafts; present links are returned as observed independently of invoice status. SDK provider errors retain their original classification, including 404; handle them without treating absence as permission to recreate an invoice. The SDK's observed `pdf_url`/`hosted_url` values carry no package renewal or expiry guarantee. There is no PDF rendering/downloading, invoice email or regenerated-link promise. Default JSON/debug output excludes URLs/customer profiles; explicit `toArray()` exposes a sanitized provider snapshot for authorized server-side use. Treat that explicit data and links as sensitive. The [invoice recipe](../examples/invoices.php) returns nullable links explicitly.
 
 For timeout recovery, use [the operation recipe](../examples/recover-operation.php) in an authorized operator flow and the [commands/runbooks](operations.md). Applications should observe package events after committed changes and deduplicate their stable outbox IDs; events describe provider observations rather than automatic application entitlements.
+
+## Cashier coexistence
+
+Keep Cashier's `Billable` on the original model. Authorize it in the application and create a provider-qualified object; never import both Billable traits or alias only the public method names, because helper dispatch can still cross providers.
+
+```php
+$billing = new \Jojeringnax\AirwallexLaravel\AirwallexBillable($authorizedCustomer);
+$customer = $billing->createOrGetAirwallexCustomer('customer-command', ['name' => 'Example']);
+$subscription = $billing->newSubscription('membership', $airwallexPriceId)
+    ->create('subscription-command', ['collection_method' => 'OUT_OF_BAND']);
+$billing->subscription('membership'); // Airwallex current, otherwise history.
+$billing->invoices();                // Owned Airwallex invoices.
+$authorizedCustomer->subscription('membership'); // Existing Stripe contract.
+```
+
+The wrapper preserves the original morph identity, so use the same stable morph map and configured Airwallex model subclasses as the standalone trait. Identical subscription names can coexist across providers; Airwallex's own context/name reservation still prevents duplicate generations. Provider IDs, setup methods and remote source/consent identities never transfer merely because the local billable is shared. The application owns its explicit `billingProvider` routing, historical reads/refunds and access combination; do not choose a provider from an untrusted request parameter.
+
+The real Cashier fixture is an optional development dependency, isolated from package runtime. Install `tests/Consumers/coexistence/composer.json` into a disposable directory and run:
+
+```sh
+AIRWALLEX_CASHIER_AUTOLOAD=/absolute/fixture/vendor/autoload.php \
+  vendor/bin/phpunit --bootstrap tests/Consumers/coexistence/bootstrap.php tests/CashierCoexistenceTest.php
+```
+
+For installed-candidate qualification, also set `AIRWALLEX_PACKAGE_AUTOLOAD=/absolute/consumer/vendor/autoload.php` after installing the exact package archive and selected SDK revision in the isolated consumer. That path selects the installed package code; it does not install a sibling path repository. Preserve the consumer lock and exact archive/SDK references with the evidence. The three checks exercise real Cashier relations/builders/legacy invoice reads and cancellation, Airwallex current/history/import/create/setup/invoice/cancel/recovery, morph maps, configured subclasses and unsaved-model refusal. Both transports deny unexpected requests and use synthetic responses only. This fixture is shared by the subscription and Payments adoption qualification tracks; each must verify its own provider context and financial event boundary.
