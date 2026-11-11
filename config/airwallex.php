@@ -17,6 +17,13 @@ return [
     'read_retry_attempts' => 1,
     'http_timeout' => 30,
     'http_connect_timeout' => 10,
+    'payments' => [
+        'environment' => env('AIRWALLEX_PAYMENTS_ENVIRONMENT', 'sandbox'),
+        'account_id' => env('AIRWALLEX_PAYMENTS_ACCOUNT_ID'),
+        'client_id' => env('AIRWALLEX_PAYMENTS_CLIENT_ID'),
+        'api_key' => env('AIRWALLEX_PAYMENTS_API_KEY'),
+        'cache_store' => env('AIRWALLEX_PAYMENTS_CACHE_STORE'),
+    ],
     'models' => [
         'customer' => Models\Customer::class,
         'subscription' => Models\Subscription::class,
