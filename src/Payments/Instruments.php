@@ -96,6 +96,7 @@ class Instruments
     /** Strict saved-card eligibility for merchant-initiated unscheduled charges. */
     public function verified(Customer $customer, string $consentId): Instrument
     {
+        $customer = $this->customer($customer, enabled: true);
         $instrument = $this->complete($customer, $consentId);
         $this->assertUsable($instrument);
         if ($instrument->next_triggered_by !== 'merchant' || $instrument->merchant_trigger_reason !== 'unscheduled') {
@@ -108,7 +109,7 @@ class Instruments
     /** Called under the charge reservation's owning-Customer lock; performs no HTTP. */
     public function assertUsableReservation(Customer $customer, string $consentId): void
     {
-        $customer = $this->customer($customer);
+        $customer = $this->customer($customer, enabled: true);
         $instrument = $this->local($customer, $consentId);
         $this->assertUsable($instrument);
         if ($instrument->next_triggered_by !== 'merchant' || $instrument->merchant_trigger_reason !== 'unscheduled') {
@@ -125,7 +126,7 @@ class Instruments
     /** @internal Called under the common Customer lock; no HTTP or Consent eligibility shortcut. */
     public function assertMethodReservation(Customer $customer, string $methodId): void
     {
-        $customer = $this->customer($customer);
+        $customer = $this->customer($customer, enabled: true);
         $method = MethodObservation::query()->where([...$this->context->attributes(), 'remote_id' => $methodId])->first();
         if ($method === null || $method->customer_id !== $customer->id) {
             throw new OwnershipException('Owned canonical Payment Method proof is unavailable.');
@@ -204,14 +205,14 @@ class Instruments
 
     public function setDefault(Customer $customer, ?Instrument $instrument): void
     {
-        $customer = $this->customer($customer);
+        $customer = $this->customer($customer, enabled: true);
         if ($instrument !== null) {
             $this->context->assertModel($instrument);
             $instrument = $this->complete($customer, $instrument->remote_id);
             $this->assertUsable($instrument);
         }
         DB::transaction(function () use ($customer, $instrument): void {
-            $this->lockCustomer($customer);
+            $this->lockCustomer($customer, enabled: true);
             if ($instrument !== null) {
                 $current = $this->local($customer, $instrument->remote_id);
                 $this->assertUsable($current);
@@ -222,7 +223,7 @@ class Instruments
 
     public function default(Customer $customer): ?Instrument
     {
-        $customer = $this->customer($customer);
+        $customer = $this->customer($customer, enabled: true);
         $id = DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->value('instrument_id');
         if ($id === null) {
             return null;
@@ -288,7 +289,7 @@ class Instruments
         }
         if ($action === 'disable') {
             DB::transaction(function () use ($customer, $instrument): void {
-                $this->lockCustomer($customer);
+                $this->lockCustomer($customer, enabled: true);
                 Instrument::query()->whereKey($instrument->id)->whereNull('revoked_at')->update(['revoked_at' => now()->utc()]);
                 DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->where('instrument_id', $instrument->id)->update(['instrument_id' => null]);
             });
@@ -449,24 +450,24 @@ class Instruments
         }
     }
 
-    private function customer(Customer $customer): Customer
+    private function customer(Customer $customer, bool $enabled = false): Customer
     {
         $current = $this->customers->current($customer);
-        if ($current->remote_id === null || $current->disabled_at !== null) {
-            throw new ConflictException('An enabled mapped Payments customer is required.');
+        if ($current->remote_id === null || ($enabled && $current->disabled_at !== null)) {
+            throw new ConflictException('A mapped Payments customer with the required local eligibility is required.');
         }
 
         return $current;
     }
 
-    private function lockCustomer(Customer $customer): void
+    private function lockCustomer(Customer $customer, bool $enabled = false): void
     {
         app(CommitGuard::class)->assertMayCommit();
         $query = Customer::query()->whereKey($customer->id);
         $query->lockForUpdate();
         $current = $query->firstOrFail();
         $this->context->assertModel($current);
-        if ($current->disabled_at !== null) {
+        if ($enabled && $current->disabled_at !== null) {
             throw new ConflictException('Payments customer was offboarded during the operation.');
         }
     }
