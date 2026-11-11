@@ -22,11 +22,11 @@ class Operations
 {
     public function __construct(private readonly Context $context) {}
 
-    public function prepare(Customer $customer, string $key, string $kind, array $intent, ?string $target = null, ?string $lock = null): Operation
+    public function prepare(Customer $customer, string $key, string $kind, array $intent, ?string $target = null, ?string $lock = null, ?array $specification = null): Operation
     {
         $this->context->assertModel($customer);
         self::validateKey($key);
-        $hash = hash('sha256', CanonicalJson::encode([$customer->id, $kind, $target, $intent]));
+        $hash = hash('sha256', CanonicalJson::encode([$customer->id, $kind, $target, $specification ?? $intent]));
         try {
             return DB::transaction(function () use ($customer, $key, $kind, $intent, $target, $lock, $hash): Operation {
                 app(CommitGuard::class)->assertMayCommit();
@@ -61,12 +61,23 @@ class Operations
     }
 
     /** @param Closure():array $write @param Closure(array,Operation):mixed $confirm */
-    public function execute(Operation $operation, Closure $write, Closure $confirm): mixed
+    public function execute(Operation $operation, Closure $write, Closure $confirm, ?Closure $beforeClaim = null): mixed
     {
         $this->context->assertModel($operation);
-        if (Operation::query()->whereKey($operation->id)->where('status', 'prepared')->update(['status' => 'in_flight']) !== 1) {
-            throw new AmbiguousOperationException($operation->id);
-        }
+        DB::transaction(function () use ($operation, $beforeClaim): void {
+            app(CommitGuard::class)->assertMayCommit();
+            $query = Customer::query()->whereKey($operation->customer_id);
+            $query->lockForUpdate();
+            $customer = $query->firstOrFail();
+            $this->context->assertModel($customer);
+            if ($customer->disabled_at !== null) {
+                throw new ConflictException('Offboarded Payments customer cannot start a new mutation.');
+            }
+            $beforeClaim?->__invoke();
+            if (Operation::query()->whereKey($operation->id)->where('status', 'prepared')->update(['status' => 'in_flight']) !== 1) {
+                throw new AmbiguousOperationException($operation->id);
+            }
+        });
         $responded = false;
         try {
             $remote = $write();
@@ -80,7 +91,9 @@ class Operations
                 throw new EvidenceException('Payments mutation response contradicts the original target.');
             }
             $result = $confirm($remote, $operation);
-            $this->succeed($operation);
+            if ($operation->fresh()->status !== 'acknowledged') {
+                $this->succeed($operation);
+            }
 
             return $result;
         } catch (Throwable $exception) {
@@ -112,5 +125,12 @@ class Operations
         if ($key === '' || strlen($key) > 255) {
             throw new ConflictException('Payments action key must be a nonempty bounded string.');
         }
+    }
+
+    /** No provider mutation has begun; a failed local precondition can release its hold. */
+    public function rejectPrepared(Operation $operation): void
+    {
+        $this->context->assertModel($operation);
+        Operation::query()->whereKey($operation->id)->where('status', 'prepared')->update(['status' => 'failed', 'lock_key' => null, 'error_code' => 'precondition_failed']);
     }
 }

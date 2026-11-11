@@ -88,6 +88,26 @@ class Instruments
         }
     }
 
+    /** @internal Retain canonical Method proof for an authorized on-session action. */
+    public function observeMethod(Customer $customer, string $methodId): void
+    {
+        $this->method($this->customer($customer), $methodId);
+    }
+
+    /** @internal Called under the common Customer lock; no HTTP or Consent eligibility shortcut. */
+    public function assertMethodReservation(Customer $customer, string $methodId): void
+    {
+        $customer = $this->customer($customer);
+        $method = MethodObservation::query()->where([...$this->context->attributes(), 'remote_id' => $methodId])->first();
+        if ($method === null || $method->customer_id !== $customer->id) {
+            throw new OwnershipException('Owned canonical Payment Method proof is unavailable.');
+        }
+        $this->context->assertModel($method);
+        if ($method->status !== 'CREATED' || ! in_array($method->method_type, ['card', 'applepay', 'googlepay'], true)) {
+            throw new EvidenceException('Retained Payment Method proof does not allow this on-session charge.');
+        }
+    }
+
     /** Explicitly adopt existing same-customer consents after all list pages succeed. */
     public function all(Customer $customer): Collection
     {
