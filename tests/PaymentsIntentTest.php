@@ -125,6 +125,21 @@ class PaymentsIntentTest extends TestCase
         $this->payments->createIntent('float', 'another-order', 12.34, 'EUR');
     }
 
+    public function test_conflicting_sle_minor_unit_reference_refuses_before_any_http_or_command(): void
+    {
+        foreach ([fn () => $this->payments->createIntentMinor('sle-minor', 'sle-order', '100', 'SLE'),
+            fn () => $this->payments->createIntent('sle-major', 'sle-order-major', '1.00', 'SLE')] as $action) {
+            try {
+                $action();
+                self::fail('Conflicting currency reference silently selected an exponent.');
+            } catch (EvidenceException) {
+                self::assertSame([], $this->requests);
+                self::assertSame(0, Operation::count());
+                self::assertSame(0, Intent::count());
+            }
+        }
+    }
+
     public function test_browser_bootstrap_and_callback_cannot_mark_payment_captured_or_leak_secret(): void
     {
         $intent = $this->payments->createIntent('create', 'order', '100', 'USD');

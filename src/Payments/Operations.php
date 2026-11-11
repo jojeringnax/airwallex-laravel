@@ -64,6 +64,9 @@ class Operations
     public function execute(Operation $operation, Closure $write, Closure $confirm, ?Closure $beforeClaim = null): mixed
     {
         $this->context->assertModel($operation);
+        // SDK construction validates local configuration without authentication or HTTP.
+        // A local setup failure therefore leaves the original command safely prepared.
+        app(Client::class);
         DB::transaction(function () use ($operation, $beforeClaim): void {
             app(CommitGuard::class)->assertMayCommit();
             $query = Customer::query()->whereKey($operation->customer_id);

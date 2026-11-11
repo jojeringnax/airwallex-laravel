@@ -79,6 +79,9 @@ final class Amount
 
     private static function exponent(string $currency): int
     {
+        if ($currency === 'SLE') {
+            throw new EvidenceException('SLE precision conflicts between provider and ISO references; conversion is unavailable pending clarification.');
+        }
         $values = json_decode(file_get_contents(__DIR__.'/../../resources/currency-exponents.json'), true, flags: JSON_THROW_ON_ERROR);
         if (! isset($values[$currency]) || ! is_int($values[$currency])) {
             throw new EvidenceException('Currency precision is not in the verified conversion reference.');

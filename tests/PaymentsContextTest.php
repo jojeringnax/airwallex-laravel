@@ -10,6 +10,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
+use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Payments;
@@ -160,6 +161,33 @@ class PaymentsContextTest extends TestCase
         self::assertSame('linked', $payments->customer()->remote_id);
         $this->expectException(ConflictException::class);
         $payments->createCustomer('');
+    }
+
+    public function test_missing_local_sdk_configuration_keeps_the_original_command_prepared_until_repair(): void
+    {
+        $payments = Payments::for(PaymentsOwner::create(['id' => 'owner-one']));
+        $http = $this->transport(function (): ResponseInterface {
+            $operation = Operation::firstOrFail();
+
+            return FakeHttpClient::json(['id' => 'customer-after-repair', ...$operation->intent, 'request_id' => $operation->request_id]);
+        });
+        config(['airwallex.payments.api_key' => null]);
+        try {
+            $payments->createCustomer('repair-original-command');
+            self::fail('Missing local SDK credentials reached the mutation claim.');
+        } catch (ConfigurationException) {
+            $operation = Operation::firstOrFail();
+            self::assertSame('prepared', $operation->status);
+            self::assertNotNull($operation->lock_key);
+            self::assertSame([], $http->requests);
+        }
+        $requestId = $operation->request_id;
+        config(['airwallex.payments.api_key' => 'payments-key']);
+        self::assertSame('customer-after-repair', $payments->createCustomer('repair-original-command')->remote_id);
+        self::assertSame($requestId, $operation->fresh()->request_id);
+        self::assertSame('succeeded', $operation->fresh()->status);
+        self::assertCount(1, Operation::all());
+        self::assertCount(1, array_filter($http->requests, fn (RequestInterface $request) => $request->getMethod() === 'POST' && str_contains($request->getUri()->getPath(), '/pa/customers/create')));
     }
 
     private function transport(Closure $reply): object
