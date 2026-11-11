@@ -136,18 +136,30 @@ class ConcurrencyTest extends TestCase
             } while (microtime(true) < $deadline);
             self::assertSame(2, $ready, implode('\n', array_map(fn (Process $process) => $process->getErrorOutput().$process->getOutput(), $processes)));
             touch($barrier);
+            if ($execute) {
+                $deadline = microtime(true) + 5;
+                do {
+                    $prepared = count(array_filter($processes, fn (Process $process) => str_contains($process->getOutput(), 'PREPARED')));
+                    if ($prepared === 2) {
+                        break;
+                    }
+                    usleep(1000);
+                } while (microtime(true) < $deadline);
+                self::assertSame(2, $prepared, implode('\n', array_map(fn (Process $process) => $process->getErrorOutput().$process->getOutput(), $processes)));
+                touch($barrier.'.execute');
+            }
             $results = [];
             foreach ($processes as $process) {
                 $process->wait();
                 self::assertTrue($process->isSuccessful(), $process->getErrorOutput());
-                $results[] = json_decode(trim(str_replace("READY\n", '', $process->getOutput())), true, flags: JSON_THROW_ON_ERROR);
+                $results[] = json_decode(trim(str_replace(["READY\n", "PREPARED\n"], '', $process->getOutput())), true, flags: JSON_THROW_ON_ERROR);
             }
             self::assertSame($results[0]['customer'], $results[1]['customer']);
             self::assertSame(1, Customer::count());
             self::assertSame(1, Operation::count() + Subscription::count());
             self::assertSame(1, SubscriptionSlot::count());
             $successes = array_filter($results, fn (array $result) => isset($result['operation']) || isset($result['subscription']));
-            self::assertGreaterThanOrEqual(1, count($successes));
+            self::assertGreaterThanOrEqual(1, count($successes), json_encode($results, JSON_THROW_ON_ERROR));
             if ($sameCommand && ! $execute) {
                 $customer = Customer::first();
                 $recovered = app(OperationManager::class)->prepare($customer, 'command-a', 'create', ['price' => 'price'], [], name: 'default');
