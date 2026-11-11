@@ -130,6 +130,10 @@ class PaymentsRefundTest extends TestCase
         self::assertSame('30.00', $first->amount);
         self::assertSame('RECEIVED', $first->status);
         self::assertFalse($first->completed());
+        $write = array_values(array_filter($this->requests, fn (RequestInterface $request) => str_ends_with($request->getUri()->getPath(), '/refunds/create')))[0];
+        self::assertStringContainsString('"amount":30.00', (string) $write->getBody());
+        self::assertStringContainsString('"payment_intent_id":"intent-owned"', (string) $write->getBody());
+        self::assertStringContainsString(Operation::findOrFail($first->operation_id)->request_id, (string) $write->getBody());
         self::assertSame('70.00', $this->payments->refundableAmount($this->intent));
         $this->nextStatus = 'ACCEPTED';
         $fullAmount = $this->payments->refundableAmount($this->intent);
@@ -192,6 +196,13 @@ class PaymentsRefundTest extends TestCase
         self::assertSame(1, $this->writes());
         $operation = Operation::where('action_key', 'unknown')->firstOrFail();
         self::assertNull($operation->remote_id);
+        try {
+            $this->payments->refundIntent($this->intent, 'replacement-key-is-not-recovery', '20');
+            self::fail('A new command bypassed the unknown original refund.');
+        } catch (ConflictException) {
+            self::assertSame(1, $this->writes());
+            self::assertSame(1, Refund::count());
+        }
         $refund = $this->payments->recoverRefund($operation->id, 'refund-1');
         self::assertSame('refund-1', $refund->remote_id);
         self::assertSame('RECEIVED', $refund->status);
