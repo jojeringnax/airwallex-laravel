@@ -112,6 +112,29 @@ class SubscriptionManager
         });
     }
 
+    /** @internal Execute a previously authorized due plan through the ordinary financial mutex and recovery. */
+    public function applyTransition(Subscription $subscription, string $actionKey, array $items, array $options, string $expectedShape, string $expiresAt): Subscription
+    {
+        return $this->change($subscription, $actionKey, 'subscription.items', ['items' => $items, 'options' => $options, 'transition_shape' => $expectedShape, 'expires_at' => $expiresAt], function (Subscription $current) use ($items, $options, $expectedShape, $expiresAt): array {
+            if ($current->status !== 'ACTIVE' || SubscriptionTransitionManager::shape($current) !== $expectedShape
+                || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $expiresAt) > 0) {
+                throw new EvidenceException('Transition window, source state or expected financial shape no longer matches.');
+            }
+            $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $current->customer_id)->where('name', $current->name)->first();
+            if ($slot?->subscription_id !== $current->id) {
+                throw new ConflictException('A historic subscription generation cannot execute a transition.');
+            }
+            $this->mutableItems($current);
+            foreach ($items as $item) {
+                if (is_array($item) && isset($item['id']) && is_string($item['id'])) {
+                    $this->item($current, $item['id']);
+                }
+            }
+
+            return $this->itemPayload($items, $options);
+        });
+    }
+
     public function cancelAtPeriodEnd(Subscription $subscription, string $actionKey): Subscription
     {
         return $this->change($subscription, $actionKey, 'subscription.schedule_ending', [], fn () => ['cancel_at_period_end' => true]);
