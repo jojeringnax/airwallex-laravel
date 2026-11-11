@@ -12,6 +12,7 @@ use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Jobs\DispatchDomainEvent;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\DomainEvent;
+use Jojeringnax\AirwallexLaravel\Support\QueueRouting;
 use Throwable;
 
 class Outbox
@@ -34,9 +35,12 @@ class Outbox
         $kick = function () use ($event): void {
             try {
                 $job = new DispatchDomainEvent($event->id, $this->context->environment, $this->context->organizationId);
-                $queue = config('airwallex.events.queue');
-                if (is_string($queue) && $queue !== '') {
-                    $job->onQueue($queue);
+                $routing = QueueRouting::for('events');
+                if ($routing['queue'] !== null) {
+                    $job->onQueue($routing['queue']);
+                }
+                if ($routing['connection'] !== null) {
+                    $job->onConnection($routing['connection']);
                 }
                 app(Dispatcher::class)->dispatch($job);
             } catch (Throwable) {
