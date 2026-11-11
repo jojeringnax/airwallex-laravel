@@ -21,6 +21,19 @@ class PaymentsServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(Context::class, fn () => new Context($this->setting('environment'), $this->setting('account_id')));
+        $registryClass = 'Jojeringnax\\AirwallexLaravel\\Services\\SweepRegistry';
+        if (class_exists($registryClass)) {
+            $this->app->extend($registryClass, function ($registry) {
+                $account = config('airwallex.payments.account_id');
+                if (is_string($account) && $account !== '') {
+                    foreach (app(Recovery::class)->sweepFamilies() as $family) {
+                        $registry->register($family);
+                    }
+                }
+
+                return $registry;
+            });
+        }
         $this->app->scoped(Client::class, function (Application $app): Client {
             $context = $app->make(Context::class);
             $attempts = config('airwallex.read_retry_attempts');
@@ -50,5 +63,13 @@ class PaymentsServiceProvider extends ServiceProvider
         }
 
         return $value;
+    }
+
+    public function boot(): void
+    {
+        $this->loadRoutesFrom(__DIR__.'/../../routes/payments.php');
+        if ($this->app->runningInConsole()) {
+            $this->commands([RecoveryCommand::class]);
+        }
     }
 }

@@ -22,12 +22,19 @@ class Observations
         if (DB::transactionLevel() < 1) {
             throw new ConflictException('Payments observations must commit with their canonical projection.');
         }
-        $allowed = ['remote_id', 'status', 'amount', 'currency', 'captured_amount', 'payment_intent_id', 'financial_identity'];
+        $allowed = ['remote_id', 'status', 'amount', 'currency', 'captured_amount', 'payment_intent_id', 'financial_identity', 'method_status', 'payment_method_id'];
         if (array_diff(array_keys($payload), $allowed) !== [] || array_filter($payload, fn ($value) => $value !== null && ! is_string($value)) !== []) {
             throw new ConflictException('Payments observation payload must contain safe financial classifications.');
         }
         $identity = [...$this->context->attributes(), 'observation_key' => hash('sha256', CanonicalJson::encode([$resource->getTable(), $resource->id, $payload]))];
 
-        return Observation::query()->firstOrCreate($identity, ['resource_type' => $resource->getTable(), 'resource_id' => $resource->id, 'payload' => $payload]);
+        $observation = Observation::query()->firstOrCreate($identity, ['resource_type' => $resource->getTable(), 'resource_id' => $resource->id, 'payload' => $payload]);
+        try {
+            DB::afterCommit(fn () => app(ObservationDispatcher::class)->enqueue($observation->id));
+        } catch (\Throwable) {
+            // Minimal bootstraps may lack after-commit callbacks; scheduled delivery recovers it.
+        }
+
+        return $observation;
     }
 }
