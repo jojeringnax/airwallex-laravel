@@ -25,6 +25,7 @@ class AirwallexServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/airwallex.php', 'airwallex');
+        $this->app->register(Payments\PaymentsServiceProvider::class);
         $this->app->scoped(CommitGuard::class);
         $this->app->scoped(Services\SweepRegistry::class);
         $this->app->scoped(BillingContext::class, fn (Application $app) => new BillingContext(
