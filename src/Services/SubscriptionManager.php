@@ -325,6 +325,9 @@ class SubscriptionManager
         }
         $this->preflight($operation, function () use ($subscription, $customer, $operation): void {
             $current = ModelRegistry::query('subscription')->findOrFail($subscription->id);
+            if ($operation->kind === 'subscription.restore_renewal') {
+                $this->assertRestorationDispatch($current, $operation->intent['payload']);
+            }
             Routing::assertSubscription([...$current->snapshot, ...($current->observed_routing ?? [])]);
             if ($this->fingerprint($current) !== $operation->intent['fingerprint']) {
                 throw new EvidenceException('Subscription changed before the financial action; prepare a new intent.');
@@ -354,6 +357,9 @@ class SubscriptionManager
         });
 
         return $this->operations->execute($operation, function () use ($subscription, $operation): array {
+            if ($operation->kind === 'subscription.restore_renewal') {
+                $this->assertRestorationDispatch(ModelRegistry::query('subscription')->findOrFail($subscription->id), $operation->intent['payload']);
+            }
             $payload = [...$operation->intent['payload'], 'request_id' => $operation->request_id];
             $resource = app(Client::class)->billing()->subscriptions();
 
@@ -423,6 +429,18 @@ class SubscriptionManager
         }
 
         return true;
+    }
+
+    private function assertRestorationDispatch(Subscription $current, array $payload): void
+    {
+        $this->context->assertModel($current);
+        $now = now()->format('Y-m-d\TH:i:s.uP');
+        if ($current->status !== 'ACTIVE' || ($current->snapshot['collection_method'] ?? null) !== 'OUT_OF_BAND'
+            || isset($current->snapshot['payment_source_id']) || $current->cancel_at_period_end !== true
+            || ! is_string($current->scheduled_ends_at) || Timestamp::compare($current->scheduled_ends_at, $now) <= 0
+            || ! is_string($payload['ends_at'] ?? null) || Timestamp::compare($payload['ends_at'], $now) <= 0) {
+            throw new EvidenceException('The pending cancellation boundary is no longer eligible for a first restoration write.');
+        }
     }
 
     private function itemEffectConfirmed(Operation $operation, Subscription $subscription): bool
