@@ -150,7 +150,8 @@ class CashierCoexistenceTest extends TestCase
         self::assertTrue($team->fresh()->subscribed('membership'));
         self::assertCount(0, $team->invoices());
         $legacy->cancelNow();
-        self::assertCount(2, $stripe->requests);
+        self::assertSame('re_legacy', $team->refund('pi_legacy', ['amount' => 100])->id);
+        self::assertCount(3, $stripe->requests);
         self::assertSame('canceled', $legacy->fresh()->stripe_status);
         self::assertSame('CANCELLED', $billing->subscription('membership')->status);
     }

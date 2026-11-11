@@ -26,7 +26,7 @@ SDK = "jojeringnax/airwallex-php-sdk"
 # Official 2.11.2 PHAR, independently verified during foundation qualification.
 # https://getcomposer.org/download/2.11.2/composer.phar.sha256sum
 COMPOSER_SHA256 = "dd158c0afd41d15fac89e1b4e47b5d42911fe316c3687cd5edac98319b25d028"
-RUNTIME_PREFIXES = ("src/", "config/", "database/migrations/", "routes/", "examples/")
+RUNTIME_PREFIXES = ("src/", "config/", "database/migrations/", "routes/", "examples/", "resources/")
 ALLOWED_PREFIXES = (*RUNTIME_PREFIXES, "docs/")
 ALLOWED_FILES = {"composer.json", "LICENSE", "README.md", "SECURITY.md", "CHANGELOG.md", "UPGRADING.md"}
 EXCLUDED_PARTS = {".git", ".github", ".agents", "vendor", "node_modules", "tests", "tools", "build", ".phpstan-cache", ".phpunit.cache", "__pycache__"}
@@ -41,7 +41,7 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-def inspect_archive(archive: Path, required: set[str]) -> tuple[dict, dict]:
+def inspect_archive(archive: Path, required: set[str], *, package_name: str = PACKAGE) -> tuple[dict, dict]:
     """Check names before reading contents, so excluded credential files are never read."""
     manifest: dict[str, dict] = {}
     with zipfile.ZipFile(archive) as zipped:
@@ -64,28 +64,31 @@ def inspect_archive(archive: Path, required: set[str]) -> tuple[dict, dict]:
         if missing:
             raise ValueError("Archive omitted required tracked runtime files: " + ", ".join(sorted(missing)))
         metadata = json.loads(zipped.read("composer.json"))
-    if metadata.get("name") != PACKAGE or not isinstance(metadata.get("require", {}).get(SDK), str):
-        raise ValueError("Candidate must declare the distributable SDK dependency.")
+    if metadata.get("name") != package_name or (package_name == PACKAGE and not isinstance(metadata.get("require", {}).get(SDK), str)):
+        raise ValueError("Candidate must declare the expected package and distributable dependencies.")
     if "repositories" in metadata:
         raise ValueError("Candidate repository overrides require explicit distribution review.")
     return manifest, metadata
 
 
-def package_repository(metadata: dict, archive: Path, commit: str) -> dict:
+def package_repository(metadata: dict, archive: Path, commit: str, *, version: str = VERSION) -> dict:
     # Only dependency runtime metadata is needed. No dev autoloading/scripts or fallback source checkout.
     package = {key: metadata[key] for key in ("name", "description", "type", "license", "require", "autoload", "extra") if key in metadata}
-    package.update(version=VERSION, dist={"type": "zip", "url": archive.as_uri(), "reference": commit, "shasum": hashlib.sha1(archive.read_bytes()).hexdigest()})
+    package.update(version=version, dist={"type": "zip", "url": archive.as_uri(), "reference": commit, "shasum": hashlib.sha1(archive.read_bytes()).hexdigest()})
     return {"type": "package", "package": package}
 
 
-def extract_tooling(read_committed_file: Callable[[str], bytes], destination: Path, running_qualifier: bytes) -> dict[str, str]:
+def extract_tooling(read_committed_file: Callable[[str], bytes], destination: Path, running_qualifier: bytes, additional: tuple[str, ...] = ()) -> dict[str, str]:
     """Pin runtime helpers to candidate blobs, and reject a different qualification driver."""
     files = {name: read_committed_file("tools/" + name) for name in ("qualify-candidate.py", "consumer-check.php", "consumer-fixtures.php")}
+    files.update({path.removeprefix("tools/"): read_committed_file(path) for path in additional})
     if files["qualify-candidate.py"] != running_qualifier:
         raise ValueError("Running qualifier differs from the selected candidate commit; execute that commit's qualifier.")
     destination.mkdir()
     for name, data in files.items():
-        (destination / name).write_bytes(data)
+        target = destination / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
     return {name: digest(data) for name, data in files.items()}
 
 
@@ -141,6 +144,8 @@ class Qualification:
         return base
 
     def run(self) -> None:
+        if bool(self.args.sdk_repo) != bool(self.args.sdk_candidate):
+            raise ValueError("Exact SDK qualification requires both --sdk-repo and --sdk-candidate.")
         composer = self.args.composer.resolve()
         if digest(composer.read_bytes()) != COMPOSER_SHA256:
             raise ValueError("Composer PHAR does not match the verified 2.11.2 SHA256.")
@@ -171,6 +176,23 @@ class Qualification:
         manifest_path = self.output / "archive-manifest.json"
         write_json(manifest_path, manifest)
         repository = package_repository(metadata, archive, commit)
+        sdk_repository = None
+        sdk_manifest = None
+        sdk_archive = None
+        sdk_commit = None
+        if self.args.sdk_candidate:
+            sdk_repo = self.args.sdk_repo.resolve()
+            sdk_commit = self.command("resolve-sdk-commit", ["git", "rev-parse", "--verify", "--end-of-options", self.args.sdk_candidate + "^{commit}"], sdk_repo)
+            if re.fullmatch(r"[0-9a-f]{40}", sdk_commit) is None:
+                raise ValueError("SDK candidate did not resolve to one exact Git commit.")
+            sdk_archive = self.output / f"airwallex-php-sdk-{sdk_commit}.zip"
+            self.command("sdk-git-archive", ["git", "archive", "--format=zip", f"--output={sdk_archive}", sdk_commit], sdk_repo)
+            sdk_tree = self.command("sdk-runtime-tree", ["git", "ls-tree", "-r", "--name-only", sdk_commit, "--", "src", "resources"], sdk_repo)
+            sdk_required = {path for path in sdk_tree.splitlines() if not any(part.startswith(".") for part in PurePosixPath(path).parts)}
+            sdk_manifest, sdk_metadata = inspect_archive(sdk_archive, {"composer.json", "LICENSE", "README.md"} | sdk_required, package_name=SDK)
+            sdk_repository = package_repository(sdk_metadata, sdk_archive, sdk_commit, version="0.1.2-dev")
+            write_json(self.output / "sdk-archive-manifest.json", sdk_manifest)
+            self.evidence["development_sdk"] = {"commit": sdk_commit, "archive": str(sdk_archive), "sha256": digest(sdk_archive.read_bytes()), "tagged_release_qualification": "pending", "version_descriptor": "0.1.2-dev", "path_repository": False}
         write_json(self.output / "package-repository.json", repository)
         self.evidence.update(archive={"path": str(archive), "sha256": digest(archive.read_bytes()), "files": len(manifest), "manifest_sha256": digest(manifest_path.read_bytes())}, sdk_constraint=metadata["require"][SDK])
         if self.args.archive_only:
@@ -186,7 +208,12 @@ class Qualification:
                 raise ValueError("Full qualification requires validation tooling in the selected candidate commit: " + path)
             return result.stdout
         helper_dir = self.workspace / "qualification-tools"
-        helper_manifest = extract_tooling(committed_tool, helper_dir, Path(__file__).read_bytes())
+        track_files = []
+        if self.args.track in ("subscriptions", "all"):
+            track_files += ["tools/subscription-consumer-check.php", "phpunit.xml", "tests/TestCase.php", "tests/CashierCoexistenceTest.php", "tests/Support/FakeHttpClient.php", "tests/Support/TestDatabase.php", "tests/Fixtures/Billing.php", "tests/Fixtures/Team.php", "tests/Fixtures/InterleavingHttpClient.php", "tests/InvoiceTransactionsTest.php", "tests/Consumers/coexistence/bootstrap.php", "tests/Consumers/coexistence/Models.php"]
+        if self.args.track in ("payments", "all"):
+            track_files += ["tools/payments-consumer-check.php"]
+        helper_manifest = extract_tooling(committed_tool, helper_dir, Path(__file__).read_bytes(), tuple(track_files))
         write_json(self.output / "tooling-manifest.json", helper_manifest)
         self.evidence["tooling"] = {"commit": commit, "source": "exact candidate Git blobs", "running_qualifier_matches_commit": True, "manifest_sha256": digest((self.output / "tooling-manifest.json").read_bytes()), "note": "Helpers are extracted from the candidate commit; export-ignore keeps them out of the runtime archive."}
         self.save()
@@ -207,6 +234,11 @@ class Qualification:
         if not isinstance(framework, str):
             raise ValueError("Candidate has no declared Laravel support constraint.")
         consumer_metadata = {"name": "qualification/airwallex-consumer", "description": "Isolated deterministic archive consumer qualification.", "type": "project", "license": "MIT", "require": {"php": metadata["require"]["php"], "laravel/framework": framework, PACKAGE: VERSION}, "repositories": [repository], "minimum-stability": "stable", "prefer-stable": True, "config": {"allow-plugins": {}}}
+        if sdk_repository is not None:
+            consumer_metadata["repositories"].insert(0, sdk_repository)
+            consumer_metadata["require"][SDK] = "0.1.2-dev"
+        if self.args.track in ("subscriptions", "all"):
+            consumer_metadata["require"].update({"laravel/cashier": "^16.9", "orchestra/testbench": "^10.0" if self.args.laravel == "12" else "^11.0", "phpunit/phpunit": "^11.5.50"})
         write_json(consumer / "composer.json", consumer_metadata)
         composer_argv = [php, str(composer), "--no-ansi", "--no-interaction"]
         resolve = [*composer_argv, "update", "--prefer-dist", "--no-progress", "--no-dev"]
@@ -225,6 +257,27 @@ class Qualification:
         self.command("consumer-schema-down", [*helper, "--mode", "rolled-back", "--evidence", str(self.output / "consumer-schema-down.json")], consumer)
         self.command("consumer-remigrate", [php, "artisan", "migrate", "--force", "--no-ansi"], consumer)
         self.command("consumer-recipes", [*helper, "--mode", "recipes", "--evidence", str(self.output / "consumer-recipes.json")], consumer)
+        recipe_reports = [json.loads((self.output / "consumer-recipes.json").read_text())]
+        for track in ("subscriptions", "payments"):
+            if self.args.track not in (track, "all"):
+                continue
+            filename = "subscription" if track == "subscriptions" else "payments"
+            self.command("consumer-" + track, [php, str(helper_dir / (filename + "-consumer-check.php")), "--consumer", str(consumer), "--evidence", str(self.output / (track + "-recipes.json"))], consumer)
+            recipe_reports.append(json.loads((self.output / (track + "-recipes.json")).read_text()))
+        executed = {name for report in recipe_reports for name in report.get("recipes", {})}
+        shipped = {Path(name).name for name in manifest if name.startswith("examples/") and name.endswith(".php")}
+        if executed != shipped:
+            raise ValueError("Selected tracks did not execute exactly the shipped recipes; missing: " + ", ".join(sorted(shipped - executed)))
+        if self.args.track in ("subscriptions", "all"):
+            fixture_environment = {"AIRWALLEX_PACKAGE_AUTOLOAD": str(consumer / "vendor/autoload.php"), "AIRWALLEX_CASHIER_AUTOLOAD": str(consumer / "vendor/autoload.php"), "AIRWALLEX_TEST_DATABASE": self.args.database}
+            if self.args.database == "mysql":
+                for suffix, native in (("HOST", "DB_HOST"), ("PORT", "DB_PORT"), ("DATABASE", "DB_DATABASE"), ("USER", "DB_USERNAME"), ("PASSWORD", "DB_PASSWORD")):
+                    fixture_environment["AIRWALLEX_TEST_MYSQL_" + suffix] = self.env[native]
+            self.env.update(fixture_environment)
+            self.command("consumer-real-cashier-coexistence", [php, str(consumer / "vendor/bin/phpunit"), "--no-configuration", "--bootstrap", str(helper_dir / "tests/Consumers/coexistence/bootstrap.php"), str(helper_dir / "tests/CashierCoexistenceTest.php"), str(helper_dir / "tests/InvoiceTransactionsTest.php"), "--fail-on-warning", "--fail-on-risky"], consumer)
+            self.evidence["installed_sdk_tests"] = {"database": self.args.database, "classes": ["CashierCoexistenceTest", "InvoiceTransactionsTest"], "status": "passed"}
+            for variable in fixture_environment:
+                self.env.pop(variable)
         installed = consumer / "vendor" / PACKAGE
         actual_files = {str(path.relative_to(installed)) for path in installed.rglob("*") if path.is_file() or path.is_symlink()}
         if actual_files != manifest.keys() or any(path.is_symlink() for path in installed.rglob("*")):
@@ -235,8 +288,18 @@ class Qualification:
         lock = json.loads((consumer / "composer.lock").read_text())
         packages = {value["name"]: value for value in lock["packages"]}
         sdk = packages[SDK]
-        if sdk.get("dist", {}).get("type") != "zip" or sdk.get("source", {}).get("url") != "https://github.com/jojeringnax/airwallex-php-sdk.git":
-            raise ValueError("Installed SDK does not have the expected released Packagist/GitHub provenance.")
+        if sdk_manifest is None:
+            if sdk.get("dist", {}).get("type") != "zip" or sdk.get("source", {}).get("url") != "https://github.com/jojeringnax/airwallex-php-sdk.git":
+                raise ValueError("Installed SDK does not have the expected released Packagist/GitHub provenance.")
+        else:
+            if sdk.get("dist", {}).get("reference") != sdk_commit or sdk.get("dist", {}).get("url") != sdk_archive.as_uri():
+                raise ValueError("Installed SDK is not the selected exact-commit archive.")
+            sdk_installed = consumer / "vendor" / SDK
+            if {str(path.relative_to(sdk_installed)) for path in sdk_installed.rglob("*") if path.is_file()} != sdk_manifest.keys() or any(path.is_symlink() for path in sdk_installed.rglob("*")):
+                raise ValueError("Installed SDK has unexpected files or symlinks.")
+            if any(digest((sdk_installed / name).read_bytes()) != value["sha256"] for name, value in sdk_manifest.items()):
+                raise ValueError("Installed SDK bytes differ from the exact SDK archive.")
+            self.evidence["development_sdk"]["installed_bytes_match_manifest"] = True
         candidate = packages[PACKAGE]
         if candidate.get("version") != VERSION or candidate.get("dist", {}).get("reference") != commit or candidate.get("dist", {}).get("url") != archive.as_uri():
             raise ValueError("Installed package is not the selected local exact-commit archive.")
@@ -258,6 +321,9 @@ def main() -> int:
     parser.add_argument("--database", choices=("sqlite", "mysql"), default="sqlite", help="Explicit native database backend; MySQL requires a precreated disposable schema")
     parser.add_argument("--workspace", type=Path, default=Path(tempfile.gettempdir()) / "airwallex-candidate-qualification", help="Base for a new private isolated run directory")
     parser.add_argument("--output", type=Path, help="Optional evidence base; a new directory is created per run")
+    parser.add_argument("--sdk-repo", type=Path, help="Read-only repository used to archive an unreleased exact SDK commit")
+    parser.add_argument("--sdk-candidate", help="Exact SDK commit/ref; requires --sdk-repo and records tagged release qualification pending")
+    parser.add_argument("--track", choices=("baseline", "subscriptions", "payments", "all"), default="baseline", help="Installed recipe tracks; all requires both tracks in the same candidate")
     parser.add_argument("--archive-only", action="store_true", help="Verify archive/descriptor only; never reports consumer qualification passed")
     args = parser.parse_args()
     qualification = Qualification(args)
