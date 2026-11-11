@@ -1,6 +1,6 @@
 # Owned Payments sandbox journey
 
-This is the preparation for [#64](https://github.com/jojeringnax/airwallex-laravel/issues/64). **Provider execution is unexecuted.** Package fixtures, SDK account observations from another release, Billing activation and the [subscription journey](sandbox.md) do not qualify these account-owned flows. Actual browser/client builds, merchant permissions, owned instruments and separately scoped authorization are required. The downstream runtime upgrade/profile is user-deferred under #49.
+This is the preparation for [#64](https://github.com/jojeringnax/airwallex-laravel/issues/64). **Provider execution is unexecuted.** Package fixtures, SDK account observations from another release, Billing activation and the [subscription journey](sandbox.md) do not qualify these account-owned flows. Actual browser/client builds, merchant permissions, owned instruments and separately scoped authorization are required.
 
 Start from passing exact installed [Payments](payments.md) and [instrument](instruments.md) recipes. Retain the package commit/archive hash, SDK commit/archive hash, dependency lock, API/webhook date, actual PHP/framework/database, cache/queue/lock profile and selected client versions. Verify runtime bytes and actual cached configuration before starting workers; a local checkout or a supplied version string is insufficient.
 
