@@ -1,6 +1,6 @@
 # Scope and access rules
 
-The accepted product baseline is [release tracker #1](https://github.com/jojeringnax/airwallex-laravel/issues/1). This reference owns durable capability and access requirements; GitHub owns execution status. [Public contracts](contracts.md) own signatures/schema, [provider contracts](provider-contracts.md) own evidence, and [compatibility](compatibility.md) owns support policy. Public implementation choices are accepted under [#34](https://github.com/jojeringnax/airwallex-laravel/issues/34).
+The released v0.1 baseline is [release tracker #1](https://github.com/jojeringnax/airwallex-laravel/issues/1). This reference owns durable capability and access requirements; GitHub owns execution status. [Public contracts](contracts.md) own signatures/schema, [provider contracts](provider-contracts.md) own evidence, and [compatibility](compatibility.md) owns support policy. Public implementation choices are accepted under [#34](https://github.com/jojeringnax/airwallex-laravel/issues/34).
 
 ## Capabilities
 
@@ -42,6 +42,54 @@ One current reservation exists per explicit customer/name. PENDING, IN_TRIAL, AC
 
 Checkout/setup/browser success grants no independent access. Verify owned resulting resources and canonical Subscription state. Replace item projections only after every page succeeds; item-level historical audit ledgers are deferred. Unknown resources require explicit association.
 
-## Deferrals
+## Full-provider adoption contract
 
-High-level standalone Payments/refunds, multiple Billing organizations/connected-merchant routing, OAuth, catalogue administration, embedded/Elements components, customer portal UI, generic local trials, tax/coupons/usage billing, pause/reactivation and unverified schedule reversal/resume conveniences are deferred. This does not remove raw SDK capabilities. Provider invoice-link renewal, expiry, PDF generation and mailing guarantees are not inferred.
+[Programme #46](https://github.com/jojeringnax/airwallex-laravel/issues/46) expands reusable orchestration while preserving v0.1 behavior. This matrix specifies required outcomes and owners; it does not claim the tracked implementation, account qualification or downstream migration is complete. The [ownership question #48](https://github.com/jojeringnax/airwallex-laravel/issues/48) remains open: provisionally this package owns durable Payments identities, commands, reservations and canonical recovery; the SDK owns transport/validation/precision/signatures; the application owns commercial policy, clients and ledgers.
+
+| Consumer scenario | Required outcome, money effect and owner |
+| --- | --- |
+| Direct / hosted subscription create | Package uses an explicit named reservation and durable action. SDK validates exact provider input. Only canonical resulting Subscription establishes eligibility; browser return establishes none. Application selects catalogue price, collection policy and authorized source. |
+| Trial, invitation, coupon free period | Application computes explicit timezone-bearing start/trial end from its commercial rules; package persists those resolved dates. No charge or local trial entitlement is inferred. A free catalogue price is distinct from an empty/zero Payments charge. |
+| Immediate upgrade | Application chooses target price, explicit provider proration/billing controls and entitlement policy. Package performs durable item change, preserving original subscription ownership and recovery identity. Canonical ACTIVE is lifecycle evidence, not cash-settlement evidence. |
+| Next-boundary downgrade / future transition | Application selects a confirmed boundary or explicit future date and approved target. Package must store a due transition, generation/expected-state guards and one stable financial command. Canonical preflight precedes execution; ambiguity holds it without replay. Scheduling research and implementation are [#158](https://github.com/jojeringnax/airwallex-php-sdk/issues/158) / [#54](https://github.com/jojeringnax/airwallex-laravel/issues/54). Local execution can be delayed and cannot promise an atomic provider boundary. Native `NONE` proration is an alternative for next-cycle billing; the guide and selected schema differ in how broadly they describe effective changes, so application entitlement timing needs separate proof. |
+| Auto-renew off / on / immediate cancel | Off uses confirmed scheduled cancellation. On requires verified reversal of a pending cancellation on the same owned generation, never recreation of a terminated subscription. Immediate cancel uses explicit proration. Restoration proof is [#158](https://github.com/jojeringnax/airwallex-php-sdk/issues/158) / [#53](https://github.com/jojeringnax/airwallex-laravel/issues/53); until verified, restoration is unavailable. |
+| Saved-card setup/list/default/revoke | Independent account-owned Payments Customer/Consent/Method; Billing Source is not a Payments consent. Embedded browser setup collects explicit authority; package verifies canonical status/customer/context before adoption. Application chooses a local default among eligible instruments; revocation uses the SDK and retains history/in-flight obligations. |
+| Merchant-initiated saved-card charge | Application authorizes purpose, exact amount/currency and stable command. Package retains intent identity and canonical recovery; only confirmed successful payment establishes payment completion. Consent purpose/merchant indicators are explicit, never inferred from card presence. |
+| Shopper-present cards, wallets and 3DS | Application owns Airwallex.js/Apple Pay/Google Pay UI, registered domains and callback/API authorization. Package returns an explicitly requested transient bootstrap and reconciles the exact intent. Pending/action-required/failed are distinct from success. No browser callback independently posts money. |
+| Zero amount | Application records a no-money commercial outcome or uses the dedicated consent/setup flow. Package does not fabricate a successful zero-value PaymentIntent or convert it to a positive charge. |
+| Partial/full refund | Application selects owned successful payment, amount and business allocation. Package reserves cumulative refundable amount and keeps one original refund identity through pending/failed/ambiguous outcomes. Only canonical successful refund produces financial completion; application posts its credit note/ledger once. |
+| Offboarding | Application stops new authorization, resolves pending commands and financial holds, cancels subscriptions/revokes instruments explicitly where supported, and preserves old-provider/refund/accounting history. Deleting a billable does not erase obligations or trigger charges. |
+
+Representative provider-qualified application boundary (the `AirwallexBillable` seam is delivered by [#51](https://github.com/jojeringnax/airwallex-laravel/issues/51)):
+
+```php
+// Authorize this original persisted model first; keep its existing Cashier trait.
+$billing = new \Jojeringnax\AirwallexLaravel\AirwallexBillable($authorizedCustomer);
+$billing->createOrGetAirwallexCustomer('customer-command-123', ['name' => 'Example']);
+$subscription = $billing->newSubscription('membership', $verifiedPriceId)
+    ->trialDays(7)->create('membership-command-124', ['payment_source_id' => $ownedBillingSourceId]);
+$subscription->cancelAtPeriodEnd('renewal-off-command-125');
+$authorizedCustomer->subscription('legacy'); // Existing Cashier API still belongs to Stripe.
+```
+
+The [Billing recipes](usage.md) remain executable against the standalone trait. [Payments recipes #62](https://github.com/jojeringnax/airwallex-laravel/issues/62) must qualify its separate account context, setup/bootstrap, intents and refund APIs before those scenarios are ready; the matrix does not promise an unreleased signature.
+
+### Catalogue, coupons and access
+
+Application aliases map business tier/product/price/currency/environment to verified immutable provider price IDs. Never derive Airwallex IDs from Stripe IDs, display names or email. A catalogue audit owns cadence, zero prices, active versions and replacements; this package does not administer the catalogue.
+
+The inspected consumer revision has reachable coupon creation and membership-redemption paths. Its provider coupon creation returns null before the remote call; synchronization/deletion can still address historical provider IDs. Membership availability/free-month and invitation/free-period logic are separately reachable application rules. Repository source cannot prove production frequency or the absence of legacy discounts. Provisional policy is application-owned coupon eligibility, redemption and free-period calculation, with no automatic native-provider discount mapping. Before retiring Stripe, the application owner must inventory historical discount IDs and prove every required amount/percentage/repeating-discount path. If native recurring invoice discounts are required, select and qualify [SDK coupon work #38](https://github.com/jojeringnax/airwallex-php-sdk/issues/38) explicitly; that requirement cannot be replaced by an invented free period.
+
+The default access matrix above remains unchanged, including immediate UNPAID denial. The application must explicitly replace `SubscriptionAccessPolicy` if it requires legacy grace, and qualify stale observations, trial/end bounds and restoration separately. Local commercial membership history never promotes an unconfirmed provider payment or subscription.
+
+### Browser and saved-instrument migration
+
+Billing keeps its hosted checkout contract. Standalone Payments provisionally uses embedded Airwallex.js consent/intent bootstrap with transient client secrets returned only through an authorized endpoint; client secrets never enter durable intents, logs, events or serialization. A Billing setup checkout cannot supply a Payments Customer or consent. Mobile clients need their own native SDK/deep-link implementation and qualification; a web recipe does not establish mobile compatibility.
+
+Recollection through fresh explicit setup is the viable default. Provider-assisted transfer is optional and externally gated: the merchant completes KYB and arranges an encrypted processor export and Airwallex migration report. The application migration owner maps processor customer/card identifiers to already authorized local owners, verifies resulting account-owned Customer/Consent/Method canonically, and quarantines unmatched/failed records. Package fixtures establish no completed migration. The commercial owner must plan recollection and retain old-provider servicing until the transfer/recollection coverage is proven. [Provider evidence](provider-contracts.md#saved-instrument-transfer) records the official prerequisites.
+
+### Downstream work and unsupported scenarios
+
+The downstream application has not been migrated. Its owners must deliver: identity/schema/backfill and routing (backend migration owner), authenticated/versioned browser and mobile APIs plus UI (client owners), catalogue/coupon reconciliation and entitlements (commercial/backend owners), exact ledger/refund/accounting deduplication (finance integration owner), and runtime/queue/scheduler/key continuity/cutover (platform owner). [Deployment prerequisite issue #49](https://github.com/jojeringnax/airwallex-laravel/issues/49) owns the deferred infrastructure inventory; upgrade/target qualification work is currently deferred by the user. Those work packages must be accepted and evidenced before a full replacement claim.
+
+Multiple Billing organizations, connected-merchant products, OAuth, portal UI, tax/metering administration, package-owned commercial ledgers and arbitrary provider schedule phases remain outside this programme. Exact boundary execution, cancellation restoration and native discounts remain unavailable where their required provider evidence is missing. Provider invoice-link renewal/expiry, PDF generation/mailing and settlement guarantees are not inferred.

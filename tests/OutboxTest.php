@@ -204,6 +204,6 @@ class OutboxTest extends TestCase
             $guard->assertMayCommit();
         });
         $guard->assertMayCommit();
-        self::assertSame(['inner', 'outer'], $calls);
+        self::assertSame(['outer', 'inner', 'outer'], $calls);
     }
 }

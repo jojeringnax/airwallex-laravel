@@ -7,14 +7,10 @@ namespace Jojeringnax\AirwallexLaravel\Console;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
-use Jojeringnax\Airwallex\Exception\SdkException;
 use Jojeringnax\AirwallexLaravel\BillingContext;
-use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
-use Jojeringnax\AirwallexLaravel\Exception\BillingException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
-use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
-use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
+use Jojeringnax\AirwallexLaravel\Support\FailureClassification;
 use Throwable;
 
 abstract class BillingCommand extends Command
@@ -69,14 +65,6 @@ abstract class BillingCommand extends Command
 
     protected function classification(Throwable $error): string
     {
-        return match (true) {
-            $error instanceof AmbiguousOperationException => $error->causeCategory,
-            $error instanceof OwnershipException => 'ownership',
-            $error instanceof ConflictException => 'conflict',
-            $error instanceof EvidenceException => 'evidence',
-            $error instanceof SdkException => 'sdk',
-            $error instanceof BillingException => 'configuration',
-            default => 'retryable_local_failure',
-        };
+        return FailureClassification::of($error);
     }
 }
