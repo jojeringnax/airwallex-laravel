@@ -196,6 +196,34 @@ class SubscriptionRestorationTest extends TestCase
         }
     }
 
+    public function test_prepared_restart_rechecks_canonical_collection_before_restoration_dispatch(): void
+    {
+        $subscription = $this->scheduledSubscription();
+        $this->app->instance(OperationManager::class, new class(app(BillingContext::class)) extends OperationManager
+        {
+            public function execute(Operation $operation, \Closure $write, \Closure $confirm): mixed
+            {
+                throw new RuntimeException('Synthetic interruption before first dispatch.');
+            }
+        });
+        $this->http($this->observation($this->scheduled()));
+        try {
+            $subscription->restoreRenewal('prepared-on', 'off');
+        } catch (RuntimeException) {
+            self::assertSame('prepared', Operation::where('action_key', 'prepared-on')->first()->status);
+        }
+        $this->app->instance(OperationManager::class, new OperationManager(app(BillingContext::class)));
+        $changed = $this->scheduled(['collection_method' => 'AUTO_CHARGE', 'payment_source_id' => 'source-test', 'updated_at' => '2026-11-10T12:03:00Z']);
+        $http = $this->http($this->observation($changed));
+        try {
+            $subscription->restoreRenewal('prepared-on', 'off');
+            self::fail('Prepared restoration trusted obsolete local collection proof.');
+        } catch (EvidenceException) {
+            self::assertCount(4, $http->requests);
+            self::assertSame('failed', Operation::where('action_key', 'prepared-on')->first()->status);
+        }
+    }
+
     private function original(array $overrides = []): array
     {
         return Billing::subscription(['currency' => 'EUR', 'ends_at' => self::ORIGINAL_END,
