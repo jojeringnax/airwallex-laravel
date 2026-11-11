@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace AirwallexCandidateQualification;
 
+use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Auth\Access\Gate;
+use Illuminate\Auth\GenericUser;
 use Illuminate\Contracts\Console\Kernel;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Schema\Blueprint;
@@ -13,6 +16,8 @@ use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\AirwallexBillable;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Models\Subscription;
+use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
 use Psr\Http\Client\ClientInterface;
 use RuntimeException;
 use Throwable;
@@ -81,20 +86,41 @@ try {
         $table->string('purpose');
     });
     $team = Team::create(['id' => 'adoption-team']);
-    // The application authorizes this local row before creating its provider-qualified object.
+    // This policy belongs to the synthetic application; the package has no authentication guard.
+    $gate = new Gate($app, static fn () => null);
+    $gate->define('manage-billing', static fn (GenericUser $actor, Team $billable): bool => $actor->team_id === $billable->getKey());
+    $owner = new GenericUser(['id' => 'synthetic-owner', 'team_id' => $team->getKey()]);
+    $otherActor = new GenericUser(['id' => 'synthetic-other', 'team_id' => 'another-team']);
+    $gate->forUser($owner)->authorize('manage-billing', $team);
     $billing = new AirwallexBillable($team);
     $http = $bind([Fixtures::request('GET', 'billing/billing_customers/customer-adoption', ['id' => 'customer-adoption'])]);
     $billing->linkAirwallexCustomer('customer-adoption');
     $http->assertConsumed();
-    DB::table('candidate_adoption_commands')->insert(['action_key' => 'future-trial-command', 'purpose' => 'approved initial free period']);
+    $startTrial = static function (GenericUser $actor, Team $billable, string $actionKey) use ($gate, $adapters) {
+        $gate->forUser($actor)->authorize('manage-billing', $billable);
+        DB::table('candidate_adoption_commands')->insert(['action_key' => $actionKey, 'purpose' => 'approved initial free period']);
+
+        return (new AirwallexBillable($billable))->newSubscription('trial', $adapters['price']('sandbox', 'membership', 'USD'))
+            ->startsAt('2026-11-12T12:00:00Z')->trialDays(7)
+            ->create($actionKey, ['collection_method' => 'OUT_OF_BAND']);
+    };
+    $beforeDenial = [DB::table('candidate_adoption_commands')->count(), Operation::count(), Subscription::count(), SubscriptionSlot::count()];
+    $http = $bind([]);
+    try {
+        $startTrial($otherActor, $team, 'denied-trial-command');
+        throw new RuntimeException('Application authorization accepted an unrelated actor.');
+    } catch (AuthorizationException) {
+    }
+    adoptionCheck($http->requests === 0, 'Denied application action reached SDK authentication or a provider request.');
+    adoptionCheck($beforeDenial === [DB::table('candidate_adoption_commands')->count(), Operation::count(), Subscription::count(), SubscriptionSlot::count()], 'Denied application action persisted a command, operation, subscription or reservation.');
+    $report['checks'][] = 'application_policy_denial_before_command_reservation_and_sdk_request';
     $pending = Fixtures::subscription('sub-future-trial', 'customer-adoption', ['status' => 'PENDING', 'starts_at' => '2026-11-12T12:00:00Z', 'trial_starts_at' => '2026-11-12T12:00:00Z', 'trial_ends_at' => '2026-11-19T12:00:00Z', 'collection_method' => 'OUT_OF_BAND']);
     $http = $bind([Fixtures::request('POST', 'billing/subscriptions/create', $pending), ...Fixtures::observation($pending, [Fixtures::item('item-trial', 'sub-future-trial')])]);
-    $subscription = $billing->newSubscription('trial', $adapters['price']('sandbox', 'membership', 'USD'))
-        ->startsAt('2026-11-12T12:00:00Z')->trialDays(7)
-        ->create(DB::table('candidate_adoption_commands')->first()->action_key, ['collection_method' => 'OUT_OF_BAND']);
+    $subscription = $startTrial($owner, $team, 'future-trial-command');
     $http->assertConsumed();
     adoptionCheck(! $billing->subscribed('trial') && $subscription->trial_ends_at === '2026-11-19T12:00:00Z', 'Future/free-period intent granted early access or lost dates.');
     adoptionCheck(Operation::where('action_key', 'future-trial-command')->first()->intent['payload']['trial_ends_at'] === '2026-11-19T12:00:00Z', 'Resolved application free-period date was not persisted.');
+    adoptionCheck(DB::table('candidate_adoption_commands')->where('action_key', 'future-trial-command')->count() === 1 && ! DB::table('candidate_adoption_commands')->where('action_key', 'denied-trial-command')->exists(), 'Authorized and denied application commands lost their distinct persistence outcome.');
     $report['checks'][] = 'authorized_provider_entry_point_persisted_command_catalogue_and_exact_free_period';
 
     $original = Fixtures::subscription('sub-finite', 'customer-adoption', ['collection_method' => 'OUT_OF_BAND', 'ends_at' => '2027-01-01T00:00:00Z', 'duration' => ['period' => 2, 'period_unit' => 'MONTH']]);
