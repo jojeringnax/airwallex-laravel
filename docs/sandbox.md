@@ -4,21 +4,25 @@ Use this guide for an explicitly authorized observation against dedicated Sandbo
 
 ## Current evidence
 
-As of 2026-11-10, this Laravel journey is **unexecuted**. The development session has no explicit Sandbox financial-validation opt-in, and no external credentials or ownership inputs were supplied for this run. No credential file was read, provider API request sent, browser payment completed or resource created. There is consequently no new cleanup obligation from this run. Deterministic tests use synthetic inputs and a poisoned SDK autoloader with network functions disabled.
+The maintainer authorized autonomous Sandbox/browser validation on 2026-11-12. Dedicated private Laravel applications now have observed Customer/catalogue results; the full required journey is **incomplete**. API access and account/legal-entity verification succeeded. The original unknown-ID Subscription operation remains ambiguous and held; a scoped zero-candidate list is not noncreation proof. [The detailed case checkpoint](https://github.com/jojeringnax/airwallex-laravel/issues/63#issuecomment-6834559310) retains the execution outcomes and next recovery action.
 
 | Account-dependent scenario | Recorded result / remaining evidence |
 | --- | --- |
-| Organization credentials, Billing activation, entity/collector/currency and price eligibility | Unexecuted; independently authorized account configuration remains unverified |
-| Customer create, existing-customer link and owned subscription import | Unexecuted; dedicated billable and exact owned remote identities required |
-| HOSTED setup and owned Source confirmation | Unexecuted; browser completion, resulting Source/customer/collector proof required |
-| Direct and HOSTED subscription creation, trial/future start and multi-item behavior | Unexecuted; canonical status/dates/items and account-compatible prices required |
-| Exact quantity, add/remove/swap and explicit financial controls | Unexecuted; resulting complete item observations and actual invoice effects required |
-| UNPAID, separately authorized source replacement and provider recovery | Unexecuted; supported failure simulation and observed recovery/dunning behavior required |
-| Invoice/line reads and PDF/hosted-link availability | Unexecuted; actual owned invoices and returned link/null values required |
-| Selected-version signed deliveries and queue/reconciliation convergence | Unexecuted; configured endpoint, signature, delivered version/owner and receipt evidence required |
-| Scheduled ending, immediate cancellation, natural timing and cleanup | Unexecuted; positive canonical termination and an owned-resource cleanup journal required |
+| Credentials/context and catalogue | Explicit Sandbox account/entity independently read; dedicated Customer and own EUR catalogue create/readback passed. This does not establish every Billing collection/currency permission. |
+| First package/SDK profile | Package `ac0e260` / released SDKv0.1.2 created and verified one Customer. External harness raw-object metadata handling failed before catalogue/Subscription creation; the original result is retained. |
+| Corrected released-SDK case | Customer/catalogue passed. SDKv0.1.2 rejected explicit disabled/zero tax controls locally, before Subscription HTTP; operation failed/sdk_validation with no remote ID. Own Price/Product archived and inactive readbacks passed. |
+| Exact development-SDK case | Package `c29b7fe` / SDK `33881b46d696435dfbd370ec371e1fef5452ba44`, cached configuration, fresh migrated SQLite/database-cache/queue profile. Customer/catalogue passed; original finite OUT_OF_BAND Subscription command became ambiguous without remote ID. |
+| Bounded read recovery / retained obligation | Dedicated Customer-scoped list returned zero correlated candidates with complete pagination. Original action/request, encrypted intent and reservation remain held. Possible Subscription and financial history remain unresolved. Own catalogue archives do not establish Subscription absence or cancellation. |
+| Existing-Customer link / owned Subscription import | Unexecuted alternative association paths; require the exact authorized same-owner identity. Customer creation does not establish import coverage. |
+| UNPAID / Source replacement / provider recovery | Unexecuted; require an owned instrument, separately bounded failure/retry action and canonical recovery evidence. |
+| HOSTED setup/subscription, owned Sources and natural trial/renewal | Unexecuted. Portal login reached a CAPTCHA; it was not solved/bypassed. That blocks the portal session, not every hosted/client route. Dependent direct Subscription steps also await original-outcome evidence. |
+| Item changes, ending/restoration and invoice/transaction effects | Unexecuted in these Laravel attempts because Subscription creation did not reach confirmation. Separate SDK observations and deterministic installed recipes do not fill this gap. |
+| Signed deliveries, real receipt workers and dunning | No signed provider delivery or full worker/recovery journey observed. Actual receiver configuration/version/signature, account settings and timing remain required. |
+| Cleanup | Own catalogue archives confirmed in the two catalogue cases. Synthetic Customers/local history retained. Unknown Subscription cleanup is pending original identity/outcome proof; no replay, guessed cleanup ID or replacement creation. |
 
-The [SDK's tagged Sandbox record](https://github.com/jojeringnax/airwallex-php-sdk/blob/v0.1.1/docs/sandbox-validation.md) contains separate scoped observations; those are not a pass for this Laravel journey. API and webhook contract baseline is **2026-08-21**, selected SDK **v0.1.1**, source **bd11abb67e2e5761b86a9ca9d4a1b7993900de6e**. Record the exact installed candidate and SDK resolution before any later observation.
+The reviewed direct profile admitted one Subscription, quantity 1, EUR1.23/day for two days, maximum nominal lifetime EUR2.46 under EUR5 aggregate, explicit zero/disabled tax, no Source and no automatic collection. Each attempt has its own once-only journal outside Git (directories0700/files0600); earlier failures were preserved. Published outcomes contain no credentials, customer profiles, secrets or remote resource IDs.
+
+The [SDK's selected Sandbox observations](https://github.com/jojeringnax/airwallex-php-sdk/blob/33881b46d696435dfbd370ec371e1fef5452ba44/docs/sandbox-validation.md) are separate evidence. These Laravel attempts retain API pin **2026-08-21**; no selected-version webhook was delivered. Public SDKv0.1.2 resolves to `3ceab5178af39202379ac0891bc80d78419db127`; the development profile explicitly archives/installs `33881b4`. Final cumulative subscription/Payments account acceptance still requires one exact qualified graph.
 
 ## Standalone preflight
 
@@ -94,7 +98,7 @@ If an ambiguous hold or unavailable provider prevents confirmed cancellation, pr
 
 ## Adoption gate #63
 
-The full-provider programme has a separate required [subscription Sandbox gate #63](https://github.com/jojeringnax/airwallex-laravel/issues/63). The baseline optional policy above does not turn this adoption gate into a pass. It remains **unexecuted**: no scoped financial-validation approval, external credentials, owned account inputs or cleanup controls were supplied to this development programme. Deterministic installed-consumer fixtures are separate evidence. [Payments qualification](https://github.com/jojeringnax/airwallex-laravel/issues/64) has an independent owning account and journey.
+The full-provider programme has a separate required [subscription Sandbox gate #63](https://github.com/jojeringnax/airwallex-laravel/issues/63). The baseline optional policy above does not turn this adoption gate into a pass. Its required outcomes remain **incomplete** after the bounded attempts above. Authorization, credentials and owned-case controls were supplied; the original unknown-outcome operation blocks dependent Subscription steps. Deterministic installed-consumer fixtures are separate evidence. [Payments qualification](https://github.com/jojeringnax/airwallex-laravel/issues/64) has an independent owning account and journey.
 
 Run `php tools/subscription-sandbox-plan.php --package-commit=FULL_PACKAGE_COMMIT --sdk-commit=FULL_SDK_COMMIT --lock-sha256=FULL_LOCK_SHA256` from the exact reviewed checkout to print a secret-free manual journey plan. The tool does not load Laravel, the SDK, environment files or credentials, and makes no provider request. Missing/malformed provenance leaves the plan blocked. A valid plan still reports provider observations unexecuted and cached configuration/ownership unverified. Then use the preflight and manual application preparation above under separate scoped authorization.
 
