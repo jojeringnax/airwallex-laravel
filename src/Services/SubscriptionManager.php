@@ -26,6 +26,7 @@ use Jojeringnax\AirwallexLaravel\Support\Quantity;
 use Jojeringnax\AirwallexLaravel\Support\Routing;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
+use SensitiveParameter;
 use stdClass;
 use Throwable;
 
@@ -457,6 +458,9 @@ class SubscriptionManager
                 throw new EvidenceException('Subscription changed before the financial action; prepare a new intent.');
             }
             $payload = $operation->intent['payload'];
+            if (isset($payload['items'])) {
+                $this->assertItemDiscountControls($payload['items'], $payload);
+            }
             if ($operation->kind === 'subscription.free_period'
                 && app(FreePeriodEvidence::class)->coupon($operation->intent['coupon_terms']['id']) !== $operation->intent['coupon_terms']) {
                 throw new EvidenceException('Coupon terms changed before the first financial write.');
@@ -782,12 +786,8 @@ class SubscriptionManager
 
     private function itemPayload(array $items, array $options): array
     {
-        $this->managed($options, ['items', 'request_id', 'billing_customer_id', 'id', 'discounts']);
-        foreach ($items as $item) {
-            if (is_array($item) && array_key_exists('discounts', $item)) {
-                throw new EvidenceException('Generic item changes do not establish discount outcomes; use a separately qualified discount command.');
-            }
-        }
+        $this->managed($options, ['items', 'request_id', 'billing_customer_id', 'id']);
+        $this->assertItemDiscountControls($items, $options);
         if (! is_string($options['default_proration_mode'] ?? null)) {
             foreach ($items as $item) {
                 if (! is_array($item) || ! is_string($item['proration_mode'] ?? null)) {
@@ -797,6 +797,18 @@ class SubscriptionManager
         }
 
         return [...$options, 'items' => $items];
+    }
+
+    private function assertItemDiscountControls(#[SensitiveParameter] array $items, #[SensitiveParameter] array $options): void
+    {
+        if (array_key_exists('discounts', $options)) {
+            throw new EvidenceException('Generic item changes do not establish discount outcomes; use a separately qualified discount command.');
+        }
+        foreach ($items as $item) {
+            if (is_array($item) && array_key_exists('discounts', $item)) {
+                throw new EvidenceException('Generic item changes do not establish discount outcomes; use a separately qualified discount command.');
+            }
+        }
     }
 
     private function mutableItems(Subscription $subscription): void
