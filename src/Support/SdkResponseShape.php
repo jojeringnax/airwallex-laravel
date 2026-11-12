@@ -28,7 +28,7 @@ final class SdkResponseShape
     }
 
     /** @return array<array-key,mixed> */
-    public static function webhook(WebhookEvent $event): array
+    public static function webhook(#[SensitiveParameter] WebhookEvent $event): array
     {
         if (self::enabled()) {
             self::requireSupported();

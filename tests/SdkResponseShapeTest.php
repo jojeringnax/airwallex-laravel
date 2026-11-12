@@ -14,6 +14,7 @@ use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Psr\Http\Client\ClientInterface;
 use ReflectionMethod;
+use SensitiveParameterValue;
 use stdClass;
 
 class SdkResponseShapeTest extends TestCase
@@ -42,6 +43,28 @@ class SdkResponseShapeTest extends TestCase
         config(['airwallex.preserve_response_objects' => 'yes']);
         $this->expectException(ConfigurationException::class);
         app(Client::class);
+    }
+
+    public function test_configuration_failure_redacts_the_decoded_event_from_exception_trace_arguments(): void
+    {
+        $original = ini_get('zend.exception_ignore_args');
+        ini_set('zend.exception_ignore_args', '0');
+        try {
+            foreach ($this->supportsObjects() ? ['invalid'] : ['invalid', true] as $setting) {
+                config(['airwallex.preserve_response_objects' => $setting]);
+                $event = WebhookEvent::fromJson('{"id":"synthetic-event","profile":{"email":"private-synthetic@example.test"}}');
+                try {
+                    SdkResponseShape::webhook($event);
+                    self::fail('Expected configuration rejection.');
+                } catch (ConfigurationException $exception) {
+                    $frames = array_values(array_filter($exception->getTrace(), fn (array $frame): bool => ($frame['class'] ?? null) === SdkResponseShape::class && $frame['function'] === 'webhook'));
+                    self::assertCount(1, $frames);
+                    self::assertInstanceOf(SensitiveParameterValue::class, $frames[0]['args'][0]);
+                }
+            }
+        } finally {
+            ini_set('zend.exception_ignore_args', $original);
+        }
     }
 
     public function test_selected_sdk_http_pages_preserve_metadata_objects_and_array_interfaces_in_both_families(): void
