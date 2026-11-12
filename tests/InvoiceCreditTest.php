@@ -63,7 +63,7 @@ class InvoiceCreditTest extends TestCase
     public function test_partial_original_invoice_credit_has_three_durable_stages_and_keeps_a_paid_remainder(): void
     {
         $this->extension();
-        $recipe = (require __DIR__.'/../examples/free-period.php')();
+        $recipe = $this->recipes();
         $create = $recipe['create_credit']($this->invoice, 'free/create', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
         $items = $recipe['add_credit_items']($this->invoice, 'free/items', 'free/create', [['invoice_line_item_id' => 'original-line', 'amount' => '15.00']]);
         $final = $recipe['finalize_credit']($this->invoice, 'free/final', 'free/create', '15.00');
@@ -373,7 +373,7 @@ class InvoiceCreditTest extends TestCase
         $this->extension();
         $this->create();
         $this->add();
-        $recipe = (require __DIR__.'/../examples/free-period.php')();
+        $recipe = $this->recipes();
         try {
             array_map($recipe['finalize_credit'], [$this->invoice], ['free/final'], ['free/create'], [15.0]);
             self::fail('A weak caller coerced an inexact total.');
@@ -530,6 +530,11 @@ class InvoiceCreditTest extends TestCase
     private function create(string $type = 'BEFORE_PAYMENT'): Operation
     {
         return $this->invoice->createCreditNote('free/create', $type, 'GOODWILL_GESTURE');
+    }
+
+    private function recipes(): array
+    {
+        return (require dirname((new \ReflectionClass(Invoice::class))->getFileName(), 2).'/examples/free-period.php')();
     }
 
     private function add(): Operation
