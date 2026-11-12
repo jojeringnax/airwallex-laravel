@@ -125,7 +125,7 @@ class FirstChargeDiscountTest extends TestCase
         }
     }
 
-    public function test_attributed_invoice_recovers_saved_response_proof_after_consumption_on_a_historical_generation(): void
+    public function test_attributed_invoice_recovers_saved_response_proof_after_current_discount_disappears_on_a_historical_generation(): void
     {
         $this->extension();
         $operation = $this->ambiguousWithProof();
