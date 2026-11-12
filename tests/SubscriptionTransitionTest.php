@@ -20,6 +20,7 @@ use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\InterleavingHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
+use Jojeringnax\AirwallexLaravel\Timestamp;
 use Psr\Http\Client\ClientInterface;
 use RuntimeException;
 
@@ -233,6 +234,22 @@ class SubscriptionTransitionTest extends TestCase
         }
     }
 
+    public function test_skipping_a_whole_billing_cycle_blocks_even_inside_a_generous_execution_window(): void
+    {
+        $this->http($this->observation());
+        $plan = $this->subscription->scheduleTransition('skipped-cycle', '2026-12-01T00:00:00Z', [['id' => 'item-test', 'quantity' => 2]], self::OPTIONS, '2027-01-05T00:00:00Z');
+        Carbon::setTestNow('2027-01-02T00:00:00Z');
+        $http = $this->http($this->observation());
+        try {
+            $plan->run();
+            self::fail('A later cycle received a missed financial action.');
+        } catch (EvidenceException) {
+            self::assertSame('blocked', $plan->fresh()->status);
+            self::assertSame(0, Operation::count());
+            self::assertCount(4, $http->requests);
+        }
+    }
+
     private function plan(string $action = 'plan'): SubscriptionTransition
     {
         return $this->subscription->scheduleTransition($action, '2026-12-01T00:00:00Z', [['id' => 'item-test', 'quantity' => 2]], self::OPTIONS, '2026-12-01T00:10:00Z');
@@ -240,7 +257,12 @@ class SubscriptionTransitionTest extends TestCase
 
     private function observation(?array $remote = null, ?array $item = null): array
     {
-        return [FakeHttpClient::json($remote ?? Billing::subscription()), Billing::page([$item ?? Billing::item(['quantity' => '1'])]), FakeHttpClient::json($remote ?? Billing::subscription())];
+        $remote = [...Billing::subscription(), 'current_period_starts_at' => now()->startOfMonth()->format('Y-m-d\\TH:i:sP'), 'current_period_ends_at' => now()->startOfMonth()->addMonth()->format('Y-m-d\\TH:i:sP'), ...($remote ?? [])];
+        if (Timestamp::compare($remote['updated_at'], $remote['current_period_starts_at']) < 0) {
+            $remote['updated_at'] = $remote['current_period_starts_at'];
+        }
+
+        return [FakeHttpClient::json($remote), Billing::page([$item ?? Billing::item(['quantity' => '1'])]), FakeHttpClient::json($remote)];
     }
 
     private function http(array $responses): FakeHttpClient

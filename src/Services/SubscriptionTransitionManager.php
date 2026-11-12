@@ -48,7 +48,7 @@ class SubscriptionTransitionManager
         if (! in_array($subscription->status, ['ACTIVE', 'IN_TRIAL'], true)) {
             throw new EvidenceException('A transition requires a canonically ACTIVE or IN_TRIAL source generation.');
         }
-        $intent = ['remote_id' => $subscription->remote_id, 'expected_shape' => self::shape($subscription), 'items' => $items, 'options' => $options];
+        $intent = ['remote_id' => $subscription->remote_id, 'expected_shape' => self::shape($subscription), 'items' => $items, 'options' => $options, 'cycle_guard' => true];
         // The index is only an early candidate filter; exact arbitrary fractional comparison decides eligibility.
         $indexedTime = new DateTimeImmutable(preg_replace('/(\.\d{6})\d+/', '$1', $effectiveAt));
         try {
@@ -144,7 +144,7 @@ class SubscriptionTransitionManager
             if ($subscription->remote_id !== $transition->intent['remote_id']) {
                 throw new OwnershipException('Transition source generation no longer matches.');
             }
-            app(SubscriptionManager::class)->applyTransition($subscription, self::commandKey($transition), $transition->intent['items'], $transition->intent['options'], $transition->intent['expected_shape'], $transition->expires_at);
+            app(SubscriptionManager::class)->applyTransition($subscription, self::commandKey($transition), $transition->intent['items'], $transition->intent['options'], $transition->intent['expected_shape'], $transition->expires_at, ($transition->intent['cycle_guard'] ?? false) === true ? $transition->effective_at : null);
             $operation = ModelRegistry::query('operation')->where([...$this->context->attributes(), 'action_key' => self::commandKey($transition)])->firstOrFail();
             $complete = $operation->status === 'succeeded';
             ModelRegistry::query('subscription_transition')->whereKey($transition->id)->whereIn('status', ['executing', 'ambiguous'])
