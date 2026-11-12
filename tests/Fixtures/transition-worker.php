@@ -25,6 +25,9 @@ use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
+if (! isset($argv) || count($argv) !== 5) {
+    throw new RuntimeException('Transition worker requires database, barrier, identity and mode arguments.');
+}
 [$script, $database, $barrier, $id, $mode] = $argv;
 $app = new Application(dirname(__DIR__, 2));
 Application::setInstance($app);
