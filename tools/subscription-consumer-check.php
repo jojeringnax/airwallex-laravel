@@ -170,7 +170,7 @@ try {
     $report['checks'][] = 'early_native_request_original_source_and_separately_persisted_application_entitlement_boundaries';
     Carbon::setTestNow('2026-11-10T12:00:00Z');
 
-    $freeRecipes = require $package.'/examples/free-period.php';
+    $freeRecipes = (require $package.'/examples/free-period.php')();
     $freeRemote = Fixtures::subscription('sub-earned-free', 'customer-adoption', ['current_period_ends_at' => '2026-11-11T12:01:00Z']);
     $freeItem = Fixtures::item('earned-item', 'sub-earned-free', '1');
     $http = $bind(Fixtures::observation($freeRemote, [$freeItem]));
