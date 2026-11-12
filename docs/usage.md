@@ -221,8 +221,23 @@ $priceId = $adapters['price']('sandbox', 'membership', 'USD');
 $result = $adapters['cash']($ownedTransaction->toArray(), $independentApplicationAllocation);
 ```
 
-Both amount callbacks reject floats even from weak PHP callers, unknown exponents and excess nonzero precision. The illustrative currency table in qualification does not establish account/payment-method eligibility. Keep coupon eligibility/redemption and initial trial/free-period date calculation in application policy. An ACTIVE billing holiday or exact provider renewal boundary remains unavailable without the evidence in the scope/provider references.
+Both amount callbacks reject floats even from weak PHP callers, unknown exponents and excess nonzero precision. The illustrative currency table in qualification does not establish account/payment-method eligibility. Keep coupon eligibility/redemption and initial trial/free-period date calculation in application policy. The bounded ACTIVE Coupon strategy below requires its own SDK selection and Discount proof; exact provider renewal timing and invoice effects remain separate evidence.
 
 The optional cash callback requires an application-owned table with unique/primary `financial_identity`, string `provider`, `environment`, `account_id`, `resource_id`, `invoice_id`, `currency`, `proof_reference`, `clearing_account`, and exact string/text `amount_minor`. Supply allocation evidence from trusted server-side reconciliation: owning environment/account, invoice and PaymentIntent IDs, currency/amount, independent proof reference, clearing account and an independently established exclusive-to-invoice allocation. A caller-supplied boolean is not that proof. Missing allocation, manual/refund/pending/failed observations and zero cash return `unallocated`; repeated canonical intent identity returns `duplicate`; contradictory existing allocation fails. Distinct webhook delivery IDs and Billing/Payments references must resolve to that same verified account/intent key. The application must adapt this example to its real atomic ledger, partial/cross-document allocations, credit notes, accounting configuration and retention policy.
 
-The [owned invoice transaction recipe](../examples/invoice-transactions.php), [renewal restoration recipe](../examples/restore-renewal.php) and [due transition recipe](../examples/schedule-transition.php) are qualified through the selected subscription track. Restoration follows its explicitly supported combinations; the transition recipe establishes local due execution. ACTIVE recurring free periods and atomic scheduled provider execution require separate evidence. Applications own their catalogue, clients and accounting integration. Separately authorized Sandbox evidence remains a library validation gate.
+The [owned invoice transaction recipe](../examples/invoice-transactions.php), [renewal restoration recipe](../examples/restore-renewal.php) and [due transition recipe](../examples/schedule-transition.php) are qualified through the selected subscription track. Restoration follows its explicitly supported combinations; the transition recipe establishes local due execution. The bounded native Coupon strategy requires the explicitly selected extension below; actual financial effects and atomic scheduled provider execution require separate evidence. Applications own their catalogue, clients and accounting integration. Separately authorized Sandbox evidence remains a library validation gate.
+
+## Earned ACTIVE free periods
+
+Authorize eligibility and persist the application's commercial action first. Select and qualify the exact SDK Coupon extension described in [public contracts](contracts.md#bounded-active-free-periods), run the additive migration, and verify an owned active 100 percent CUSTOM Coupon. The application administers that catalogue; this helper does not create Coupons.
+
+```php
+$free = $subscription->applyFreePeriod($freePeriodActionKey, $ownedCouponId);
+// Inspect the original Operation's hidden observation explicitly in authorized server code.
+// Persist application entitlement dates independently from the observed Discount end.
+$free->updateItemsForNextCycle($tierActionKey, $approvedItems, $confirmedRenewalBoundary);
+// Only when the business explicitly requests early removal:
+$free->removeFreePeriod($removeActionKey, $freePeriodActionKey);
+```
+
+[free-period.php](../examples/free-period.php) provides the apply/remove callbacks. The installed extension profile executes apply → following next-cycle tier → explicit removal and checks preserved source/auto-renew/Discount identity. The released SDK profile executes its explicit configuration refusal. Neither profile establishes actual Invoice amounts or a zero-cash renewal. Natural expiry needs no local write; an ambiguous original action stays held and only recovers by reads. Subscription-level discount stacking, a different original Discount, scheduled cancellation, arbitrary free dates and waiver of old invoices are unsupported by this helper. Application membership and ledger decisions retain their own proofs.

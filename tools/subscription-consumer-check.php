@@ -15,6 +15,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\AirwallexBillable;
+use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
@@ -167,6 +168,51 @@ try {
     adoptionCheck(DB::table('candidate_membership_plans')->where('effective_at', '<=', $paidBoundary)->count() === 2, 'The second application boundary was lost.');
     $report['recipes']['next-cycle-change.php'] = ['executed' => true, 'sequence' => 'trial to first paid tier to following lower tier', 'invoice_effects' => 'synthetic state only; actual invoices remain Sandbox evidence'];
     $report['checks'][] = 'early_native_request_original_source_and_separately_persisted_application_entitlement_boundaries';
+    Carbon::setTestNow('2026-11-10T12:00:00Z');
+
+    $freeRecipes = require $package.'/examples/free-period.php';
+    $freeRemote = Fixtures::subscription('sub-earned-free', 'customer-adoption', ['current_period_ends_at' => '2026-11-11T12:01:00Z']);
+    $freeItem = Fixtures::item('earned-item', 'sub-earned-free', '1');
+    $http = $bind(Fixtures::observation($freeRemote, [$freeItem]));
+    $free = $billing->importSubscription('earned-free', $freeRemote['id']);
+    $http->assertConsumed();
+    if (! method_exists($app->make(Client::class)->billing(), 'coupons')) {
+        $before = Operation::count();
+        $http = $bind(Fixtures::observation($freeRemote, [$freeItem]));
+        try {
+            $freeRecipes['apply']($free, 'earned-free-command', 'coupon-synthetic');
+            throw new RuntimeException('The baseline silently accepted an unavailable Coupon dependency.');
+        } catch (ConfigurationException) {
+            adoptionCheck(Operation::count() === $before, 'Missing Coupon capability persisted a financial command.');
+        }
+        $http->assertConsumed();
+        $report['recipes']['free-period.php'] = ['executed' => true, 'path' => 'explicit unavailable-SDK prerequisite; no Coupon mutation', 'financial_effects' => 'unqualified'];
+    } else {
+        $coupon = ['id' => 'coupon-synthetic', 'active' => true, 'discount_model' => 'PERCENTAGE', 'percentage_off' => 100, 'duration_type' => 'CUSTOM', 'duration' => ['period' => 1, 'period_unit' => 'DAY']];
+        $discount = ['id' => 'discount-synthetic', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => $freeRemote['id'], 'billing_customer_id' => 'customer-adoption', 'source' => 'COUPON', 'source_id' => $coupon['id'], 'discount_model' => 'PERCENTAGE', 'percentage_off' => 100, 'duration_type' => 'CUSTOM', 'duration' => $coupon['duration'], 'created_at' => '2026-11-10T12:01:00Z', 'ends_at' => '2026-11-11T12:01:00Z'];
+        $discounted = [...$freeRemote, 'applied_discounts' => [$discount], 'updated_at' => $discount['created_at']];
+        $http = $bind([...Fixtures::observation($freeRemote, [$freeItem]), Fixtures::request('GET', 'billing/coupons/'.$coupon['id'], $coupon), Fixtures::request('GET', 'billing/coupons/'.$coupon['id'], $coupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $discounted), ...Fixtures::observation($discounted, [$freeItem])]);
+        $free = $freeRecipes['apply']($free, 'earned-free-command', $coupon['id']);
+        $http->assertConsumed();
+        $freeOperation = Operation::where('action_key', 'earned-free-command')->sole();
+        adoptionCheck($freeOperation->status === 'succeeded' && $freeOperation->observation['discount_proof']['ends_at'] === $discount['ends_at'], 'Original exact Discount/end was not confirmed.');
+        DB::table('candidate_membership_plans')->insert(['action_key' => 'after-earned-free', 'effective_at' => $discount['ends_at'], 'tier' => 'basic']);
+        Carbon::setTestNow('2026-11-10T12:02:00Z');
+        $lowerFreeItem = Fixtures::item('after-earned-free-item', $freeRemote['id'], '1', '2026-11-10T12:02:00Z');
+        $lowerFreeItem['price']['id'] = 'price-after-free';
+        $lowerFree = [...$discounted, 'updated_at' => '2026-11-10T12:02:00Z'];
+        $http = $bind([...Fixtures::observation($discounted, [$freeItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $lowerFree), ...Fixtures::observation($lowerFree, [$lowerFreeItem])]);
+        $free = (require $package.'/examples/next-cycle-change.php')($free, 'after-earned-free', [['id' => $freeItem['id'], 'deleted' => true], ['price_id' => 'price-after-free', 'quantity' => 1]], $discount['ends_at']);
+        $http->assertConsumed();
+        adoptionCheck($free->cancel_at_period_end === false && $free->snapshot['payment_source_id'] === $freeRemote['payment_source_id'] && $free->snapshot['applied_discounts'][0]['id'] === $discount['id'], 'Following tier changed auto-renew, source or free-period identity.');
+        adoptionCheck(DB::table('candidate_membership_plans')->where('action_key', 'after-earned-free')->sole()->effective_at === $discount['ends_at'], 'The application entitlement date was lost.');
+        $removed = [...$lowerFree, 'applied_discounts' => [], 'updated_at' => '2026-11-10T12:03:00Z'];
+        $http = $bind([...Fixtures::observation($lowerFree, [$lowerFreeItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $removed), ...Fixtures::observation($removed, [$lowerFreeItem])]);
+        $freeRecipes['remove']($free, 'remove-earned-free', 'earned-free-command');
+        $http->assertConsumed();
+        adoptionCheck(Operation::where('action_key', 'remove-earned-free')->sole()->status === 'succeeded', 'Explicit original-discount removal did not converge.');
+        $report['recipes']['free-period.php'] = ['executed' => true, 'path' => '100 percent CUSTOM Coupon, following next-cycle tier and explicit removal', 'financial_effects' => 'synthetic only; no invoice or cash proof'];
+    }
     Carbon::setTestNow('2026-11-10T12:00:00Z');
 
     $original = Fixtures::subscription('sub-finite', 'customer-adoption', ['collection_method' => 'OUT_OF_BAND', 'ends_at' => '2027-01-01T00:00:00Z', 'duration' => ['period' => 2, 'period_unit' => 'MONTH']]);

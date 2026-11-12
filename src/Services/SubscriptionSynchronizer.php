@@ -291,11 +291,15 @@ class SubscriptionSynchronizer
 
     private function sameCore(array $left, array $right): bool
     {
-        foreach (['id', 'billing_customer_id', 'status', 'collection_method', 'payment_source_id', 'cancel_at_period_end', 'duration', 'remaining_duration', 'legal_entity_id', 'linked_payment_account_id', 'created_at', ...self::DATES] as $key) {
+        foreach (['id', 'billing_customer_id', 'status', 'collection_method', 'payment_source_id', 'cancel_at_period_end', 'duration', 'remaining_duration', 'applied_discounts', 'legal_entity_id', 'linked_payment_account_id', 'created_at', ...self::DATES] as $key) {
             if (in_array($key, ['legal_entity_id', 'linked_payment_account_id'], true) && (! array_key_exists($key, $left) || ! array_key_exists($key, $right))) {
                 continue;
             }
-            if (in_array($key, [...self::DATES, 'created_at'], true) && is_string($left[$key] ?? null) && is_string($right[$key] ?? null)) {
+            if ($key === 'applied_discounts') {
+                if (CanonicalJson::encode($left[$key] ?? null) !== CanonicalJson::encode($right[$key] ?? null)) {
+                    return false;
+                }
+            } elseif (in_array($key, [...self::DATES, 'created_at'], true) && is_string($left[$key] ?? null) && is_string($right[$key] ?? null)) {
                 if (Timestamp::compare($left[$key], $right[$key]) !== 0) {
                     return false;
                 }

@@ -48,7 +48,7 @@ class SubscriptionTransitionManager
         if (! in_array($subscription->status, ['ACTIVE', 'IN_TRIAL'], true)) {
             throw new EvidenceException('A transition requires a canonically ACTIVE or IN_TRIAL source generation.');
         }
-        $intent = ['remote_id' => $subscription->remote_id, 'expected_shape' => self::shape($subscription), 'items' => $items, 'options' => $options, 'cycle_guard' => true];
+        $intent = ['remote_id' => $subscription->remote_id, 'expected_shape' => self::shape($subscription, 2), 'shape_version' => 2, 'items' => $items, 'options' => $options, 'cycle_guard' => true];
         // The index is only an early candidate filter; exact arbitrary fractional comparison decides eligibility.
         $indexedTime = new DateTimeImmutable(preg_replace('/(\.\d{6})\d+/', '$1', $effectiveAt));
         try {
@@ -61,7 +61,7 @@ class SubscriptionTransitionManager
                 if ($slot?->subscription_id !== $current->id) {
                     throw new ConflictException('Only the current subscription generation can reserve a transition.');
                 }
-                if (self::shape($current) !== $intent['expected_shape']) {
+                if (self::shape($current, $intent['shape_version']) !== $intent['expected_shape']) {
                     throw new ConflictException('Subscription changed while preparing its transition.');
                 }
                 if ($replaces !== null) {
@@ -144,7 +144,7 @@ class SubscriptionTransitionManager
             if ($subscription->remote_id !== $transition->intent['remote_id']) {
                 throw new OwnershipException('Transition source generation no longer matches.');
             }
-            app(SubscriptionManager::class)->applyTransition($subscription, self::commandKey($transition), $transition->intent['items'], $transition->intent['options'], $transition->intent['expected_shape'], $transition->expires_at, ($transition->intent['cycle_guard'] ?? false) === true ? $transition->effective_at : null);
+            app(SubscriptionManager::class)->applyTransition($subscription, self::commandKey($transition), $transition->intent['items'], $transition->intent['options'], $transition->intent['expected_shape'], $transition->expires_at, ($transition->intent['cycle_guard'] ?? false) === true ? $transition->effective_at : null, $transition->intent['shape_version'] ?? 1);
             $operation = ModelRegistry::query('operation')->where([...$this->context->attributes(), 'action_key' => self::commandKey($transition)])->firstOrFail();
             $complete = $operation->status === 'succeeded';
             ModelRegistry::query('subscription_transition')->whereKey($transition->id)->whereIn('status', ['executing', 'ambiguous'])
@@ -161,14 +161,23 @@ class SubscriptionTransitionManager
     }
 
     /** @internal Stable financial precondition, independent of natural period rollover. */
-    public static function shape(Subscription $subscription): string
+    public static function shape(Subscription $subscription, int $version = 1): string
     {
+        if (! in_array($version, [1, 2], true)) {
+            throw new EvidenceException('Unknown transition financial shape version.');
+        }
         $items = [];
         foreach ($subscription->items()->get() as $item) {
             $items[$item->remote_id] = ['price_id' => $item->getAttribute('price_id'), 'quantity' => $item->getAttribute('quantity')];
+            if ($version === 2) {
+                $items[$item->remote_id]['applied_discounts'] = $item->snapshot['applied_discounts'] ?? null;
+            }
         }
         ksort($items, SORT_STRING);
         $controls = array_intersect_key($subscription->snapshot, array_flip(['collection_method', 'payment_source_id', 'cancel_at_period_end', 'ends_at', 'starts_at']));
+        if ($version === 2) {
+            $controls['applied_discounts'] = $subscription->snapshot['applied_discounts'] ?? null;
+        }
 
         return hash('sha256', CanonicalJson::encode([$subscription->id, $subscription->remote_id, $subscription->customer_id, $controls, $items]));
     }

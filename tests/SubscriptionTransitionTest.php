@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionTransition;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
+use Jojeringnax\AirwallexLaravel\Services\SubscriptionTransitionManager;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\InterleavingHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
@@ -71,6 +72,26 @@ class SubscriptionTransitionTest extends TestCase
         self::assertArrayNotHasKey('cancel_at_period_end', json_decode((string) $http->requests[4]->getBody(), true));
         $plan->run();
         self::assertCount(8, $http->requests);
+    }
+
+    public function test_new_plan_blocks_changed_discounts_while_legacy_shape_keeps_its_original_hash(): void
+    {
+        $original = SubscriptionTransitionManager::shape($this->subscription);
+        $this->http($this->observation());
+        $plan = $this->plan();
+        self::assertSame(2, $plan->intent['shape_version']);
+        $remote = Billing::subscription(['applied_discounts' => [['id' => 'external-discount']], 'updated_at' => '2026-12-01T00:00:00Z']);
+        Carbon::setTestNow('2026-12-01T00:00:01Z');
+        $http = $this->http($this->observation($remote));
+        try {
+            $plan->run();
+            self::fail('A changed discount reached the due financial action.');
+        } catch (EvidenceException) {
+            self::assertSame('blocked', $plan->fresh()->status);
+            self::assertSame(0, Operation::count());
+            self::assertCount(4, $http->requests);
+            self::assertSame($original, SubscriptionTransitionManager::shape($this->subscription->fresh()));
+        }
     }
 
     public function test_replace_is_atomic_before_execution_and_same_key_cannot_change_its_plan(): void
