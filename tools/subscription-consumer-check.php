@@ -123,6 +123,52 @@ try {
     adoptionCheck(DB::table('candidate_adoption_commands')->where('action_key', 'future-trial-command')->count() === 1 && ! DB::table('candidate_adoption_commands')->where('action_key', 'denied-trial-command')->exists(), 'Authorized and denied application commands lost their distinct persistence outcome.');
     $report['checks'][] = 'authorized_provider_entry_point_persisted_command_catalogue_and_exact_free_period';
 
+    Schema::create('candidate_membership_plans', static function (Blueprint $table): void {
+        $table->string('action_key')->primary();
+        $table->string('effective_at');
+        $table->string('tier');
+    });
+    $trialBoundary = '2026-11-11T00:00:00Z';
+    $trialRemote = Fixtures::subscription('sub-trial-sequence', 'customer-adoption', ['status' => 'IN_TRIAL', 'trial_starts_at' => '2026-11-01T00:00:00Z', 'trial_ends_at' => $trialBoundary]);
+    $trialItem = Fixtures::item('trial-item', 'sub-trial-sequence', '1');
+    $http = $bind(Fixtures::observation($trialRemote, [$trialItem]));
+    $trialSequence = $billing->importSubscription('trial-sequence', 'sub-trial-sequence');
+    $http->assertConsumed();
+    DB::table('candidate_membership_plans')->insert(['action_key' => 'first-paid-tier', 'effective_at' => $trialBoundary, 'tier' => 'standard']);
+    $firstPaidItem = Fixtures::item('first-paid-item', 'sub-trial-sequence', '1', '2026-11-10T12:01:00Z');
+    $firstPaidItem['price']['id'] = 'price-first-paid';
+    $changedTrial = [...$trialRemote, 'updated_at' => '2026-11-10T12:01:00Z'];
+    $http = $bind([...Fixtures::observation($trialRemote, [$trialItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/sub-trial-sequence/update', $changedTrial), ...Fixtures::observation($changedTrial, [$firstPaidItem])]);
+    $trialSequence = (require $package.'/examples/next-cycle-change.php')($trialSequence, 'first-paid-tier', [['id' => 'trial-item', 'deleted' => true], ['price_id' => 'price-first-paid', 'quantity' => 1]], $trialBoundary);
+    $http->assertConsumed();
+    adoptionCheck($trialSequence->status === 'IN_TRIAL' && $trialSequence->onTrial(), 'An early item update ended the free trial locally.');
+    adoptionCheck(Operation::where('action_key', 'first-paid-tier')->sole()->intent['next_cycle_boundary'] === $trialBoundary, 'Original trial boundary was not persisted in the durable command.');
+    adoptionCheck(DB::table('candidate_membership_plans')->where('effective_at', '<=', now()->format('Y-m-d\TH:i:s\Z'))->count() === 0, 'Immediate item projection prematurely applied the dated membership.');
+    Carbon::setTestNow($trialBoundary);
+    $paid = [...$changedTrial, 'status' => 'ACTIVE', 'current_period_starts_at' => $trialBoundary, 'current_period_ends_at' => '2026-12-11T00:00:00Z', 'updated_at' => $trialBoundary];
+    $http = $bind(Fixtures::observation($paid, [$firstPaidItem]));
+    $trialSequence = $trialSequence->reconcile();
+    $http->assertConsumed();
+    adoptionCheck($trialSequence->active() && DB::table('candidate_membership_plans')->where('effective_at', '<=', $trialBoundary)->sole()->tier === 'standard', 'Canonical first paid state and application membership did not converge.');
+    $paidBoundary = $paid['current_period_ends_at'];
+    DB::table('candidate_membership_plans')->insert(['action_key' => 'following-paid-tier', 'effective_at' => $paidBoundary, 'tier' => 'basic']);
+    $lowerItem = Fixtures::item('following-paid-item', 'sub-trial-sequence', '1', '2026-11-11T00:01:00Z');
+    $lowerItem['price']['id'] = 'price-following-paid';
+    $lowerPaid = [...$paid, 'updated_at' => '2026-11-11T00:01:00Z'];
+    $http = $bind([...Fixtures::observation($paid, [$firstPaidItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/sub-trial-sequence/update', $lowerPaid), ...Fixtures::observation($lowerPaid, [$lowerItem])]);
+    $trialSequence = (require $package.'/examples/next-cycle-change.php')($trialSequence, 'following-paid-tier', [['id' => 'first-paid-item', 'deleted' => true], ['price_id' => 'price-following-paid', 'quantity' => 1]], $paidBoundary);
+    $http->assertConsumed();
+    adoptionCheck(DB::table('candidate_membership_plans')->where('effective_at', '<=', $trialBoundary)->count() === 1 && $trialSequence->snapshot['payment_source_id'] === $trialRemote['payment_source_id'], 'The later tier changed the earlier entitlement or original source.');
+    Carbon::setTestNow($paidBoundary);
+    $nextPaid = [...$lowerPaid, 'current_period_starts_at' => $paidBoundary, 'current_period_ends_at' => '2027-01-11T00:00:00Z', 'updated_at' => $paidBoundary];
+    $http = $bind(Fixtures::observation($nextPaid, [$lowerItem]));
+    $trialSequence->reconcile();
+    $http->assertConsumed();
+    adoptionCheck(DB::table('candidate_membership_plans')->where('effective_at', '<=', $paidBoundary)->count() === 2, 'The second application boundary was lost.');
+    $report['recipes']['next-cycle-change.php'] = ['executed' => true, 'sequence' => 'trial to first paid tier to following lower tier', 'invoice_effects' => 'synthetic state only; actual invoices remain Sandbox evidence'];
+    $report['checks'][] = 'early_native_request_original_source_and_separately_persisted_application_entitlement_boundaries';
+    Carbon::setTestNow('2026-11-10T12:00:00Z');
+
     $original = Fixtures::subscription('sub-finite', 'customer-adoption', ['collection_method' => 'OUT_OF_BAND', 'ends_at' => '2027-01-01T00:00:00Z', 'duration' => ['period' => 2, 'period_unit' => 'MONTH']]);
     unset($original['payment_source_id']); // The verified restoration subset has no payment instrument.
     $item = Fixtures::item('item-finite', 'sub-finite', '1.000');

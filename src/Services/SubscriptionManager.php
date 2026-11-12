@@ -114,10 +114,10 @@ class SubscriptionManager
     }
 
     /** @internal Execute a previously authorized due plan through the ordinary financial mutex and recovery. */
-    public function applyTransition(Subscription $subscription, string $actionKey, array $items, array $options, string $expectedShape, string $expiresAt): Subscription
+    public function applyTransition(Subscription $subscription, string $actionKey, array $items, array $options, string $expectedShape, string $expiresAt, ?string $effectiveAt = null): Subscription
     {
-        return $this->change($subscription, $actionKey, 'subscription.items', ['items' => $items, 'options' => $options, 'transition_shape' => $expectedShape, 'expires_at' => $expiresAt], function (Subscription $current) use ($items, $options, $expectedShape, $expiresAt): array {
-            $this->assertTransitionDispatch($current, $expectedShape, $expiresAt);
+        return $this->change($subscription, $actionKey, 'subscription.items', ['items' => $items, 'options' => $options, 'transition_shape' => $expectedShape, 'expires_at' => $expiresAt, ...($effectiveAt === null ? [] : ['effective_at' => $effectiveAt])], function (Subscription $current) use ($items, $options, $expectedShape, $expiresAt, $effectiveAt): array {
+            $this->assertTransitionDispatch($current, $expectedShape, $expiresAt, $effectiveAt);
             $this->mutableItems($current);
             foreach ($items as $item) {
                 if (is_array($item) && isset($item['id']) && is_string($item['id'])) {
@@ -126,14 +126,54 @@ class SubscriptionManager
             }
 
             return $this->itemPayload($items, $options);
-        }, fn (Subscription $current) => $this->assertTransitionDispatch($current, $expectedShape, $expiresAt));
+        }, fn (Subscription $current) => $this->assertTransitionDispatch($current, $expectedShape, $expiresAt, $effectiveAt));
     }
 
-    private function assertTransitionDispatch(Subscription $current, string $expectedShape, string $expiresAt): void
+    public function updateItemsForNextCycle(Subscription $subscription, string $actionKey, array $items, string $boundary): Subscription
+    {
+        $options = ['default_proration_mode' => 'NONE', 'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE'];
+
+        return $this->change($subscription, $actionKey, 'subscription.items', ['items' => $items, 'options' => $options, 'next_cycle_boundary' => $boundary], function (Subscription $current) use ($items, $options, $boundary): array {
+            $this->assertNextCycleDispatch($current, $boundary);
+            $this->mutableItems($current);
+            foreach ($items as $item) {
+                if (is_array($item) && isset($item['id']) && is_string($item['id'])) {
+                    $this->item($current, $item['id']);
+                }
+            }
+
+            return $this->itemPayload($items, $options);
+        }, fn (Subscription $current) => $this->assertNextCycleDispatch($current, $boundary));
+    }
+
+    private function assertNextCycleDispatch(Subscription $current, string $boundary): void
+    {
+        $observed = $current->status === 'IN_TRIAL' ? $current->snapshot['trial_ends_at'] ?? null : $current->snapshot['current_period_ends_at'] ?? null;
+        if (! in_array($current->status, ['ACTIVE', 'IN_TRIAL'], true) || $current->cancel_at_period_end !== false
+            || ! is_string($observed) || Timestamp::compare($observed, $boundary) !== 0
+            || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $boundary) >= 0) {
+            throw new EvidenceException('Next-cycle changes require the same confirmed future boundary before the first write.');
+        }
+        $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $current->customer_id)->where('name', $current->name)->first();
+        if ($slot?->subscription_id !== $current->id) {
+            throw new ConflictException('A historic generation cannot prepare next-cycle billing.');
+        }
+    }
+
+    private function assertTransitionDispatch(Subscription $current, string $expectedShape, string $expiresAt, ?string $effectiveAt = null): void
     {
         if ($current->status !== 'ACTIVE' || SubscriptionTransitionManager::shape($current) !== $expectedShape
             || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $expiresAt) > 0) {
             throw new EvidenceException('Transition window, source state or expected financial shape no longer matches.');
+        }
+        if ($effectiveAt !== null) {
+            $start = $current->snapshot['current_period_starts_at'] ?? null;
+            $end = $current->snapshot['current_period_ends_at'] ?? null;
+            if (! is_string($start) || ! is_string($end)
+                || Timestamp::compare($effectiveAt, $start) < 0 || Timestamp::compare($effectiveAt, $end) >= 0
+                || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $end) >= 0) {
+                throw new EvidenceException('The intended execution time does not belong to the confirmed current billing cycle.');
+            }
         }
         $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $current->customer_id)->where('name', $current->name)->first();
         if ($slot?->subscription_id !== $current->id) {
@@ -348,6 +388,9 @@ class SubscriptionManager
             $this->managed($payload, ['request_id', 'billing_customer_id', 'id']);
             Routing::defaults($payload);
             $intent = ['payload' => $payload, 'remote_id' => $subscription->remote_id, 'routing' => Routing::defaults(), 'fingerprint' => $this->fingerprint($subscription), 'prior_item_ids' => $subscription->items()->pluck('remote_id')->all()];
+            if (isset($specification['next_cycle_boundary'])) {
+                $intent['next_cycle_boundary'] = $specification['next_cycle_boundary'];
+            }
             if ($kind === 'subscription.schedule_ending') {
                 $intent['original_bounds'] = array_intersect_key($subscription->snapshot, array_flip(['status', 'collection_method', 'cancel_at_period_end', 'starts_at', 'ends_at', 'duration', 'remaining_duration', 'payment_source_id', 'current_period_starts_at', 'current_period_ends_at']));
                 $intent['renewal_bounds'] = $this->renewalBounds($subscription, $specification['renewal_bounds'] ?? null);

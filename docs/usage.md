@@ -190,6 +190,24 @@ AIRWALLEX_CASHIER_AUTOLOAD=/absolute/fixture/vendor/autoload.php \
 
 For installed-candidate qualification, also set `AIRWALLEX_PACKAGE_AUTOLOAD=/absolute/consumer/vendor/autoload.php` after installing the exact package archive and selected SDK revision in the isolated consumer. That path selects the installed package code; it does not install a sibling path repository. Preserve the consumer lock and exact archive/SDK references with the evidence. The three checks exercise real Cashier relations/builders/legacy invoice reads and cancellation, Airwallex current/history/import/create/setup/invoice/cancel/recovery, morph maps, configured subclasses and unsaved-model refusal. Both transports deny unexpected requests and use synthetic responses only. This fixture is shared by the subscription and Payments adoption qualification tracks; each must verify its own provider context and financial event boundary.
 
+## Native next-cycle and local future changes
+
+Use [next-cycle-change.php](../examples/next-cycle-change.php) before a confirmed renewal or trial end when the target should price the next billed cycle:
+
+```php
+$boundary = $subscription->status === 'IN_TRIAL'
+    ? $subscription->trial_ends_at : $subscription->current_period_ends_at;
+// First persist the application's entitlement plan and stable command key.
+$subscription->updateItemsForNextCycle($commandKey, [
+    ['id' => $oldItemId, 'deleted' => true],
+    ['price_id' => $verifiedLowerPriceId, 'quantity' => 1],
+], $boundary);
+```
+
+The helper sends native NONE billing controls immediately and verifies the original future boundary before its first write. Airwallex can project the new items immediately; the application retains its old entitlement until its own stored date. A trial is not locally shortened by observing different items. The installed sequence demonstrates an initial trial, its first paid tier and a subsequent lower tier with independent application dates; actual first/renewal Invoices remain account evidence.
+
+Use [schedule-transition.php](../examples/schedule-transition.php) for an explicitly chosen future execution time and lateness window. A new plan’s due time must belong to the canonical current cycle at dispatch. A worker missing that cycle blocks rather than applying another cycle’s financial action. This worker submits at its run time; selecting NONE does not turn it into a native future schedule or guarantee that an Invoice already produced at renewal uses the target. Replace/cancel unattempted plans explicitly; reconcile attempted commands without replay. ACTIVE earned billing holidays require a separately qualified financial strategy and are not implemented by these item helpers.
+
 ## Application amount and accounting adapters
 
 The executable [application adapter factory](../examples/adoption-adapters.php) illustrates an injected, independently verified currency-exponent table and catalogue aliases, plus a database-unique financial listener. It adds no package ledger or commercial policy:
