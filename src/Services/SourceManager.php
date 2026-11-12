@@ -15,6 +15,7 @@ use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\PaymentSource;
 use Jojeringnax\AirwallexLaravel\Support\Pages;
 use Jojeringnax\AirwallexLaravel\Support\Routing;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 
 class SourceManager
 {
@@ -24,7 +25,7 @@ class SourceManager
     {
         $customer = $this->customer($customer);
 
-        return $this->verify($customer, $this->client->billing()->paymentSources()->retrieve($id), $id);
+        return $this->verify($customer, SdkResponseShape::normalize($this->client->billing()->paymentSources()->retrieve($id)), $id);
     }
 
     /** @return Collection<int,PaymentSource> */

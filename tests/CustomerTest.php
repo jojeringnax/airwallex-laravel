@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Exception\ApiException;
 use Jojeringnax\Airwallex\Exception\TransportException;
 use Jojeringnax\Airwallex\Exception\ValidationException;
@@ -311,6 +312,7 @@ class CustomerTest extends TestCase
 
     public function test_numeric_object_metadata_does_not_match_an_observed_list(): void
     {
+        config(['airwallex.preserve_response_objects' => false]);
         $team = $this->team();
         $http = $this->http([
             FakeHttpClient::login(), self::remote('Customer-A'), new RuntimeException('timeout'),
@@ -333,6 +335,38 @@ class CustomerTest extends TestCase
         self::assertSame(1, Operation::count());
         self::assertCount(5, $http->requests);
         self::assertSame('{"0":"zero"}', json_encode(Operation::first()->intent['profile']['metadata']));
+    }
+
+    public function test_opt_in_numeric_object_proof_recovers_only_the_original_command_without_a_write(): void
+    {
+        if (! in_array('preserveResponseObjects', array_map(fn ($parameter) => $parameter->getName(), (new \ReflectionMethod(Client::class, '__construct'))->getParameters()), true)) {
+            self::markTestSkipped('Optional object views require released SDK v0.1.2.');
+        }
+        config(['airwallex.preserve_response_objects' => true]);
+        $team = $this->team();
+        $http = $this->http([
+            FakeHttpClient::login(), self::remote('Customer-A'), new RuntimeException('timeout'),
+            self::remote('Customer-A', ['name' => 'Team', 'email' => 'team@example.test', 'metadata' => ['zero']]),
+            self::remote('Customer-A', ['name' => 'Team', 'email' => 'team@example.test', 'metadata' => (object) ['0' => 'zero']]),
+        ]);
+        $team->linkAirwallexCustomer('Customer-A');
+        for ($attempt = 0; $attempt < 2; $attempt++) {
+            try {
+                $team->syncAirwallexCustomer('numeric-preserved', ['metadata' => (object) ['0' => 'zero']]);
+                self::fail('An uncertain write or malformed list confirmed the operation.');
+            } catch (AmbiguousOperationException) {
+                self::assertSame('ambiguous', Operation::first()->status);
+                self::assertNotNull(Operation::first()->lock_key);
+            }
+        }
+        $original = Operation::first();
+        $team->syncAirwallexCustomer('numeric-preserved', ['metadata' => (object) ['0' => 'zero']]);
+        self::assertSame('succeeded', $original->fresh()->status);
+        self::assertNull($original->fresh()->lock_key);
+        self::assertSame($original->request_id, $original->fresh()->request_id);
+        self::assertInstanceOf(\stdClass::class, $original->fresh()->intent['profile']['metadata']);
+        self::assertSame(1, Operation::count());
+        self::assertSame(['POST', 'GET', 'POST', 'GET', 'GET'], array_map(fn ($request) => $request->getMethod(), $http->requests));
     }
 
     public function test_sdk_preflight_rejection_is_classified_and_a_new_key_can_create_afterward(): void

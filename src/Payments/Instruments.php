@@ -19,6 +19,7 @@ use Jojeringnax\AirwallexLaravel\PaymentSource;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Jojeringnax\AirwallexLaravel\Services\SourceManager;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 use Throwable;
 
@@ -143,7 +144,7 @@ class Instruments
         $customer = $this->customer($customer);
         $ids = [];
         for ($page = 0; $page < 10000; $page++) {
-            $remote = app(Client::class)->sdk->payments()->paymentConsents()->list(['customer_id' => $customer->remote_id, 'page_num' => $page, 'page_size' => 100]);
+            $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentConsents()->list(['customer_id' => $customer->remote_id, 'page_num' => $page, 'page_size' => 100]));
             if (! is_array($remote['items'] ?? null) || ! array_is_list($remote['items']) || ! is_bool($remote['has_more'] ?? null)) {
                 throw new EvidenceException('Consent listing did not establish a complete page.');
             }
@@ -336,7 +337,7 @@ class Instruments
         if ($before === null && ! $allowLink) {
             throw new OwnershipException('Consent setup is not known to this billable.');
         }
-        $remote = app(Client::class)->sdk->payments()->paymentConsents()->retrieve($id);
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentConsents()->retrieve($id));
         Proof::identity($remote, $id, $this->context);
         if (($remote['customer_id'] ?? null) !== $customer->remote_id || ! is_string($remote['status'] ?? null)) {
             throw new OwnershipException('Consent customer or status is not canonically confirmed.');
@@ -403,7 +404,7 @@ class Instruments
 
     private function method(Customer $customer, string $id): array
     {
-        $method = app(Client::class)->sdk->payments()->paymentMethods()->retrieve($id);
+        $method = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentMethods()->retrieve($id));
         Proof::identity($method, $id, $this->context);
         if (($method['customer_id'] ?? null) !== $customer->remote_id || ! is_string($method['status'] ?? null) || ! is_string($method['type'] ?? null)) {
             throw new OwnershipException('Payment Method does not belong to the mapped customer.');

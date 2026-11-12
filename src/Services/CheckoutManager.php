@@ -21,6 +21,7 @@ use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\SubscriptionBuilder;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\Routing;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 use stdClass;
 use Throwable;
@@ -198,7 +199,7 @@ class CheckoutManager
         $customer = ModelRegistry::query('customer')->findOrFail($operation->customer_id);
         $this->context->assertModel($customer);
         $before = ModelRegistry::query('checkout')->where($this->context->attributes())->where('remote_id', $id)->first();
-        $remote = $this->client->billing()->checkouts()->retrieve($id);
+        $remote = SdkResponseShape::normalize($this->client->billing()->checkouts()->retrieve($id));
         $this->verify($remote, $id, $customer, $operation, $requireCorrelation);
         try {
             $checkout = DB::transaction(function () use ($operation, $customer, $before, $remote, $id): Checkout {

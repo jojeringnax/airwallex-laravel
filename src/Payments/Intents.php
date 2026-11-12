@@ -15,6 +15,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 use Throwable;
 
@@ -62,7 +63,7 @@ class Intents
         if ($intent->remote_id === null) {
             throw new ConflictException('Recover the original intent creation before reconciliation.', $intent->operation_id);
         }
-        $remote = app(Client::class)->sdk->payments()->paymentIntents()->retrieve($intent->remote_id);
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentIntents()->retrieve($intent->remote_id));
 
         return $this->observe($customer, $intent, $remote, $intent->remote_id);
     }
@@ -76,7 +77,7 @@ class Intents
         if ($intent->remote_id === null) {
             throw new ConflictException('An owned confirmed intent is required for browser bootstrap.');
         }
-        $remote = app(Client::class)->sdk->payments()->paymentIntents()->retrieve($intent->remote_id);
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentIntents()->retrieve($intent->remote_id));
         $intent = $this->observe($customer, $intent, $remote, $intent->remote_id);
         if (! is_string($remote['client_secret'] ?? null) || $remote['client_secret'] === '') {
             throw new EvidenceException('Provider did not return client bootstrap.');
@@ -223,7 +224,7 @@ class Intents
 
     private function confirm(Customer $customer, Intent $intent, Operation $operation, string $id): Intent
     {
-        $remote = app(Client::class)->sdk->payments()->paymentIntents()->retrieve($id);
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentIntents()->retrieve($id));
         if (($remote['request_id'] ?? null) !== $operation->request_id) {
             throw new EvidenceException('Canonical intent does not correlate to the original financial action.');
         }

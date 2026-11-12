@@ -20,6 +20,7 @@ use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\WebhookReceipt;
 use Jojeringnax\AirwallexLaravel\Support\BillingWebhookEnvelope;
 use Jojeringnax\AirwallexLaravel\Support\QueueRouting;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use SensitiveParameter;
 use Throwable;
 
@@ -226,7 +227,7 @@ class ReceiptManager
     /** @return array{eventId:string,eventName:?string,version:?string,resourceId:?string,family:?string,resource:?array,status:string,reason:?string} */
     private function inspect(#[SensitiveParameter] string $body, string $version): array
     {
-        $envelope = WebhookEvent::fromJson($body)->toArray();
+        $envelope = SdkResponseShape::webhook(WebhookEvent::fromJson($body));
         $metadata = BillingWebhookEnvelope::inspect($envelope, $this->context, $version);
         if (str_starts_with($metadata['eventId'], 'invalid/') && ($envelope['id'] ?? null) !== $metadata['eventId']) {
             $metadata['eventId'] = 'invalid/'.hash('sha256', $body);

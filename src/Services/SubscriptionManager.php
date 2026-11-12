@@ -24,6 +24,7 @@ use Jojeringnax\AirwallexLaravel\SubscriptionBuilder;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\Quantity;
 use Jojeringnax\AirwallexLaravel\Support\Routing;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 use stdClass;
 use Throwable;
@@ -231,7 +232,7 @@ class SubscriptionManager
         if ($operation->remote_id === null && $candidateId !== null) {
             $customer = ModelRegistry::query('customer')->findOrFail($operation->customer_id);
             $this->context->assertModel($customer);
-            $remote = app(Client::class)->billing()->subscriptions()->retrieve($candidateId);
+            $remote = SdkResponseShape::normalize(app(Client::class)->billing()->subscriptions()->retrieve($candidateId));
             $this->response($remote, $candidateId, $customer);
             $metadata = (array) ($remote['metadata'] ?? []);
             if (($remote['billing_customer_id'] ?? null) !== $customer->remote_id || ($metadata['_laravel_operation_id'] ?? null) !== $operation->id) {

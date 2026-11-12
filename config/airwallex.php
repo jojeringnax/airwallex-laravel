@@ -15,6 +15,7 @@ return [
     'collection_method' => env('AIRWALLEX_COLLECTION_METHOD', 'AUTO_CHARGE'),
     'cache_store' => env('AIRWALLEX_CACHE_STORE'),
     'read_retry_attempts' => 1,
+    'preserve_response_objects' => env('AIRWALLEX_PRESERVE_RESPONSE_OBJECTS', false),
     'http_timeout' => 30,
     'http_connect_timeout' => 10,
     'sweep' => [

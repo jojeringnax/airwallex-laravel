@@ -17,6 +17,7 @@ use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Payments\Jobs\ProcessReceipt;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Receipt;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use SensitiveParameter;
 use Throwable;
 
@@ -218,7 +219,7 @@ class Receipts
     /** @return array{eventId:string,eventName:?string,version:?string,resourceId:?string,family:?string,resource:?array,status:string,reason:?string} */
     private function inspect(#[SensitiveParameter] string $body, string $version): array
     {
-        $envelope = WebhookEvent::fromJson($body)->toArray();
+        $envelope = SdkResponseShape::webhook(WebhookEvent::fromJson($body));
         $metadata = WebhookEnvelope::inspect($envelope, $this->context, $version);
         if (str_starts_with($metadata['eventId'], 'invalid/') && ($envelope['id'] ?? null) !== $metadata['eventId']) {
             $metadata['eventId'] = 'invalid/'.hash('sha256', $body);
