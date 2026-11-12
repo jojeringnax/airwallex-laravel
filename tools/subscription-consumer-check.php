@@ -382,7 +382,7 @@ try {
         adoptionCheck($freeRecipes['first_charge_invoice']($fixedSubscription, 'fixed-first-charge', 'invoice-fixed', '15.00')->toArray()['total_amount'] === '15.00', 'Original first-charge Discount did not prove the synthetic paid remainder.');
         $http->assertConsumed();
         $report['recipes']['free-period.php']['first_charge_path'] = 'FLAT/ONCE original Discount and attributed finalized intended-period Invoice';
-        $report['recipes']['free-period.php']['first_charge_evidence'] = 'synthetic only; no exact phase, Invoice/tax or collection observation';
+        $report['recipes']['free-period.php']['first_charge_evidence'] = 'synthetic only; ACTIVE ONCE future-use eligibility/targeting, Invoice/tax and collection unverified';
     }
     file_put_contents($options['evidence'], json_encode($report, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR).PHP_EOL);
     echo json_encode(['status' => 'passed', 'recipes_executed' => count($report['recipes'])], JSON_THROW_ON_ERROR).PHP_EOL;
