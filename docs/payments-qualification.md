@@ -22,7 +22,7 @@ Currency conversion uses the [documented Airwallex precision reference](payments
 
 A missing local credential is a configuration failure before the mutation claim. The original prepared row, request ID and customer mutex remain available; repairing configuration and repeating the same key resumes one provider write. Provider authentication, transport or response failures after the claim remain uncertain. This distinction does not authorize replay.
 
-The fixture's 3DS state changes model a canonical callback. Actual browsers, SDK client configuration, Apple Pay/Google Pay merchant eligibility and device actions are not executed. The [general Sandbox gate](sandbox.md) remains applicable; issue #64 owns the separate Payments Sandbox preparation. No installed result proves wallet readiness, account capabilities or settlement.
+The fixture's 3DS state changes model a canonical callback. These deterministic fixtures do not execute actual browsers, SDK client configuration or Apple Pay/Google Pay merchant eligibility/device actions. The [general Sandbox gate](sandbox.md) remains applicable; [issue #64](https://github.com/jojeringnax/airwallex-laravel/issues/64) owns the separate [Payments account/client journey](payments-sandbox.md), including its bounded real card/refund observations and remaining gaps. No installed result proves wallet readiness, account capabilities or settlement.
 
 ## Application ledger schema and trust
 
