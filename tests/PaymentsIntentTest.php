@@ -125,13 +125,32 @@ class PaymentsIntentTest extends TestCase
         $this->payments->createIntent('float', 'another-order', 12.34, 'EUR');
     }
 
-    public function test_conflicting_sle_minor_unit_reference_refuses_before_any_http_or_command(): void
+    public function test_sle_uses_provider_zero_precision_and_retains_original_command(): void
     {
-        foreach ([fn () => $this->payments->createIntentMinor('sle-minor', 'sle-order', '100', 'SLE'),
-            fn () => $this->payments->createIntent('sle-major', 'sle-order-major', '1.00', 'SLE')] as $action) {
+        self::assertSame('100', Amount::fromMinor('100', 'SLE'));
+        self::assertSame('100', Amount::units('100.00', 'SLE'));
+        $intent = $this->payments->createIntentMinor('sle', 'sle-order', '100', 'SLE');
+        self::assertSame('100', $intent->amount);
+        self::assertSame('SLE', $intent->currency);
+        self::assertStringContainsString('"amount":100,', (string) $this->requests[1]->getBody());
+        $operation = Operation::firstOrFail();
+        $requestId = $operation->request_id;
+        $writes = $this->writes();
+
+        self::assertSame($intent->id, $this->payments->createIntent('sle', 'sle-order', '100.00', 'SLE')->id);
+        self::assertSame($writes, $this->writes());
+        self::assertSame($requestId, $operation->fresh()->request_id);
+        self::assertSame('100', $operation->fresh()->intent['amount']);
+        self::assertSame(1, Operation::count());
+        self::assertSame(1, Intent::count());
+    }
+
+    public function test_excess_or_unknown_currency_precision_refuses_before_any_http_or_command(): void
+    {
+        foreach ([['1.01', 'SLE'], ['1.001', 'USD'], ['1', 'ZZZ']] as [$amount, $currency]) {
             try {
-                $action();
-                self::fail('Conflicting currency reference silently selected an exponent.');
+                $this->payments->createIntent('invalid-amount', 'invalid-order', $amount, $currency);
+                self::fail('Unsupported currency precision reached a financial command.');
             } catch (EvidenceException) {
                 self::assertSame([], $this->requests);
                 self::assertSame(0, Operation::count());
