@@ -14,6 +14,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Receipt;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 use Jojeringnax\AirwallexLaravel\Services\ReceiptOutcome;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 
 class WebhookProcessor
 {
@@ -22,7 +23,7 @@ class WebhookProcessor
     public function process(Receipt $receipt): ReceiptOutcome
     {
         $this->context->assertModel($receipt);
-        $event = WebhookEnvelope::inspect(WebhookEvent::fromJson($receipt->body)->toArray(), $this->context, '2026-08-21');
+        $event = WebhookEnvelope::inspect(SdkResponseShape::webhook(WebhookEvent::fromJson($receipt->body)), $this->context, '2026-08-21');
         if ($event['status'] !== 'pending') {
             return new ReceiptOutcome($event['status'], $event['reason']);
         }

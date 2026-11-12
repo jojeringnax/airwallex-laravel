@@ -7,11 +7,11 @@ namespace Jojeringnax\AirwallexLaravel\Payments;
 use Illuminate\Contracts\Cache\Factory as CacheFactory;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
-use Jojeringnax\Airwallex\Client as SdkClient;
 use Jojeringnax\Airwallex\Credentials;
 use Jojeringnax\Airwallex\Environment;
 use Jojeringnax\Airwallex\RetryPolicy;
 use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\StreamFactoryInterface;
@@ -42,16 +42,16 @@ class PaymentsServiceProvider extends ServiceProvider
                 throw new ConfigurationException('Payments read attempts/cache selection is invalid.');
             }
 
-            return new Client(new SdkClient(
-                environment: Environment::from($context->environment),
-                credentials: new Credentials($this->setting('client_id'), $this->setting('api_key')),
-                httpClient: $app->make(ClientInterface::class),
-                requestFactory: $app->make(RequestFactoryInterface::class),
-                streamFactory: $app->make(StreamFactoryInterface::class),
-                loginAccountId: $context->accountId,
-                tokenCache: $app->make(CacheFactory::class)->store($cache),
-                retryPolicy: new RetryPolicy(maxAttempts: $attempts),
-            ));
+            return new Client(SdkResponseShape::client([
+                'environment' => Environment::from($context->environment),
+                'credentials' => new Credentials($this->setting('client_id'), $this->setting('api_key')),
+                'httpClient' => $app->make(ClientInterface::class),
+                'requestFactory' => $app->make(RequestFactoryInterface::class),
+                'streamFactory' => $app->make(StreamFactoryInterface::class),
+                'loginAccountId' => $context->accountId,
+                'tokenCache' => $app->make(CacheFactory::class)->store($cache),
+                'retryPolicy' => new RetryPolicy(maxAttempts: $attempts),
+            ]));
         });
     }
 

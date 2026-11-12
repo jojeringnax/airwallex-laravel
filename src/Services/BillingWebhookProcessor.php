@@ -15,6 +15,7 @@ use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\WebhookReceipt;
 use Jojeringnax\AirwallexLaravel\Support\BillingWebhookEnvelope;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 
 class BillingWebhookProcessor
 {
@@ -28,7 +29,7 @@ class BillingWebhookProcessor
             return new ReceiptOutcome('quarantined', 'missing_or_changed_body');
         }
         try {
-            $envelope = BillingWebhookEnvelope::inspect(WebhookEvent::fromJson($receipt->body)->toArray(), $this->context, config('airwallex.webhook.version', '2026-08-21'));
+            $envelope = BillingWebhookEnvelope::inspect(SdkResponseShape::webhook(WebhookEvent::fromJson($receipt->body)), $this->context, config('airwallex.webhook.version', '2026-08-21'));
         } catch (ProtocolException) {
             return new ReceiptOutcome('quarantined', 'malformed_envelope');
         }

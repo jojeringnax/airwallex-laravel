@@ -19,6 +19,7 @@ use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Throwable;
 
 class CustomerManager
@@ -86,7 +87,7 @@ class CustomerManager
         if ($customer->remote_id !== null && $customer->remote_id !== $remoteId) {
             throw new OwnershipException('This billable already has a different customer mapping.');
         }
-        $remote = app(Client::class)->billing()->customers()->retrieve($remoteId);
+        $remote = SdkResponseShape::normalize(app(Client::class)->billing()->customers()->retrieve($remoteId));
         $this->verify($remote, $remoteId);
 
         return $this->attach($customer, $remote, linking: true);
@@ -247,7 +248,7 @@ class CustomerManager
         if ($customer->remote_id === null) {
             throw new ConflictException('A confirmed customer mapping is required.');
         }
-        $remote = app(Client::class)->billing()->customers()->retrieve($customer->remote_id);
+        $remote = SdkResponseShape::normalize(app(Client::class)->billing()->customers()->retrieve($customer->remote_id));
         $this->verify($remote, $customer->remote_id);
 
         return $this->attach($customer, $remote, expectedId: $customer->remote_id);
@@ -276,7 +277,7 @@ class CustomerManager
             throw new AmbiguousOperationException($operation->id);
         }
         try {
-            $remote = app(Client::class)->billing()->customers()->retrieve($id);
+            $remote = SdkResponseShape::normalize(app(Client::class)->billing()->customers()->retrieve($id));
             $this->verify($remote, $id);
             if ($operation->kind === 'customer.update' && ! self::contains($remote, $operation->intent['profile'])) {
                 throw new EvidenceException('The intended customer update is not confirmed.');

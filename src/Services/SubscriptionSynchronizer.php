@@ -18,6 +18,7 @@ use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\Pages;
 use Jojeringnax\AirwallexLaravel\Support\Routing;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 
 class SubscriptionSynchronizer
@@ -109,7 +110,7 @@ class SubscriptionSynchronizer
         if ($name === '' || strlen($name) > 255 || $customer->remote_id === null) {
             throw new ConflictException('A confirmed customer and explicit subscription name are required.');
         }
-        $remote = $this->client->billing()->subscriptions()->retrieve($remoteId);
+        $remote = SdkResponseShape::normalize($this->client->billing()->subscriptions()->retrieve($remoteId));
         $this->verify($remote, $remoteId, $customer);
         if ($operation !== null || $financial) {
             Routing::assertSubscription([...($operation->observed_routing ?? []), ...$remote]);
@@ -122,7 +123,7 @@ class SubscriptionSynchronizer
         }
         // The provider supplies no transactional list snapshot. Detect a parent
         // change while paging and retain the previous complete local projection.
-        $after = $this->client->billing()->subscriptions()->retrieve($remoteId);
+        $after = SdkResponseShape::normalize($this->client->billing()->subscriptions()->retrieve($remoteId));
         $this->verify($after, $remoteId, $customer);
         if ($operation !== null || $financial) {
             Routing::assertSubscription([...($operation->observed_routing ?? []), ...$after]);

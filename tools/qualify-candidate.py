@@ -109,7 +109,7 @@ class Qualification:
         self.workspace: Path | None = None
         self.output: Path | None = None
         self.records: list[dict] = []
-        self.evidence: dict = {"status": "incomplete", "provisional_version": VERSION, "candidate_input": args.candidate, "dependencies": args.dependencies, "laravel_major": args.laravel, "database": args.database, "financial_network": "disabled; synthetic PSR-18 transport only", "tool_runtime": {"python": sys.version, "executable": sys.executable, "platform": sys.platform}, "commands": self.records}
+        self.evidence: dict = {"status": "incomplete", "provisional_version": VERSION, "candidate_input": args.candidate, "dependencies": args.dependencies, "laravel_major": args.laravel, "database": args.database, "preserve_sdk_objects": args.preserve_sdk_objects, "financial_network": "disabled; synthetic PSR-18 transport only", "tool_runtime": {"python": sys.version, "executable": sys.executable, "platform": sys.platform}, "commands": self.records}
         # Do not inherit provider credentials, Composer auth, or application configuration.
         self.env = {key: os.environ[key] for key in ("PATH", "SYSTEMROOT", "TMPDIR") if key in os.environ}
         self.env.update({"TZ": "UTC", "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "COMPOSER_NO_INTERACTION": "1", "COMPOSER_ROOT_VERSION": "1.0.0"})
@@ -218,6 +218,8 @@ class Qualification:
             return result.stdout
         helper_dir = self.workspace / "qualification-tools"
         track_files = []
+        if self.args.track in ("subscriptions", "payments", "all"):
+            track_files += ["tests/SdkResponseShapeTest.php"]
         if self.args.track in ("subscriptions", "all"):
             track_files += ["tools/subscription-consumer-check.php", "phpunit.xml", "tests/TestCase.php", "tests/CashierCoexistenceTest.php", "tests/Support/FakeHttpClient.php", "tests/Support/TestDatabase.php", "tests/Fixtures/Billing.php", "tests/Fixtures/Team.php", "tests/Fixtures/InterleavingHttpClient.php", "tests/InvoiceTransactionsTest.php", "tests/Consumers/coexistence/bootstrap.php", "tests/Consumers/coexistence/Models.php"]
         if self.args.track in ("payments", "all"):
@@ -234,6 +236,9 @@ class Qualification:
         (consumer / "bootstrap/app.php").write_text("<?php\nreturn Illuminate\\Foundation\\Application::configure(basePath: dirname(__DIR__))->withExceptions()->create();\n")
         (consumer / "artisan").write_text("<?php\nrequire __DIR__.'/vendor/autoload.php';\n$app = require __DIR__.'/bootstrap/app.php';\nexit($app->handleCommand(new Symfony\\Component\\Console\\Input\\ArgvInput));\n")
         (consumer / ".env").write_text("APP_ENV=testing\nAPP_DEBUG=false\nAPP_KEY=base64:YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=\nDB_CONNECTION=sqlite\nDB_DATABASE=" + json.dumps(str(consumer / "database/database.sqlite")) + "\nCACHE_STORE=array\nQUEUE_CONNECTION=sync\n")
+        if self.args.preserve_sdk_objects:
+            with (consumer / ".env").open("a") as environment:
+                environment.write("AIRWALLEX_PRESERVE_RESPONSE_OBJECTS=true\n")
         if self.args.database == "mysql":
             database = os.environ.get("AIRWALLEX_QUALIFY_MYSQL_DATABASE", "airwallex_test_consumer")
             if re.fullmatch(r"airwallex_test_[a-z0-9]+", database) is None:
@@ -268,6 +273,8 @@ class Qualification:
         helper = [php, str(helper_dir / "consumer-check.php"), "--consumer", str(consumer)]
         self.command("consumer-boot", [*helper, "--mode", "boot", "--evidence", str(self.output / "consumer-boot.json")], consumer)
         self.command("consumer-migrate", [php, "artisan", "migrate", "--force", "--no-ansi"], consumer)
+        if json.loads((self.output / "consumer-boot.json").read_text())["sdk"].get("preserve_response_objects") is not self.args.preserve_sdk_objects:
+            raise ValueError("Cached consumer SDK response shape option differs from the selected boolean.")
         self.command("consumer-schema", [*helper, "--mode", "migrated", "--evidence", str(self.output / "consumer-schema.json")], consumer)
         self.command("consumer-rollback", [php, "artisan", "migrate:rollback", "--force", "--no-ansi"], consumer)
         self.command("consumer-schema-down", [*helper, "--mode", "rolled-back", "--evidence", str(self.output / "consumer-schema-down.json")], consumer)
@@ -289,8 +296,9 @@ class Qualification:
             if self.args.database == "mysql":
                 for suffix, native in (("HOST", "DB_HOST"), ("PORT", "DB_PORT"), ("DATABASE", "DB_DATABASE"), ("USER", "DB_USERNAME"), ("PASSWORD", "DB_PASSWORD")):
                     fixture_environment["AIRWALLEX_TEST_MYSQL_" + suffix] = self.env[native]
+            fixture_environment["AIRWALLEX_PRESERVE_RESPONSE_OBJECTS"] = "true" if self.args.preserve_sdk_objects else "false"
             self.env.update(fixture_environment)
-            classes = []
+            classes = ["SdkResponseShapeTest"]
             if self.args.track in ("subscriptions", "all"):
                 classes += ["CashierCoexistenceTest", "InvoiceTransactionsTest"]
             if self.args.track in ("payments", "all"):
@@ -352,6 +360,7 @@ def main() -> int:
     parser.add_argument("--sdk-repo", type=Path, help="Read-only repository used to archive an unreleased exact SDK commit")
     parser.add_argument("--sdk-candidate", help="Exact SDK commit/ref; requires --sdk-repo and records tagged release qualification pending")
     parser.add_argument("--sdk-version", help="Exact stable SDK version from Packagist, for example 0.1.2; leaves the package's distributed constraint unchanged")
+    parser.add_argument("--preserve-sdk-objects", action="store_true", help="Enable the optional SDK v0.1.2 object-preserving views in the isolated cached consumer configuration")
     parser.add_argument("--track", choices=("baseline", "subscriptions", "payments", "all"), default="baseline", help="Installed recipe tracks; all requires both tracks in the same candidate")
     parser.add_argument("--archive-only", action="store_true", help="Verify archive/descriptor only; never reports consumer qualification passed")
     args = parser.parse_args()

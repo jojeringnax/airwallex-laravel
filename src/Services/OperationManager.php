@@ -20,6 +20,7 @@ use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\Routing;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Throwable;
 
 class OperationManager
@@ -94,7 +95,7 @@ class OperationManager
         }
         $responseReceived = false;
         try {
-            $result = $write();
+            $result = SdkResponseShape::normalize($write());
             $responseReceived = true;
             if (! isset($result['id']) || ! is_string($result['id']) || $result['id'] === '') {
                 throw new EvidenceException('Mutation response has no resource identity.');
