@@ -13,10 +13,12 @@ use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
+use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Services\FreePeriodEvidence;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
+use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
@@ -276,6 +278,38 @@ class SubscriptionFreePeriodTest extends TestCase
         } finally {
             ini_set('zend.exception_ignore_args', $prior);
         }
+    }
+
+    #[DataProvider('legacyDiscountInputs')]
+    public function test_legacy_prepared_item_commands_cannot_bypass_discount_proof_guards(array $items, array $options): void
+    {
+        $customer = ModelRegistry::query('customer')->findOrFail($this->subscription->customer_id);
+        $operation = app(OperationManager::class)->prepare($customer, 'legacy-discount', 'subscription.items', ['items' => $items, 'options' => $options], [
+            'payload' => [...$options, 'items' => $items], 'remote_id' => $this->subscription->remote_id,
+            'fingerprint' => hash('sha256', CanonicalJson::encode([$this->subscription->snapshot, []])), 'prior_item_ids' => [],
+        ], $this->subscription);
+        $original = [$operation->request_id, $operation->intent_hash, $operation->intent];
+        $http = $this->http([]);
+        $this->expectException(EvidenceException::class);
+        try {
+            $this->subscription->updateItems('legacy-discount', $items, $options);
+        } finally {
+            $operation->refresh();
+            self::assertSame('failed', $operation->status);
+            self::assertSame('preflight_rejected', $operation->error_code);
+            self::assertNull($operation->lock_key);
+            self::assertSame($original, [$operation->request_id, $operation->intent_hash, $operation->intent]);
+            self::assertCount(0, $http->requests);
+        }
+    }
+
+    public static function legacyDiscountInputs(): array
+    {
+        $discount = ['type' => 'COUPON', 'coupon' => ['id' => 'coupon-test']];
+        $item = ['price_id' => 'price-new', 'quantity' => 1];
+        $options = ['default_proration_mode' => 'NONE'];
+
+        return [[[$item], [...$options, 'discounts' => [$discount]]], [[[...$item, 'discounts' => [$discount]]], $options]];
     }
 
     private function requireCoupons(): void
