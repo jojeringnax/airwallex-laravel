@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Throwable;
 
 class Customers
@@ -67,7 +68,7 @@ class Customers
         if ($customer->remote_id !== null && $customer->remote_id !== $id) {
             throw new OwnershipException('Payments customer cannot be reassigned.');
         }
-        $remote = app(Client::class)->sdk->payments()->customers()->retrieve($id);
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->customers()->retrieve($id));
 
         try {
             return $this->attach($customer, $remote, $id, explicit: true);
@@ -144,7 +145,7 @@ class Customers
 
     private function confirm(Customer $customer, Operation $operation, string $id): Customer
     {
-        $remote = app(Client::class)->sdk->payments()->customers()->retrieve($id);
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->customers()->retrieve($id));
         if (($remote['request_id'] ?? null) !== $operation->request_id || ! self::contains($remote, $operation->intent)) {
             throw new EvidenceException('Payments customer action is not canonically correlated.');
         }

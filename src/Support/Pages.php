@@ -23,7 +23,7 @@ final class Pages
                 }
                 $cursors[$query['page']] = true;
             }
-            $page = $fetch($query);
+            $page = SdkResponseShape::normalize($fetch($query));
             if (! isset($page['items']) || ! is_array($page['items']) || ! array_is_list($page['items'])) {
                 throw new EvidenceException('Provider list response has no complete item list.');
             }

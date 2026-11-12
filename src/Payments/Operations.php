@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Throwable;
 
 class Operations
@@ -83,7 +84,7 @@ class Operations
         });
         $responded = false;
         try {
-            $remote = $write();
+            $remote = SdkResponseShape::normalize($write());
             $responded = true;
             if (! is_string($remote['id'] ?? null) || $remote['id'] === '') {
                 throw new EvidenceException('Payments response has no resource identity.');

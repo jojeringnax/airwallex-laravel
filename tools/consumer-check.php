@@ -55,7 +55,7 @@ try {
         $contracts[basename($path)] = $contract['version'];
     }
     check(count($contracts) >= 7, 'Installed SDK Billing contract inventory is incomplete.');
-    $report['sdk'] = ['version' => InstalledVersions::getPrettyVersion('jojeringnax/airwallex-php-sdk'), 'reference' => InstalledVersions::getReference('jojeringnax/airwallex-php-sdk'), 'billing_contract_versions' => $contracts];
+    $report['sdk'] = ['version' => InstalledVersions::getPrettyVersion('jojeringnax/airwallex-php-sdk'), 'reference' => InstalledVersions::getReference('jojeringnax/airwallex-php-sdk'), 'billing_contract_versions' => $contracts, 'preserve_response_objects' => config('airwallex.preserve_response_objects', false)];
     if (is_file($consumer.'/vendor/jojeringnax/airwallex-laravel/routes/airwallex.php')) {
         $routes = $app->make('router')->getRoutes();
         $routes->refreshNameLookups();

@@ -4,6 +4,8 @@ This reference describes the released implementation contract and explicitly ide
 
 ## Consumer API
 
+Optional `airwallex.preserve_response_objects` is a strict boolean, default false. Enabling it explicitly selects the released SDK v0.1.2 object-preserving HTTP and WebhookEvent views; v0.1.1 is rejected for this option before SDK I/O. The package projects ordinary decoded object maps into its existing array interfaces while retaining empty and numeric-list-shaped objects as `stdClass`, so object/list metadata proof survives reads and persistence. Both Billing and Payments, their pages and signed envelopes follow this projection. SDK decoding, exact numbers, signatures and raw-token/duplicate-key limits remain SDK-owned. The distributed `^0.1.1` baseline and default array behavior remain supported; enable and qualify the feature only with the selected released dependency.
+
 Applications authorize the local billable first. Any persisted Eloquent model uses `Jojeringnax\AirwallexLaravel\Billable`; keys may be integer/UUID/ULID and morph maps remain effective. Methods do not assume an authentication guard. `airwallexProfile(): array` is overridable and returns provider customer profile keys; saving a model never syncs remotely.
 
 ```php

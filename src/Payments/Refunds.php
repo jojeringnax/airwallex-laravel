@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 use Throwable;
 
@@ -154,7 +155,7 @@ class Refunds
 
     private function observe(Customer $customer, Refund $refund, Intent $intent, Operation $operation, string $id): Refund
     {
-        $remote = app(Client::class)->sdk->payments()->refunds()->retrieve($id);
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->refunds()->retrieve($id));
         Proof::identity($remote, $id, $this->context);
         $this->proof($remote, $intent);
         if (($remote['request_id'] ?? null) !== $operation->request_id
@@ -205,7 +206,7 @@ class Refunds
         $items = [];
         $seen = [];
         for ($page = 0; $page < 10000; $page++) {
-            $remote = app(Client::class)->sdk->payments()->refunds()->list(['payment_intent_id' => $intent->remote_id, 'page_num' => $page, 'page_size' => 100]);
+            $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->refunds()->list(['payment_intent_id' => $intent->remote_id, 'page_num' => $page, 'page_size' => 100]));
             if (! is_array($remote['items'] ?? null) || ! array_is_list($remote['items']) || ! is_bool($remote['has_more'] ?? null)
                 || ($remote['has_more'] && $remote['items'] === [])) {
                 throw new EvidenceException('Refund pagination is incomplete or malformed.');
@@ -237,7 +238,7 @@ class Refunds
             if (! is_string($attemptId) || $attemptId === '') {
                 throw new EvidenceException('Refund attempt linkage is malformed.');
             }
-            $attempt = app(Client::class)->sdk->payments()->paymentAttempts()->retrieve($attemptId);
+            $attempt = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentAttempts()->retrieve($attemptId));
             Proof::identity($attempt, $attemptId, $this->context);
             if (($attempt['payment_intent_id'] ?? null) !== $intent->remote_id
                 || (array_key_exists('currency', $attempt) && $attempt['currency'] !== $intent->currency)) {

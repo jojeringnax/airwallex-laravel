@@ -19,6 +19,7 @@ use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Support\Pages;
 use Jojeringnax\AirwallexLaravel\Support\Routing;
+use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 
 class InvoiceManager
@@ -28,7 +29,7 @@ class InvoiceManager
     public function retrieve(Customer|Subscription $owner, string $id): Invoice
     {
         [$customer, $subscription] = $this->owner($owner);
-        $remote = $this->client->billing()->invoices()->retrieve($id);
+        $remote = SdkResponseShape::normalize($this->client->billing()->invoices()->retrieve($id));
         $this->verify($customer, $subscription, $remote, $id);
 
         return $this->observed($owner, [$remote])->first();
@@ -38,7 +39,7 @@ class InvoiceManager
     public function observeForWebhook(Customer $customer, string $id): Invoice
     {
         [$current] = $this->owner($customer);
-        $remote = $this->client->billing()->invoices()->retrieve($id);
+        $remote = SdkResponseShape::normalize($this->client->billing()->invoices()->retrieve($id));
         $this->verify($current, null, $remote, $id);
         [$current] = $this->owner($customer);
         $this->verify($current, null, $remote, $id);
@@ -88,7 +89,7 @@ class InvoiceManager
     public function lineItem(Invoice $invoice, string $id): array
     {
         [$owner, $remote] = $this->parent($invoice);
-        $item = $this->client->billing()->invoices()->retrieveLineItem($invoice->id, $id);
+        $item = SdkResponseShape::normalize($this->client->billing()->invoices()->retrieveLineItem($invoice->id, $id));
         $this->verifyLine($invoice, $item, $id);
         $this->observed($owner, [$remote]);
 
@@ -119,7 +120,7 @@ class InvoiceManager
         $resource = $this->transactionsResource($this->client->billing());
         [$owner, $remote] = $this->parent($invoice);
         Routing::assertSubscription($remote);
-        $transaction = $this->ownedTransaction($invoice, $resource->retrieve($id), $id);
+        $transaction = $this->ownedTransaction($invoice, SdkResponseShape::normalize($resource->retrieve($id)), $id);
         $this->observed($owner, [$remote]);
 
         return $transaction;
@@ -214,7 +215,7 @@ class InvoiceManager
         if ($customer->id !== $customerId || $customer->remote_id !== $invoice->billingCustomerId) {
             throw new OwnershipException('Invoice owning mapping no longer matches.');
         }
-        $remote = $this->client->billing()->invoices()->retrieve($invoice->id);
+        $remote = SdkResponseShape::normalize($this->client->billing()->invoices()->retrieve($invoice->id));
         $this->verify($customer, $subscription, $remote, $invoice->id);
         if (($remote['subscription_id'] ?? null) !== $invoice->subscriptionId) {
             throw new OwnershipException('Invoice subscription identity changed.');

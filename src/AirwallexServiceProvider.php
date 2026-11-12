@@ -60,15 +60,15 @@ class AirwallexServiceProvider extends ServiceProvider
                 throw new ConfigurationException('Airwallex cache store must be a configured store name or null.');
             }
 
-            return new Client(
-                environment: Environment::from($context->environment),
-                credentials: new Credentials($this->stringConfig($app, 'client_id'), $this->stringConfig($app, 'api_key')),
-                httpClient: $app->make(ClientInterface::class),
-                requestFactory: $app->make(RequestFactoryInterface::class),
-                streamFactory: $app->make(StreamFactoryInterface::class),
-                tokenCache: $app->make(CacheFactory::class)->store($store),
-                retryPolicy: new RetryPolicy(maxAttempts: $attempts),
-            );
+            return Support\SdkResponseShape::client([
+                'environment' => Environment::from($context->environment),
+                'credentials' => new Credentials($this->stringConfig($app, 'client_id'), $this->stringConfig($app, 'api_key')),
+                'httpClient' => $app->make(ClientInterface::class),
+                'requestFactory' => $app->make(RequestFactoryInterface::class),
+                'streamFactory' => $app->make(StreamFactoryInterface::class),
+                'tokenCache' => $app->make(CacheFactory::class)->store($store),
+                'retryPolicy' => new RetryPolicy(maxAttempts: $attempts),
+            ]);
         });
     }
 
