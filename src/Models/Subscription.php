@@ -105,6 +105,16 @@ class Subscription extends BillingModel
         return app(SubscriptionManager::class)->updateItemsForNextCycle($this, $actionKey, $items, $boundary);
     }
 
+    public function applyFreePeriod(string $actionKey, string $couponId): Subscription
+    {
+        return app(SubscriptionManager::class)->applyFreePeriod($this, $actionKey, $couponId);
+    }
+
+    public function removeFreePeriod(string $actionKey, string $originalActionKey): Subscription
+    {
+        return app(SubscriptionManager::class)->removeFreePeriod($this, $actionKey, $originalActionKey);
+    }
+
     public function cancelAtPeriodEnd(string $actionKey, ?array $renewalBounds = null): Subscription
     {
         return app(SubscriptionManager::class)->cancelAtPeriodEnd($this, $actionKey, $renewalBounds);

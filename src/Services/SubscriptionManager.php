@@ -31,7 +31,7 @@ use Throwable;
 
 class SubscriptionManager
 {
-    private const CHANGE_KINDS = ['subscription.quantity', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item', 'subscription.items', 'subscription.schedule_ending', 'subscription.restore_renewal', 'subscription.cancel', 'subscription.payment_source'];
+    private const CHANGE_KINDS = ['subscription.quantity', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item', 'subscription.items', 'subscription.free_period', 'subscription.remove_free_period', 'subscription.schedule_ending', 'subscription.restore_renewal', 'subscription.cancel', 'subscription.payment_source'];
 
     public function __construct(private readonly BillingContext $context, private readonly OperationManager $operations, private readonly SubscriptionSynchronizer $synchronizer, private readonly CustomerManager $customers) {}
 
@@ -113,11 +113,41 @@ class SubscriptionManager
         });
     }
 
-    /** @internal Execute a previously authorized due plan through the ordinary financial mutex and recovery. */
-    public function applyTransition(Subscription $subscription, string $actionKey, array $items, array $options, string $expectedShape, string $expiresAt, ?string $effectiveAt = null): Subscription
+    public function applyFreePeriod(Subscription $subscription, string $actionKey, string $couponId): Subscription
     {
-        return $this->change($subscription, $actionKey, 'subscription.items', ['items' => $items, 'options' => $options, 'transition_shape' => $expectedShape, 'expires_at' => $expiresAt, ...($effectiveAt === null ? [] : ['effective_at' => $effectiveAt])], function (Subscription $current) use ($items, $options, $expectedShape, $expiresAt, $effectiveAt): array {
-            $this->assertTransitionDispatch($current, $expectedShape, $expiresAt, $effectiveAt);
+        return $this->change($subscription, $actionKey, 'subscription.free_period', ['coupon_id' => $couponId], function (Subscription $current) use ($couponId): array {
+            app(FreePeriodEvidence::class)->assertCurrent($current);
+
+            return ['discounts' => [['type' => 'COUPON', 'coupon' => ['id' => $couponId]]], 'default_proration_mode' => 'NONE', 'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE'];
+        }, fn (Subscription $current) => app(FreePeriodEvidence::class)->assertCurrent($current));
+    }
+
+    public function removeFreePeriod(Subscription $subscription, string $actionKey, string $originalActionKey): Subscription
+    {
+        $guard = function (Subscription $current) use ($originalActionKey): void {
+            app(FreePeriodEvidence::class)->assertGeneration($current);
+            $original = ModelRegistry::query('operation')->where([...$this->context->attributes(), 'subscription_id' => $current->id, 'kind' => 'subscription.free_period', 'action_key' => $originalActionKey, 'status' => 'succeeded'])->first();
+            if ($original === null || $original->remote_id !== $current->remote_id || ! is_array($original->observation['discount_proof'] ?? null)) {
+                throw new EvidenceException('Free-period removal requires its original confirmed owned command.');
+            }
+            $proof = app(FreePeriodEvidence::class)->proof($current, $current->snapshot, $original->intent['coupon_terms']);
+            if (! app(FreePeriodEvidence::class)->sameProof($proof, $original->observation['discount_proof'])) {
+                throw new EvidenceException('The current free period differs from the original command.');
+            }
+        };
+
+        return $this->change($subscription, $actionKey, 'subscription.remove_free_period', ['original_action_key' => $originalActionKey], function (Subscription $current) use ($guard): array {
+            $guard($current);
+
+            return ['discounts' => [], 'default_proration_mode' => 'NONE', 'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE'];
+        }, $guard);
+    }
+
+    /** @internal Execute a previously authorized due plan through the ordinary financial mutex and recovery. */
+    public function applyTransition(Subscription $subscription, string $actionKey, array $items, array $options, string $expectedShape, string $expiresAt, ?string $effectiveAt = null, int $shapeVersion = 1): Subscription
+    {
+        return $this->change($subscription, $actionKey, 'subscription.items', ['items' => $items, 'options' => $options, 'transition_shape' => $expectedShape, 'expires_at' => $expiresAt, ...($effectiveAt === null ? [] : ['effective_at' => $effectiveAt]), ...($shapeVersion === 1 ? [] : ['shape_version' => $shapeVersion])], function (Subscription $current) use ($items, $options, $expectedShape, $expiresAt, $effectiveAt, $shapeVersion): array {
+            $this->assertTransitionDispatch($current, $expectedShape, $expiresAt, $effectiveAt, $shapeVersion);
             $this->mutableItems($current);
             foreach ($items as $item) {
                 if (is_array($item) && isset($item['id']) && is_string($item['id'])) {
@@ -126,7 +156,7 @@ class SubscriptionManager
             }
 
             return $this->itemPayload($items, $options);
-        }, fn (Subscription $current) => $this->assertTransitionDispatch($current, $expectedShape, $expiresAt, $effectiveAt));
+        }, fn (Subscription $current) => $this->assertTransitionDispatch($current, $expectedShape, $expiresAt, $effectiveAt, $shapeVersion));
     }
 
     public function updateItemsForNextCycle(Subscription $subscription, string $actionKey, array $items, string $boundary): Subscription
@@ -160,9 +190,9 @@ class SubscriptionManager
         }
     }
 
-    private function assertTransitionDispatch(Subscription $current, string $expectedShape, string $expiresAt, ?string $effectiveAt = null): void
+    private function assertTransitionDispatch(Subscription $current, string $expectedShape, string $expiresAt, ?string $effectiveAt = null, int $shapeVersion = 1): void
     {
-        if ($current->status !== 'ACTIVE' || SubscriptionTransitionManager::shape($current) !== $expectedShape
+        if ($current->status !== 'ACTIVE' || SubscriptionTransitionManager::shape($current, $shapeVersion) !== $expectedShape
             || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $expiresAt) > 0) {
             throw new EvidenceException('Transition window, source state or expected financial shape no longer matches.');
         }
@@ -391,6 +421,9 @@ class SubscriptionManager
             if (isset($specification['next_cycle_boundary'])) {
                 $intent['next_cycle_boundary'] = $specification['next_cycle_boundary'];
             }
+            if ($kind === 'subscription.free_period') {
+                $intent['coupon_terms'] = app(FreePeriodEvidence::class)->coupon($specification['coupon_id']);
+            }
             if ($kind === 'subscription.schedule_ending') {
                 $intent['original_bounds'] = array_intersect_key($subscription->snapshot, array_flip(['status', 'collection_method', 'cancel_at_period_end', 'starts_at', 'ends_at', 'duration', 'remaining_duration', 'payment_source_id', 'current_period_starts_at', 'current_period_ends_at']));
                 $intent['renewal_bounds'] = $this->renewalBounds($subscription, $specification['renewal_bounds'] ?? null);
@@ -424,6 +457,10 @@ class SubscriptionManager
                 throw new EvidenceException('Subscription changed before the financial action; prepare a new intent.');
             }
             $payload = $operation->intent['payload'];
+            if ($operation->kind === 'subscription.free_period'
+                && app(FreePeriodEvidence::class)->coupon($operation->intent['coupon_terms']['id']) !== $operation->intent['coupon_terms']) {
+                throw new EvidenceException('Coupon terms changed before the first financial write.');
+            }
             if ((array_key_exists('payment_source_id', $payload) && ($payload['payment_source_id'] === null || $payload['payment_source_id'] === ''))
                 || (array_key_exists('cancel_at_period_end', $payload) && $payload['cancel_at_period_end'] === null)) {
                 throw new EvidenceException('Unverified source removal or schedule clearing requires explicit SDK use.');
@@ -433,7 +470,7 @@ class SubscriptionManager
             if (isset($payload['items']) && ! in_array($collection, ['AUTO_CHARGE', 'CHARGE_ON_CHECKOUT', 'OUT_OF_BAND'], true)) {
                 throw new EvidenceException('Item mutation requires verified effective collection semantics.');
             }
-            if ((isset($payload['items']) || $operation->kind === 'subscription.restore_renewal') && $collection === 'AUTO_CHARGE') {
+            if ((isset($payload['items']) || in_array($operation->kind, ['subscription.restore_renewal', 'subscription.free_period', 'subscription.remove_free_period'], true)) && $collection === 'AUTO_CHARGE') {
                 if (! is_string($sourceId) || $sourceId === '') {
                     throw new EvidenceException('Automatic collection requires a confirmed owned source.');
                 }
@@ -451,6 +488,12 @@ class SubscriptionManager
         });
 
         return $this->operations->execute($operation, function () use ($subscription, $operation, $dispatchGuard): array {
+            if ($operation->kind === 'subscription.free_period') {
+                $expires = $operation->intent['coupon_terms']['expires_at'];
+                if (is_string($expires) && Timestamp::compare($expires, now()->format('Y-m-d\TH:i:s.uP')) <= 0) {
+                    throw new EvidenceException('Coupon redemption expired before dispatch.');
+                }
+            }
             if ($operation->kind === 'subscription.restore_renewal') {
                 $this->assertRestorationDispatch(ModelRegistry::query('subscription')->findOrFail($subscription->id), $operation);
             }
@@ -463,6 +506,24 @@ class SubscriptionManager
             return $operation->kind === 'subscription.cancel' ? $resource->cancel($subscription->remote_id, $payload) : $resource->update($subscription->remote_id, $payload);
         }, function (array $response) use ($subscription, $customer, $operation): Subscription {
             $this->response($response, $subscription->remote_id, $customer);
+            if ($operation->kind === 'subscription.free_period') {
+                $proof = app(FreePeriodEvidence::class)->proof($subscription, $response, $operation->intent['coupon_terms']);
+                DB::transaction(function () use ($operation, $proof): void {
+                    app(CommitGuard::class)->assertMayCommit();
+                    ModelRegistry::query('customer')->whereKey($operation->customer_id)->lockForUpdate()->firstOrFail();
+                    $current = ModelRegistry::query('operation')->findOrFail($operation->id);
+                    $this->context->assertModel($current);
+                    if ($current->observation !== null) {
+                        if (! app(FreePeriodEvidence::class)->sameProof($proof, $current->observation['discount_proof'] ?? [])) {
+                            throw new EvidenceException('Original Discount response evidence cannot be replaced.');
+                        }
+                    } else {
+                        $current->observation = ['discount_proof' => $proof];
+                        $current->save();
+                    }
+                });
+                $operation->refresh();
+            }
             $result = $this->reconcileChange($subscription, $operation);
             Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
             Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
@@ -478,6 +539,15 @@ class SubscriptionManager
     {
         $payload = $operation->intent['payload'];
         $controlsConfirmed = $operation->status === 'acknowledged';
+        if ($operation->kind === 'subscription.free_period') {
+            $proof = app(FreePeriodEvidence::class)->proof($subscription, $subscription->snapshot, $operation->intent['coupon_terms']);
+            if (! is_array($operation->observation['discount_proof'] ?? null) || ! app(FreePeriodEvidence::class)->sameProof($proof, $operation->observation['discount_proof'])) {
+                throw new EvidenceException('The canonical free-period Discount does not match the original response identity and bounds.');
+            }
+        }
+        if ($operation->kind === 'subscription.remove_free_period') {
+            app(FreePeriodEvidence::class)->assertRemoved($subscription);
+        }
         if ($operation->kind === 'subscription.restore_renewal') {
             $snapshot = $subscription->snapshot;
             $context = $operation->intent['restoration_context'] ?? ['status' => 'ACTIVE', 'collection_method' => 'OUT_OF_BAND'];
@@ -712,7 +782,12 @@ class SubscriptionManager
 
     private function itemPayload(array $items, array $options): array
     {
-        $this->managed($options, ['items', 'request_id', 'billing_customer_id', 'id']);
+        $this->managed($options, ['items', 'request_id', 'billing_customer_id', 'id', 'discounts']);
+        foreach ($items as $item) {
+            if (is_array($item) && array_key_exists('discounts', $item)) {
+                throw new EvidenceException('Generic item changes do not establish discount outcomes; use a separately qualified discount command.');
+            }
+        }
         if (! is_string($options['default_proration_mode'] ?? null)) {
             foreach ($items as $item) {
                 if (! is_array($item) || ! is_string($item['proration_mode'] ?? null)) {
