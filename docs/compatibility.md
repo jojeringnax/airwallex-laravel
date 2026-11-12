@@ -28,6 +28,8 @@ Run `composer validate --strict`, `composer check` (deterministic tests, style a
 
 During 0.x, breaking public changes require a new minor, release notes and migration guidance. Patches preserve documented public behavior. Maintain only the latest minor; 1.0 readiness and any broader maintenance promise require a separate decision. Public surface includes documented methods/parameter names, model fields, configuration, payload semantics and exceptions.
 
+Optional [owned Invoice credits](contracts.md#owned-invoice-credits) require the unreleased SDK Credit Notes extension; exact development-archive qualification is separate from baseline released-dependency qualification. Released SDK v0.1.1/v0.1.2 retain explicit capability refusal before I/O. The new commands reuse encrypted Operations and their observation column; no additional migration or support/dependency-floor change is introduced.
+
 ## Release evidence
 
 Mandatory gates: verified provider/SDK contracts; accepted scope implemented; meaningful deterministic real-SDK tests and independent review; full declared runtime/database/cache/queue/lowest-latest checks; actual file-database races; executable consumer recipes; clean artifact installation/discovery/config cache/migrations; archive exclusions, license/security/release notes; reproducible exact candidate and limitations. Unimplemented requirements or failing required validation remain incomplete.
