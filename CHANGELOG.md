@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Adds optional consumer-selected FLAT/ONCE first-charge discounts, explicit original-Discount removal and owned finalized-Invoice attribution for a paid remainder. Saved original response identity supports read-only confirmation after the Discount leaves current Subscription reads; exact future-phase targeting and actual financial effects remain unqualified.
+
 Adds optional durable original-Invoice Credit Note creation, explicit partial line credits and consumer-approved finalization/refund allocation through the unreleased SDK extension. Direct resource/line correlation supports read-only recovery; actual Invoice/refund effects and unbilled partial free intervals remain unqualified. New deferred plans guard billing anchor, cadence and tax changes while preserving existing plan identities.
 
 Adds account-owned standalone Payments customers, saved instruments, explicit browser bootstrap, intent confirmation/capture/cancellation, partial/full refunds and separate signed receipts with durable observations. Original command identities and financial reservations survive ambiguity; recovery reads canonical resources without replay. Billing gains the provider-qualified Cashier coexistence wrapper, explicit queue connections, fair persisted sweeps, verified finite renewal restoration and durable deferred transitions.

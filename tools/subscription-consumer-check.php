@@ -353,6 +353,37 @@ try {
         $report['recipes']['free-period.php']['invoice_credit_path'] = 'original finalized unpaid Invoice, explicit partial line credit and authorized finalization';
         $report['recipes']['free-period.php']['invoice_credit_evidence'] = 'synthetic only; original-resource account, tax and remainder collection remain unverified';
     }
+    Carbon::setTestNow('2026-11-10T12:00:00Z');
+    $fixedRemote = Fixtures::subscription('sub-first-charge', 'customer-adoption');
+    $fixedItem = Fixtures::item('first-charge-item', 'sub-first-charge', '1');
+    $http = $bind(Fixtures::observation($fixedRemote, [$fixedItem]));
+    $fixedSubscription = $billing->importSubscription('first-charge', $fixedRemote['id']);
+    $http->assertConsumed();
+    if (! method_exists($app->make(Client::class)->billing(), 'coupons')) {
+        $http = $bind(Fixtures::observation($fixedRemote, [$fixedItem]));
+        try {
+            $freeRecipes['apply_first_charge']($fixedSubscription, 'fixed-first-charge', 'coupon-fixed', '15.00', 'USD', $fixedRemote['current_period_ends_at']);
+            throw new RuntimeException('Released SDK silently accepted a first-charge Coupon.');
+        } catch (ConfigurationException) {
+            adoptionCheck(! Operation::where('action_key', 'fixed-first-charge')->exists(), 'Missing first-charge Coupon support created a financial intent.');
+        }
+        $http->assertConsumed();
+        $report['recipes']['free-period.php']['first_charge_path'] = 'explicit unavailable SDK capability';
+    } else {
+        $fixedCoupon = ['id' => 'coupon-fixed', 'active' => true, 'discount_model' => 'FLAT', 'amount_off' => '15.00', 'currency' => 'USD', 'duration_type' => 'ONCE'];
+        $fixedDiscount = ['id' => 'discount-fixed', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => $fixedRemote['id'], 'billing_customer_id' => 'customer-adoption', 'source' => 'COUPON', 'source_id' => 'coupon-fixed', 'discount_model' => 'FLAT', 'amount_off' => '15.00', 'currency' => 'USD', 'duration_type' => 'ONCE', 'created_at' => '2026-11-10T12:01:00Z', 'starts_at' => '2026-11-10T12:01:00Z'];
+        $fixedResult = [...$fixedRemote, 'applied_discounts' => [$fixedDiscount], 'updated_at' => '2026-11-10T12:01:00Z'];
+        $http = $bind([...Fixtures::observation($fixedRemote, [$fixedItem]), Fixtures::request('GET', 'billing/coupons/coupon-fixed', $fixedCoupon), Fixtures::request('GET', 'billing/coupons/coupon-fixed', $fixedCoupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/sub-first-charge/update', $fixedResult), ...Fixtures::observation($fixedResult, [$fixedItem])]);
+        $freeRecipes['apply_first_charge']($fixedSubscription, 'fixed-first-charge', 'coupon-fixed', '15.00', 'USD', $fixedRemote['current_period_ends_at']);
+        $http->assertConsumed();
+        $fixedInvoice = [...Fixtures::invoice('customer-adoption', $fixedRemote['id']), 'id' => 'invoice-fixed', 'total_amount' => '15.00', 'amount_due' => '15.00', 'total_tax_amount' => '0', 'applied_discounts' => [$fixedDiscount], 'total_discount_amounts' => [['applied_discount_id' => 'discount-fixed', 'amount' => '15.00']]];
+        $fixedLine = ['id' => 'invoice-fixed-line', 'invoice_id' => 'invoice-fixed', 'currency' => 'USD', 'amount' => '30.00', 'created_at' => $fixedRemote['current_period_ends_at'], 'updated_at' => $fixedRemote['current_period_ends_at'], 'applied_discounts' => [], 'discount_amounts' => [], 'period_starts_at' => $fixedRemote['current_period_ends_at'], 'period_ends_at' => '2027-01-01T00:00:00Z'];
+        $http = $bind([Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice), Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice), Fixtures::request('GET', 'billing/invoices/invoice-fixed/line_items', ['items' => [$fixedLine]]), Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice)]);
+        adoptionCheck($freeRecipes['first_charge_invoice']($fixedSubscription, 'fixed-first-charge', 'invoice-fixed', '15.00')->toArray()['total_amount'] === '15.00', 'Original first-charge Discount did not prove the synthetic paid remainder.');
+        $http->assertConsumed();
+        $report['recipes']['free-period.php']['first_charge_path'] = 'FLAT/ONCE original Discount and attributed finalized intended-period Invoice';
+        $report['recipes']['free-period.php']['first_charge_evidence'] = 'synthetic only; no exact phase, Invoice/tax or collection observation';
+    }
     file_put_contents($options['evidence'], json_encode($report, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR).PHP_EOL);
     echo json_encode(['status' => 'passed', 'recipes_executed' => count($report['recipes'])], JSON_THROW_ON_ERROR).PHP_EOL;
 } catch (Throwable $error) {
