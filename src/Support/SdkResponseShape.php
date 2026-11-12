@@ -52,12 +52,20 @@ final class SdkResponseShape
     private static function restore(mixed $value): mixed
     {
         if ($value instanceof stdClass) {
-            $members = array_map(self::restore(...), get_object_vars($value));
+            $members = array_map(self::restore(...), self::members($value));
 
             return $members === [] || array_is_list($members) ? (object) $members : $members;
         }
 
         return is_array($value) ? array_map(self::restore(...), $value) : $value;
+    }
+
+    /** Numeric object property names become integer array keys in PHP.
+     * @return array<array-key,mixed>
+     */
+    private static function members(stdClass $value): array
+    {
+        return get_object_vars($value);
     }
 
     private static function enabled(): bool
