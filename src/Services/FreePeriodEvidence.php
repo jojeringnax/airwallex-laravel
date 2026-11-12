@@ -13,6 +13,7 @@ use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
+use SensitiveParameter;
 
 /** Bounded native Coupon evidence; commercial eligibility and invoice accounting belong to the application. */
 class FreePeriodEvidence
@@ -55,12 +56,13 @@ class FreePeriodEvidence
         $this->context->assertModel($subscription);
         $slot = ModelRegistry::query('subscription_slot')->where('customer_id', $subscription->customer_id)->where('name', $subscription->name)->first();
         if ($slot?->subscription_id !== $subscription->id || $subscription->status !== 'ACTIVE' || $subscription->cancel_at_period_end !== false
-            || $subscription->scheduled_ends_at !== null) {
+            || $subscription->scheduled_ends_at !== null
+            || ! in_array($subscription->snapshot['collection_method'] ?? null, ['AUTO_CHARGE', 'CHARGE_ON_CHECKOUT', 'OUT_OF_BAND'], true)) {
             throw new EvidenceException('An earned free period requires the current ACTIVE generation without pending cancellation.');
         }
     }
 
-    public function proof(Subscription $subscription, array $resource, array $terms): array
+    public function proof(Subscription $subscription, #[SensitiveParameter] array $resource, array $terms): array
     {
         $customer = ModelRegistry::query('customer')->findOrFail($subscription->customer_id);
         if (count($this->discounts($resource)) !== 1) {
@@ -75,11 +77,12 @@ class FreePeriodEvidence
                     || ($discount['duration_type'] ?? null) !== 'CUSTOM' || ! is_array($discount['duration'] ?? null)
                     || $this->normalizedDuration($discount['duration']) !== ($terms['duration'] ?? null)
                     || ! is_string($discount['id'] ?? null) || $discount['id'] === ''
-                    || ! is_string($discount['ends_at'] ?? null) || ! is_string($discount['created_at'] ?? null)
+                    || ! is_string($discount['ends_at'] ?? null) || ! is_string($discount['created_at'] ?? null) || ! is_string($discount['starts_at'] ?? null)
+                    || Timestamp::compare($discount['ends_at'], $discount['starts_at']) <= 0
                     || Timestamp::compare($discount['ends_at'], $discount['created_at']) <= 0) {
                     throw new EvidenceException('The owned Coupon discount and its exact duration/end are not confirmed.');
                 }
-                $matches[] = ['id' => $discount['id'], 'created_at' => $discount['created_at'], 'ends_at' => $discount['ends_at']];
+                $matches[] = ['id' => $discount['id'], 'created_at' => $discount['created_at'], 'starts_at' => $discount['starts_at'], 'ends_at' => $discount['ends_at']];
             }
         }
         if (count($matches) !== 1) {
@@ -92,7 +95,8 @@ class FreePeriodEvidence
     public function sameProof(array $left, array $right): bool
     {
         return ($left['id'] ?? null) === ($right['id'] ?? null)
-            && is_string($right['created_at'] ?? null) && is_string($right['ends_at'] ?? null)
+            && is_string($right['created_at'] ?? null) && is_string($right['ends_at'] ?? null) && is_string($right['starts_at'] ?? null)
+            && Timestamp::compare($left['starts_at'], $right['starts_at']) === 0
             && Timestamp::compare($left['created_at'], $right['created_at']) === 0
             && Timestamp::compare($left['ends_at'], $right['ends_at']) === 0;
     }
@@ -104,7 +108,7 @@ class FreePeriodEvidence
         }
     }
 
-    private function discounts(array $resource): array
+    private function discounts(#[SensitiveParameter] array $resource): array
     {
         $discounts = $resource['applied_discounts'] ?? null;
         if (! is_array($discounts) || ! array_is_list($discounts)) {
@@ -134,7 +138,7 @@ class FreePeriodEvidence
         return is_string($value) && preg_match('/^100(?:\.0+)?$/D', $value) === 1;
     }
 
-    private function duration(array $duration): bool
+    private function duration(#[SensitiveParameter] array $duration): bool
     {
         $period = $duration['period'] ?? null;
 
@@ -142,7 +146,7 @@ class FreePeriodEvidence
             && in_array($duration['period_unit'] ?? null, ['DAY', 'WEEK', 'MONTH', 'YEAR'], true);
     }
 
-    private function normalizedDuration(array $duration): array
+    private function normalizedDuration(#[SensitiveParameter] array $duration): array
     {
         if (! $this->duration($duration)) {
             throw new EvidenceException('The exact Coupon duration is unavailable.');

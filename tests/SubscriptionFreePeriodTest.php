@@ -186,7 +186,7 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public static function invalidDiscounts(): array
     {
-        return [[['billing_customer_id' => 'foreign']], [['applied_to_id' => 'foreign']], [['source_id' => 'foreign']], [['applied_to' => 'ITEM']], [['ends_at' => null]], [['ends_at' => '2026-11-10T12:00:00Z']], [['duration' => ['period' => 2, 'period_unit' => 'DAY']]]];
+        return [[['starts_at' => null]], [['starts_at' => '2026-11-12T12:00:00Z']], [['billing_customer_id' => 'foreign']], [['applied_to_id' => 'foreign']], [['source_id' => 'foreign']], [['applied_to' => 'ITEM']], [['ends_at' => null]], [['ends_at' => '2026-11-10T12:00:00Z']], [['duration' => ['period' => 2, 'period_unit' => 'DAY']]]];
     }
 
     public function test_conflicting_discount_reads_cannot_fulfil_the_original_response(): void
@@ -200,6 +200,40 @@ class SubscriptionFreePeriodTest extends TestCase
         } finally {
             self::assertSame('ambiguous', Operation::where('action_key', 'free')->sole()->status);
             self::assertSame([], $this->subscription->fresh()->snapshot['applied_discounts']);
+        }
+    }
+
+    #[DataProvider('invalidCollections')]
+    public function test_unverified_collection_semantics_never_prepare_a_discount_write(mixed $collection): void
+    {
+        $this->requireCoupons();
+        $remote = [...$this->remote([], '2026-11-10T12:01:00Z'), 'collection_method' => $collection];
+        $http = $this->http($this->observation($remote));
+        $this->expectException(EvidenceException::class);
+        try {
+            $this->subscription->applyFreePeriod('free', 'coupon-test');
+        } finally {
+            self::assertSame(0, Operation::count());
+            self::assertCount(4, $http->requests);
+        }
+    }
+
+    public static function invalidCollections(): array
+    {
+        return [[null], ['UNKNOWN'], [['AUTO_CHARGE']]];
+    }
+
+    public function test_changed_effective_start_cannot_confirm_the_original_response_bounds(): void
+    {
+        $this->requireCoupons();
+        $result = $this->remote([$this->discount()], '2026-11-10T12:01:00Z');
+        $changed = $this->remote([$this->discount(['starts_at' => '2026-11-10T12:02:00Z'])], '2026-11-10T12:02:00Z');
+        $this->http([...array_slice($this->applyPlan($result), 0, -3), ...$this->observation($changed)]);
+        $this->expectException(AmbiguousOperationException::class);
+        try {
+            $this->subscription->applyFreePeriod('free', 'coupon-test');
+        } finally {
+            self::assertSame('ambiguous', Operation::where('action_key', 'free')->sole()->status);
         }
     }
 
@@ -217,6 +251,30 @@ class SubscriptionFreePeriodTest extends TestCase
         } finally {
             self::assertSame(1, Operation::count());
             self::assertCount(4, $http->requests);
+        }
+    }
+
+    public function test_malformed_observed_duration_is_redacted_from_removal_exception_arguments(): void
+    {
+        $this->requireCoupons();
+        $prior = ini_get('zend.exception_ignore_args');
+        ini_set('zend.exception_ignore_args', '0');
+        try {
+            $result = $this->remote([$this->discount()], '2026-11-10T12:01:00Z');
+            $this->http($this->applyPlan($result));
+            $this->subscription->applyFreePeriod('free', 'coupon-test');
+            $malformed = $this->remote([$this->discount(['duration' => ['period' => 0, 'profile' => 'SYNTHETIC-PRIVATE-DURATION-CANARY']])], '2026-11-10T12:02:00Z');
+            $this->http($this->observation($malformed));
+            try {
+                $this->subscription->removeFreePeriod('remove', 'free');
+                self::fail('Malformed observed duration became a removal command.');
+            } catch (EvidenceException $error) {
+                self::assertStringNotContainsString('SYNTHETIC-PRIVATE-DURATION-CANARY', $error->getTraceAsString());
+                self::assertInstanceOf(\SensitiveParameterValue::class, $error->getTrace()[0]['args'][0]);
+                self::assertSame(1, Operation::count());
+            }
+        } finally {
+            ini_set('zend.exception_ignore_args', $prior);
         }
     }
 
@@ -239,7 +297,7 @@ class SubscriptionFreePeriodTest extends TestCase
 
     private function discount(array $changes = []): array
     {
-        return ['id' => 'discount-test', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => 'sub-test', 'billing_customer_id' => 'customer-test', 'source' => 'COUPON', 'source_id' => 'coupon-test', 'discount_model' => 'PERCENTAGE', 'percentage_off' => 100, 'duration_type' => 'CUSTOM', 'duration' => ['period' => 1, 'period_unit' => 'DAY'], 'created_at' => '2026-11-10T12:01:00Z', 'ends_at' => '2026-11-11T12:01:00Z', ...$changes];
+        return ['id' => 'discount-test', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => 'sub-test', 'billing_customer_id' => 'customer-test', 'source' => 'COUPON', 'source_id' => 'coupon-test', 'discount_model' => 'PERCENTAGE', 'percentage_off' => 100, 'duration_type' => 'CUSTOM', 'duration' => ['period' => 1, 'period_unit' => 'DAY'], 'created_at' => '2026-11-10T12:01:00Z', 'starts_at' => '2026-11-10T12:01:00Z', 'ends_at' => '2026-11-11T12:01:00Z', ...$changes];
     }
 
     private function observation(array $remote): array
