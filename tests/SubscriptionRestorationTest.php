@@ -6,12 +6,15 @@ namespace Jojeringnax\AirwallexLaravel\Tests;
 
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\BillingContext;
+use Jojeringnax\AirwallexLaravel\Events\SubscriptionReconciled;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
+use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
@@ -139,7 +142,7 @@ class SubscriptionRestorationTest extends TestCase
     {
         return [
             [['status' => 'IN_TRIAL']], [['status' => 'UNPAID']],
-            [['collection_method' => 'AUTO_CHARGE', 'payment_source_id' => 'source-test']],
+            [['collection_method' => 'CHARGE_ON_CHECKOUT', 'payment_source_id' => 'source-test']],
             [['ends_at' => null, 'duration' => null, 'remaining_duration' => null]],
         ];
     }
@@ -150,6 +153,158 @@ class SubscriptionRestorationTest extends TestCase
         $http = $this->http($this->observation($this->scheduled()));
         $this->expectException(EvidenceException::class);
         $subscription->restoreRenewal('on', 'missing-historical-off');
+    }
+
+    #[DataProvider('automaticCombinations')]
+    public function test_verified_automatic_restoration_preserves_state_and_source_and_clears_only_proven_bounds(string $status, bool $indefinite): void
+    {
+        $original = $this->automatic($status, $indefinite);
+        $subscription = $this->seedSubscription($original);
+        $scheduled = [...$original, 'cancel_at_period_end' => true, 'ends_at' => '2026-12-01T00:00:00Z', 'duration' => ['period' => 1, 'period_unit' => 'MONTH'], 'updated_at' => '2026-11-10T12:01:00Z'];
+        $bounds = $indefinite ? ['ends_at' => null, 'duration' => null, 'remaining_duration' => null] : null;
+        $this->http([...$this->observation($original), FakeHttpClient::json($scheduled), ...$this->observation($scheduled)]);
+        $subscription = $subscription->cancelAtPeriodEnd('off', $bounds);
+        $off = Operation::where('action_key', 'off')->firstOrFail();
+        self::assertSame($bounds ?? ['ends_at' => self::ORIGINAL_END], $off->intent['renewal_bounds']);
+        $restored = [...$original, 'updated_at' => '2026-11-10T12:02:00Z'];
+        $http = $this->http([...$this->observation($scheduled), FakeHttpClient::json(Billing::source()), FakeHttpClient::json($restored), ...$this->observation($restored)]);
+        $result = $subscription->restoreRenewal('on', 'off');
+        $on = Operation::where('action_key', 'on')->firstOrFail();
+        self::assertSame(['cancel_at_period_end' => false, ...($bounds ?? ['ends_at' => self::ORIGINAL_END]), 'request_id' => $on->request_id], json_decode((string) $http->requests[5]->getBody(), true));
+        self::assertSame('succeeded', $on->status);
+        self::assertSame($status, $result->status);
+        self::assertSame('source-test', $result->snapshot['payment_source_id']);
+        self::assertNull($result->scheduled_ends_at);
+        self::assertSame($indefinite ? null : self::ORIGINAL_END, $result->ends_at);
+        if ($indefinite) {
+            self::assertArrayNotHasKey('ends_at', $result->snapshot);
+        }
+        if (in_array($status, ['PENDING', 'UNPAID'], true)) {
+            self::assertFalse($result->valid());
+        }
+        if ($status === 'ACTIVE' && $indefinite) {
+            Carbon::setTestNow('2026-12-02T00:00:00Z');
+            self::assertTrue($result->fresh()->valid());
+        }
+        $this->http([]);
+        $result->restoreRenewal('on', 'off');
+    }
+
+    public static function automaticCombinations(): array
+    {
+        return [['ACTIVE', false], ['ACTIVE', true], ['PENDING', true], ['IN_TRIAL', true], ['UNPAID', true]];
+    }
+
+    public function test_optional_omission_before_scheduling_does_not_invent_indefinite_intent(): void
+    {
+        $original = $this->automatic('ACTIVE', true);
+        $subscription = $this->seedSubscription($original);
+        $scheduled = [...$original, 'cancel_at_period_end' => true, 'ends_at' => '2026-12-01T00:00:00Z', 'updated_at' => '2026-11-10T12:01:00Z'];
+        $this->http([...$this->observation($original), FakeHttpClient::json($scheduled), ...$this->observation($scheduled)]);
+        $subscription = $subscription->cancelAtPeriodEnd('off');
+        $http = $this->http($this->observation($scheduled));
+        try {
+            $subscription->restoreRenewal('on', 'off');
+            self::fail('Omitted bounds became indefinite intent.');
+        } catch (EvidenceException) {
+            self::assertCount(4, $http->requests);
+            self::assertNull(Operation::where('action_key', 'on')->first());
+        }
+    }
+
+    public function test_indefinite_intent_cannot_erase_an_observed_finite_lifetime(): void
+    {
+        $original = $this->automatic('ACTIVE', false);
+        $subscription = $this->seedSubscription($original);
+        $http = $this->http($this->observation($original));
+        try {
+            $subscription->cancelAtPeriodEnd('off', ['ends_at' => null, 'duration' => null, 'remaining_duration' => null]);
+            self::fail('Finite lifetime was discarded.');
+        } catch (EvidenceException) {
+            self::assertCount(4, $http->requests);
+            self::assertSame(0, Operation::count());
+        }
+    }
+
+    public function test_automatic_source_ownership_is_verified_before_restoration_write(): void
+    {
+        [$subscription, $scheduled, $original] = $this->indefiniteSchedule();
+        $http = $this->http([...$this->observation($scheduled), FakeHttpClient::json(Billing::source(['billing_customer_id' => 'foreign']))]);
+        try {
+            $subscription->restoreRenewal('on', 'off');
+            self::fail('Foreign source reached restoration.');
+        } catch (OwnershipException) {
+            self::assertSame('failed', Operation::where('action_key', 'on')->first()->status);
+            self::assertSame(0, count(array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/update'))));
+        }
+    }
+
+    public function test_contradictory_indefinite_result_keeps_cap_and_recovers_original_command_without_write(): void
+    {
+        [$subscription, $scheduled, $original] = $this->indefiniteSchedule();
+        $wrong = [...$original, 'duration' => ['period' => 1, 'period_unit' => 'MONTH'], 'updated_at' => '2026-11-10T12:02:00Z'];
+        $this->http([...$this->observation($scheduled), FakeHttpClient::json(Billing::source()), FakeHttpClient::json($wrong), ...$this->observation($wrong)]);
+        try {
+            $subscription->restoreRenewal('on', 'off');
+            self::fail('Contradictory bounds proved restoration.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('2026-12-01T00:00:00Z', $subscription->fresh()->scheduled_ends_at);
+            self::assertSame('2026-12-01T00:00:00Z', $subscription->fresh()->ends_at);
+        }
+        Carbon::setTestNow('2026-12-02T00:00:00Z');
+        $restored = [...$original, 'duration' => null, 'remaining_duration' => null, 'ends_at' => null, 'updated_at' => '2026-12-02T00:00:00Z'];
+        $http = $this->http($this->observation($restored));
+        $observations = [];
+        Event::listen(SubscriptionReconciled::class, function () use (&$observations, $subscription): void {
+            $fresh = $subscription->fresh();
+            $observations[] = [$fresh->ends_at, $fresh->scheduled_ends_at, $fresh->valid()];
+        });
+        $result = $subscription->restoreRenewal('on', 'off');
+        self::assertNull($result->scheduled_ends_at);
+        self::assertNull($result->ends_at);
+        self::assertTrue($result->valid());
+        self::assertSame('succeeded', Operation::where('action_key', 'on')->first()->status);
+        self::assertSame([[null, null, true]], $observations);
+        self::assertCount(4, $http->requests);
+    }
+
+    public function test_conflicting_limit_between_canonical_reads_cannot_prove_indefinite_restoration(): void
+    {
+        [$subscription, $scheduled, $original] = $this->indefiniteSchedule();
+        $restored = [...$original, 'updated_at' => '2026-11-10T12:02:00Z'];
+        $contradiction = [...$restored, 'duration' => ['period' => 1, 'period_unit' => 'MONTH']];
+        $this->http([...$this->observation($scheduled), FakeHttpClient::json(Billing::source()), FakeHttpClient::json($restored), FakeHttpClient::json($contradiction), Billing::page([]), FakeHttpClient::json($restored)]);
+        try {
+            $subscription->restoreRenewal('on', 'off');
+            self::fail('Conflicting reads erased a positive limit.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('ambiguous', Operation::where('action_key', 'on')->first()->status);
+            self::assertSame('2026-12-01T00:00:00Z', $subscription->fresh()->scheduled_ends_at);
+        }
+    }
+
+    private function automatic(string $status, bool $indefinite): array
+    {
+        $original = $this->original(['status' => $status, 'collection_method' => 'AUTO_CHARGE', 'payment_source_id' => 'source-test', 'current_period_ends_at' => '2026-12-01T00:00:00Z']);
+        if ($indefinite) {
+            unset($original['ends_at'], $original['duration'], $original['remaining_duration']);
+        }
+        if ($status === 'IN_TRIAL') {
+            $original['trial_starts_at'] = '2026-11-01T00:00:00Z';
+            $original['trial_ends_at'] = '2026-11-11T00:00:00Z';
+        }
+
+        return $original;
+    }
+
+    private function indefiniteSchedule(): array
+    {
+        $original = $this->automatic('ACTIVE', true);
+        $subscription = $this->seedSubscription($original);
+        $scheduled = [...$original, 'cancel_at_period_end' => true, 'ends_at' => '2026-12-01T00:00:00Z', 'updated_at' => '2026-11-10T12:01:00Z'];
+        $this->http([...$this->observation($original), FakeHttpClient::json($scheduled), ...$this->observation($scheduled)]);
+
+        return [$subscription->cancelAtPeriodEnd('off', ['ends_at' => null, 'duration' => null, 'remaining_duration' => null]), $scheduled, $original];
     }
 
     public function test_new_restoration_cannot_be_submitted_at_an_already_effective_scheduled_end(): void

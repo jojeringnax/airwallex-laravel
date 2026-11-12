@@ -141,6 +141,34 @@ try {
     $report['recipes']['restore-renewal.php'] = ['executed' => true, 'combination' => 'finite ACTIVE OUT_OF_BAND only'];
     $report['checks'][] = 'restoration_original_bound_distinct_command_canonical_cap_clear';
 
+    foreach (['ACTIVE', 'PENDING', 'IN_TRIAL', 'UNPAID'] as $state) {
+        $id = 'sub-indefinite-'.strtolower($state);
+        $unbounded = Fixtures::subscription($id, 'customer-adoption', ['status' => $state]);
+        if ($state === 'IN_TRIAL') {
+            $unbounded['trial_starts_at'] = '2026-11-01T00:00:00Z';
+            $unbounded['trial_ends_at'] = '2026-11-11T00:00:00Z';
+        }
+        $http = $bind(Fixtures::observation($unbounded, []));
+        $automatic = $billing->importSubscription('indefinite-'.strtolower($state), $id);
+        $http->assertConsumed();
+        $ending = [...$unbounded, 'cancel_at_period_end' => true, 'ends_at' => '2026-12-01T00:00:00Z', 'updated_at' => '2026-11-10T12:01:00Z'];
+        $http = $bind([...Fixtures::observation($unbounded, []), Fixtures::request('POST', 'billing/subscriptions/'.$id.'/update', $ending), ...Fixtures::observation($ending, [])]);
+        $automatic = (require $package.'/examples/schedule-ending.php')($automatic, $id.'/off', ['duration' => null, 'remaining_duration' => null, 'ends_at' => null]);
+        $http->assertConsumed();
+        $continued = [...$unbounded, 'updated_at' => '2026-11-10T12:02:00Z'];
+        $http = $bind([...Fixtures::observation($ending, []), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$id.'/update', $continued), ...Fixtures::observation($continued, [])]);
+        $automatic = (require $package.'/examples/restore-renewal.php')($automatic, $id.'/on', $id.'/off');
+        $http->assertConsumed();
+        adoptionCheck($automatic->status === $state && $automatic->scheduled_ends_at === null && $automatic->ends_at === null, 'Indefinite restoration changed lifecycle or retained the cancelled bound.');
+        $restoreOperation = Operation::where('action_key', $id.'/on')->firstOrFail();
+        adoptionCheck($restoreOperation->intent['payload'] === ['cancel_at_period_end' => false, 'duration' => null, 'remaining_duration' => null, 'ends_at' => null], 'Indefinite restoration lost its explicit null triplet.');
+        if (in_array($state, ['PENDING', 'UNPAID'], true)) {
+            adoptionCheck(! $automatic->valid(), 'Restoration independently granted access.');
+        }
+    }
+    $report['recipes']['restore-renewal.php']['combination'] = 'finite ACTIVE OUT_OF_BAND and explicit indefinite AUTO_CHARGE ACTIVE/PENDING/IN_TRIAL/UNPAID';
+    $report['checks'][] = 'explicit_indefinite_intent_source_ownership_omitted_bounds_and_lifecycle_preservation';
+
     // A commercially chosen due time after an initial free period is persisted once.
     // This fixture establishes local due execution, not an ACTIVE invoice holiday or atomic renewal timing.
     $http = $bind(Fixtures::observation($restored, [$item]));

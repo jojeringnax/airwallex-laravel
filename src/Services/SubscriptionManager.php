@@ -141,9 +141,9 @@ class SubscriptionManager
         }
     }
 
-    public function cancelAtPeriodEnd(Subscription $subscription, string $actionKey): Subscription
+    public function cancelAtPeriodEnd(Subscription $subscription, string $actionKey, ?array $renewalBounds = null): Subscription
     {
-        return $this->change($subscription, $actionKey, 'subscription.schedule_ending', [], fn () => ['cancel_at_period_end' => true]);
+        return $this->change($subscription, $actionKey, 'subscription.schedule_ending', $renewalBounds === null ? [] : ['renewal_bounds' => $renewalBounds], fn () => ['cancel_at_period_end' => true]);
     }
 
     public function restoreRenewal(Subscription $subscription, string $actionKey, string $scheduleActionKey): Subscription
@@ -154,16 +154,18 @@ class SubscriptionManager
                 'action_key' => $scheduleActionKey, 'kind' => 'subscription.schedule_ending', 'status' => 'succeeded',
             ])->first();
             $original = $schedule?->intent['original_bounds'] ?? null;
+            $bounds = $schedule?->intent['renewal_bounds'] ?? (is_string($original['ends_at'] ?? null) ? ['ends_at' => $original['ends_at']] : null);
             if (! is_array($original) || $schedule->remote_id !== $current->remote_id
-                || ($original['status'] ?? null) !== 'ACTIVE' || ($original['collection_method'] ?? null) !== 'OUT_OF_BAND'
-                || ($original['cancel_at_period_end'] ?? null) !== false || isset($original['payment_source_id'])
-                || $current->status !== 'ACTIVE' || ($current->snapshot['collection_method'] ?? null) !== 'OUT_OF_BAND'
-                || isset($current->snapshot['payment_source_id']) || $current->cancel_at_period_end !== true
-                || ! is_string($original['ends_at'] ?? null)
+                || ! is_array($bounds) || ! $this->supportedRestoration($original, $bounds)
+                || ($original['cancel_at_period_end'] ?? null) !== false
+                || $current->status !== ($original['status'] ?? null)
+                || ($current->snapshot['collection_method'] ?? null) !== ($original['collection_method'] ?? null)
+                || ($current->snapshot['payment_source_id'] ?? null) !== ($original['payment_source_id'] ?? null)
+                || $current->cancel_at_period_end !== true
                 || ! is_string($current->scheduled_ends_at)
                 || Timestamp::compare($current->scheduled_ends_at, now()->format('Y-m-d\TH:i:s.uP')) <= 0
-                || Timestamp::compare($original['ends_at'], now()->format('Y-m-d\TH:i:s.uP')) <= 0) {
-                throw new EvidenceException('Renewal restoration requires an owned saved finite ACTIVE OUT_OF_BAND schedule.');
+                || (is_string($bounds['ends_at'] ?? null) && Timestamp::compare($bounds['ends_at'], now()->format('Y-m-d\TH:i:s.uP')) <= 0)) {
+                throw new EvidenceException('Renewal restoration requires an owned saved intent and a supported unchanged state and source.');
             }
             $latest = ModelRegistry::query('operation')->where('subscription_id', $current->id)
                 ->where('kind', 'subscription.schedule_ending')->where('status', '!=', 'failed')->orderByDesc('id')->first();
@@ -172,7 +174,7 @@ class SubscriptionManager
                 throw new ConflictException('The cancellation action is not the current owned subscription generation.');
             }
 
-            return ['cancel_at_period_end' => false, 'ends_at' => $original['ends_at']];
+            return ['cancel_at_period_end' => false, ...$bounds];
         });
     }
 
@@ -348,6 +350,10 @@ class SubscriptionManager
             $intent = ['payload' => $payload, 'remote_id' => $subscription->remote_id, 'routing' => Routing::defaults(), 'fingerprint' => $this->fingerprint($subscription), 'prior_item_ids' => $subscription->items()->pluck('remote_id')->all()];
             if ($kind === 'subscription.schedule_ending') {
                 $intent['original_bounds'] = array_intersect_key($subscription->snapshot, array_flip(['status', 'collection_method', 'cancel_at_period_end', 'starts_at', 'ends_at', 'duration', 'remaining_duration', 'payment_source_id', 'current_period_starts_at', 'current_period_ends_at']));
+                $intent['renewal_bounds'] = $this->renewalBounds($subscription, $specification['renewal_bounds'] ?? null);
+            }
+            if ($kind === 'subscription.restore_renewal') {
+                $intent['restoration_context'] = array_intersect_key($subscription->snapshot, array_flip(['status', 'collection_method', 'payment_source_id']));
             }
             $operation = $this->operations->prepare($customer, $actionKey, $kind, $specification, $intent, $subscription);
         }
@@ -357,10 +363,10 @@ class SubscriptionManager
         $this->preflight($operation, function () use ($subscription, $customer, $operation, $resumedRestoration, $dispatchGuard, $resumedPrepared): void {
             $current = ModelRegistry::query('subscription')->findOrFail($subscription->id);
             if ($operation->kind === 'subscription.restore_renewal') {
-                $this->assertRestorationDispatch($current, $operation->intent['payload']);
+                $this->assertRestorationDispatch($current, $operation);
                 if ($resumedRestoration) {
                     $current = $this->synchronizer->reconcile($current, financial: true);
-                    $this->assertRestorationDispatch($current, $operation->intent['payload']);
+                    $this->assertRestorationDispatch($current, $operation);
                 }
             }
             if ($dispatchGuard !== null) {
@@ -384,7 +390,7 @@ class SubscriptionManager
             if (isset($payload['items']) && ! in_array($collection, ['AUTO_CHARGE', 'CHARGE_ON_CHECKOUT', 'OUT_OF_BAND'], true)) {
                 throw new EvidenceException('Item mutation requires verified effective collection semantics.');
             }
-            if (isset($payload['items']) && $collection === 'AUTO_CHARGE') {
+            if ((isset($payload['items']) || $operation->kind === 'subscription.restore_renewal') && $collection === 'AUTO_CHARGE') {
                 if (! is_string($sourceId) || $sourceId === '') {
                     throw new EvidenceException('Automatic collection requires a confirmed owned source.');
                 }
@@ -403,7 +409,7 @@ class SubscriptionManager
 
         return $this->operations->execute($operation, function () use ($subscription, $operation, $dispatchGuard): array {
             if ($operation->kind === 'subscription.restore_renewal') {
-                $this->assertRestorationDispatch(ModelRegistry::query('subscription')->findOrFail($subscription->id), $operation->intent['payload']);
+                $this->assertRestorationDispatch(ModelRegistry::query('subscription')->findOrFail($subscription->id), $operation);
             }
             if ($dispatchGuard !== null) {
                 $dispatchGuard(ModelRegistry::query('subscription')->findOrFail($subscription->id));
@@ -414,7 +420,7 @@ class SubscriptionManager
             return $operation->kind === 'subscription.cancel' ? $resource->cancel($subscription->remote_id, $payload) : $resource->update($subscription->remote_id, $payload);
         }, function (array $response) use ($subscription, $customer, $operation): Subscription {
             $this->response($response, $subscription->remote_id, $customer);
-            $result = $this->synchronizer->reconcile($subscription, financial: true);
+            $result = $this->reconcileChange($subscription, $operation);
             Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
             Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
             $this->outcome($operation, $result);
@@ -429,20 +435,26 @@ class SubscriptionManager
         $controlsConfirmed = $operation->status === 'acknowledged';
         if ($operation->kind === 'subscription.restore_renewal') {
             $snapshot = $subscription->snapshot;
-            if ($subscription->status !== 'ACTIVE' || ($snapshot['collection_method'] ?? null) !== 'OUT_OF_BAND'
-                || isset($snapshot['payment_source_id']) || ($snapshot['cancel_at_period_end'] ?? null) !== false
-                || ! is_string($snapshot['ends_at'] ?? null)
-                || Timestamp::compare($snapshot['ends_at'], $payload['ends_at']) !== 0) {
-                throw new EvidenceException('The original finite renewal bound is not yet canonically restored.');
+            $context = $operation->intent['restoration_context'] ?? ['status' => 'ACTIVE', 'collection_method' => 'OUT_OF_BAND'];
+            $indefinite = $this->indefiniteBounds($payload);
+            $boundsConfirmed = $indefinite
+                ? ($snapshot['ends_at'] ?? null) === null && ($snapshot['duration'] ?? null) === null && ($snapshot['remaining_duration'] ?? null) === null
+                : is_string($snapshot['ends_at'] ?? null) && is_string($payload['ends_at'] ?? null) && Timestamp::compare($snapshot['ends_at'], $payload['ends_at']) === 0;
+            if (! in_array($subscription->status, ['PENDING', 'IN_TRIAL', 'ACTIVE', 'UNPAID'], true)
+                || ($snapshot['collection_method'] ?? null) !== ($context['collection_method'] ?? null)
+                || ($snapshot['payment_source_id'] ?? null) !== ($context['payment_source_id'] ?? null)
+                || ($snapshot['cancel_at_period_end'] ?? null) !== false || ! $boundsConfirmed) {
+                throw new EvidenceException('The original renewal intent is not yet canonically restored.');
             }
-            DB::transaction(function () use ($subscription): void {
+            DB::transaction(function () use ($subscription, $indefinite): void {
                 app(CommitGuard::class)->assertMayCommit();
+                $attributes = ['scheduled_ends_at' => null, ...($indefinite ? ['ends_at' => null] : [])];
                 $changed = ModelRegistry::query('subscription')->whereKey($subscription->id)->where('revision', $subscription->revision)
-                    ->update(['scheduled_ends_at' => null]);
+                    ->update($attributes);
                 if ($changed !== 1) {
                     throw new ConflictException('Subscription changed during restoration confirmation.');
                 }
-                $subscription->scheduled_ends_at = null;
+                $subscription->forceFill($attributes);
             });
         }
         if (! $controlsConfirmed && $operation->kind === 'subscription.cancel' && $subscription->status !== 'CANCELLED') {
@@ -479,16 +491,62 @@ class SubscriptionManager
         return true;
     }
 
-    private function assertRestorationDispatch(Subscription $current, array $payload): void
+    private function assertRestorationDispatch(Subscription $current, Operation $operation): void
     {
         $this->context->assertModel($current);
+        $payload = $operation->intent['payload'];
+        $context = $operation->intent['restoration_context'] ?? ['status' => 'ACTIVE', 'collection_method' => 'OUT_OF_BAND'];
         $now = now()->format('Y-m-d\TH:i:s.uP');
-        if ($current->status !== 'ACTIVE' || ($current->snapshot['collection_method'] ?? null) !== 'OUT_OF_BAND'
-            || isset($current->snapshot['payment_source_id']) || $current->cancel_at_period_end !== true
+        if ($current->status !== ($context['status'] ?? null)
+            || ($current->snapshot['collection_method'] ?? null) !== ($context['collection_method'] ?? null)
+            || ($current->snapshot['payment_source_id'] ?? null) !== ($context['payment_source_id'] ?? null)
+            || $current->cancel_at_period_end !== true
             || ! is_string($current->scheduled_ends_at) || Timestamp::compare($current->scheduled_ends_at, $now) <= 0
-            || ! is_string($payload['ends_at'] ?? null) || Timestamp::compare($payload['ends_at'], $now) <= 0) {
+            || (! $this->indefiniteBounds($payload) && (! is_string($payload['ends_at'] ?? null) || Timestamp::compare($payload['ends_at'], $now) <= 0))) {
             throw new EvidenceException('The pending cancellation boundary is no longer eligible for a first restoration write.');
         }
+    }
+
+    private function renewalBounds(Subscription $subscription, ?array $bounds): ?array
+    {
+        $observed = $subscription->snapshot;
+        if ($bounds === null) {
+            return is_string($observed['ends_at'] ?? null) ? ['ends_at' => $observed['ends_at']] : null;
+        }
+        if (count($bounds) === 1 && is_string($bounds['ends_at'] ?? null)
+            && is_string($observed['ends_at'] ?? null) && Timestamp::compare($bounds['ends_at'], $observed['ends_at']) === 0) {
+            return $bounds;
+        }
+        if (count($bounds) !== 3 || ! $this->indefiniteBounds($bounds) || $subscription->ends_at !== null
+            || ($observed['duration'] ?? null) !== null || ($observed['remaining_duration'] ?? null) !== null) {
+            throw new EvidenceException('Original renewal intent contradicts the canonical bounds or has an unsupported shape.');
+        }
+
+        return $bounds;
+    }
+
+    private function indefiniteBounds(array $bounds): bool
+    {
+        foreach (['ends_at', 'duration', 'remaining_duration'] as $key) {
+            if (! array_key_exists($key, $bounds) || $bounds[$key] !== null) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function supportedRestoration(array $original, array $bounds): bool
+    {
+        $finite = count($bounds) === 1 && is_string($bounds['ends_at'] ?? null);
+        if (($original['collection_method'] ?? null) === 'OUT_OF_BAND') {
+            return $finite && ($original['status'] ?? null) === 'ACTIVE' && ! isset($original['payment_source_id']);
+        }
+
+        return ($original['collection_method'] ?? null) === 'AUTO_CHARGE'
+            && is_string($original['payment_source_id'] ?? null) && $original['payment_source_id'] !== ''
+            && (($finite && ($original['status'] ?? null) === 'ACTIVE')
+                || ($this->indefiniteBounds($bounds) && in_array($original['status'] ?? null, ['PENDING', 'IN_TRIAL', 'ACTIVE', 'UNPAID'], true)));
     }
 
     private function itemEffectConfirmed(Operation $operation, Subscription $subscription): bool
@@ -559,7 +617,7 @@ class SubscriptionManager
             throw new ConflictException('Financial operation has no recoverable attempt.', $operation->id);
         }
         try {
-            $result = $this->synchronizer->reconcile($subscription, financial: true);
+            $result = $this->reconcileChange($subscription, $operation);
             if ($operation->remote_id === null || $operation->remote_id !== $subscription->remote_id) {
                 throw new AmbiguousOperationException($operation->id);
             }
@@ -573,6 +631,18 @@ class SubscriptionManager
         } catch (Throwable $exception) {
             throw new AmbiguousOperationException($operation->id, $exception);
         }
+    }
+
+    private function reconcileChange(Subscription $subscription, Operation $operation): Subscription
+    {
+        $confirm = $operation->kind === 'subscription.restore_renewal' && $operation->remote_id === $subscription->remote_id
+            ? function (Subscription $result) use ($operation): void {
+                Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
+                Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
+                $this->outcome($operation, $result);
+            } : null;
+
+        return $this->synchronizer->reconcile($subscription, financial: true, afterProjection: $confirm);
     }
 
     private function existing(Customer $customer, string $actionKey, string $kind, array $specification, ?Subscription $subscription = null, ?string $name = null): ?Operation
