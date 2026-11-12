@@ -52,7 +52,7 @@ final class Fixtures
     {
         $json = json_encode($data, JSON_THROW_ON_ERROR);
         // Feed native JSON number tokens to the real SDK, without a PHP float round trip.
-        $json = preg_replace('/("(?:quantity|amount_due|total_amount|total_tax_amount|amount)":)"(-?[0-9]+(?:\.[0-9]+)?)"/', '$1$2', $json);
+        $json = preg_replace('/("(?:quantity|amount_due|total_amount|total_tax_amount|amount|amount_off)":)"(-?[0-9]+(?:\.[0-9]+)?)"/', '$1$2', $json);
 
         return new Response(200, ['Content-Type' => 'application/json'], $json);
     }
