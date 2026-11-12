@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Jojeringnax\AirwallexLaravel\Services;
 
+use Closure;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Jojeringnax\Airwallex\Client;
@@ -27,14 +28,14 @@ class SubscriptionSynchronizer
 
     public function __construct(private readonly Client $client, private readonly BillingContext $context, private readonly OperationManager $operations, private readonly Outbox $outbox) {}
 
-    public function reconcile(Subscription $subscription, bool $financial = false): Subscription
+    public function reconcile(Subscription $subscription, bool $financial = false, ?Closure $afterProjection = null): Subscription
     {
         $this->context->assertModel($subscription);
         $before = ModelRegistry::query('subscription')->findOrFail($subscription->getKey());
         $this->context->assertModel($before);
         $customer = ModelRegistry::query('customer')->findOrFail($before->customer_id);
 
-        return $this->refresh($customer, $before->name, $before->remote_id, $before, financial: $financial);
+        return $this->refresh($customer, $before->name, $before->remote_id, $before, financial: $financial, afterProjection: $afterProjection);
     }
 
     public function import(Customer $customer, string $name, string $remoteId): Subscription
@@ -99,7 +100,7 @@ class SubscriptionSynchronizer
         return $existing;
     }
 
-    private function refresh(Customer $customer, string $name, string $remoteId, ?Subscription $before, ?Operation $operation = null, bool $financial = false): Subscription
+    private function refresh(Customer $customer, string $name, string $remoteId, ?Subscription $before, ?Operation $operation = null, bool $financial = false, ?Closure $afterProjection = null): Subscription
     {
         $this->context->assertModel($customer);
         if (! $customer->exists) {
@@ -146,7 +147,7 @@ class SubscriptionSynchronizer
             app(SourceManager::class)->retrieve($customer, $after['payment_source_id']);
         }
         try {
-            return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $remote, $after, $items): Subscription {
+            return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $remote, $after, $items, $afterProjection): Subscription {
                 app(CommitGuard::class)->assertMayCommit();
                 ModelRegistry::query('customer')->whereKey($customer->id)->lockForUpdate()->firstOrFail();
                 if ($operation !== null) {
@@ -244,6 +245,10 @@ class SubscriptionSynchronizer
                     $slot ??= ModelRegistry::make('subscription_slot', ['customer_id' => $customer->id, 'name' => $name]);
                     $slot->fill(['subscription_id' => $subscription->id, 'operation_id' => null])->save();
                 }
+                if ($afterProjection !== null) {
+                    $afterProjection($subscription);
+                    $changed = true;
+                }
                 if ($changed) {
                     $this->outbox->record('SubscriptionReconciled', $subscription, ['remote_id' => $remoteId, 'previous_status' => $previousStatus, 'status' => $subscription->status]);
                 }
@@ -286,7 +291,7 @@ class SubscriptionSynchronizer
 
     private function sameCore(array $left, array $right): bool
     {
-        foreach (['id', 'billing_customer_id', 'status', 'collection_method', 'payment_source_id', 'cancel_at_period_end', 'legal_entity_id', 'linked_payment_account_id', 'created_at', ...self::DATES] as $key) {
+        foreach (['id', 'billing_customer_id', 'status', 'collection_method', 'payment_source_id', 'cancel_at_period_end', 'duration', 'remaining_duration', 'legal_entity_id', 'linked_payment_account_id', 'created_at', ...self::DATES] as $key) {
             if (in_array($key, ['legal_entity_id', 'linked_payment_account_id'], true) && (! array_key_exists($key, $left) || ! array_key_exists($key, $right))) {
                 continue;
             }

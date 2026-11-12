@@ -100,9 +100,9 @@ class Subscription extends BillingModel
         return app(SubscriptionManager::class)->updateItems($this, $actionKey, $items, $options);
     }
 
-    public function cancelAtPeriodEnd(string $actionKey): Subscription
+    public function cancelAtPeriodEnd(string $actionKey, ?array $renewalBounds = null): Subscription
     {
-        return app(SubscriptionManager::class)->cancelAtPeriodEnd($this, $actionKey);
+        return app(SubscriptionManager::class)->cancelAtPeriodEnd($this, $actionKey, $renewalBounds);
     }
 
     public function restoreRenewal(string $actionKey, string $scheduleActionKey): Subscription
