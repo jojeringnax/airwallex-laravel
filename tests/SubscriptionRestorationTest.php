@@ -283,6 +283,25 @@ class SubscriptionRestorationTest extends TestCase
         }
     }
 
+    public function test_synchronous_listener_reconciliation_does_not_repeat_restoration_confirmation(): void
+    {
+        [$subscription, $scheduled, $original] = $this->indefiniteSchedule();
+        $restored = [...$original, 'updated_at' => '2026-11-10T12:02:00Z'];
+        $http = $this->http([...$this->observation($scheduled), FakeHttpClient::json(Billing::source()), FakeHttpClient::json($restored), ...$this->observation($restored), ...$this->observation($restored)]);
+        $observed = false;
+        Event::listen(SubscriptionReconciled::class, function () use ($subscription, &$observed): void {
+            if (! $observed) {
+                $observed = true;
+                $subscription->reconcile();
+            }
+        });
+        $subscription->restoreRenewal('on', 'off');
+        self::assertTrue($observed);
+        self::assertSame('succeeded', Operation::where('action_key', 'on')->first()->status);
+        self::assertNull($subscription->fresh()->ends_at);
+        self::assertCount(12, $http->requests);
+    }
+
     private function automatic(string $status, bool $indefinite): array
     {
         $original = $this->original(['status' => $status, 'collection_method' => 'AUTO_CHARGE', 'payment_source_id' => 'source-test', 'current_period_ends_at' => '2026-12-01T00:00:00Z']);

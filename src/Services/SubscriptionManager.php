@@ -423,7 +423,9 @@ class SubscriptionManager
             $result = $this->reconcileChange($subscription, $operation);
             Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
             Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
-            $this->outcome($operation, $result);
+            if ($operation->kind !== 'subscription.restore_renewal') {
+                $this->outcome($operation, $result);
+            }
 
             return $result;
         });
@@ -623,7 +625,7 @@ class SubscriptionManager
             }
             Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
             Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
-            if ($this->outcome($operation, $result)) {
+            if ($operation->kind === 'subscription.restore_renewal' || $this->outcome($operation, $result)) {
                 $this->operations->succeed($operation);
             }
 
@@ -635,14 +637,21 @@ class SubscriptionManager
 
     private function reconcileChange(Subscription $subscription, Operation $operation): Subscription
     {
+        $confirmed = false;
         $confirm = $operation->kind === 'subscription.restore_renewal' && $operation->remote_id === $subscription->remote_id
-            ? function (Subscription $result) use ($operation): void {
+            ? function (Subscription $result) use ($operation, &$confirmed): void {
                 Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
                 Routing::assertSubscription([...$result->snapshot, ...($result->observed_routing ?? [])]);
                 $this->outcome($operation, $result);
+                $confirmed = true;
             } : null;
 
-        return $this->synchronizer->reconcile($subscription, financial: true, afterProjection: $confirm);
+        $result = $this->synchronizer->reconcile($subscription, financial: true, afterProjection: $confirm);
+        if ($confirm !== null && ! $confirmed) {
+            throw new EvidenceException('A concurrent observation superseded restoration confirmation.');
+        }
+
+        return $result;
     }
 
     private function existing(Customer $customer, string $actionKey, string $kind, array $specification, ?Subscription $subscription = null, ?string $name = null): ?Operation
