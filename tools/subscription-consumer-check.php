@@ -216,9 +216,9 @@ try {
     $signup = Fixtures::subscription('sub-signup-coupon', 'customer-adoption', ['status' => 'IN_TRIAL', 'trial_starts_at' => '2026-11-10T12:00:00Z', 'trial_ends_at' => $signupTrialEnd, 'applied_discounts' => [$signupDiscount]]);
     $signupItem = Fixtures::item('signup-coupon-item', $signup['id'], '2');
     $http = $bind([Fixtures::request('GET', 'billing/coupons/'.$signupCoupon['id'], $signupCoupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('GET', 'billing/coupons/'.$signupCoupon['id'], $signupCoupon), Fixtures::request('POST', 'billing/subscriptions/create', $signup), ...Fixtures::observation($signup, [$signupItem])]);
-    $signup = (require $package.'/examples/subscription.php')($team, 'signup-coupon-command', 'price-synthetic', 'source-synthetic', $signupTrialEnd, $signupCoupon['id']);
+    $signupResult = (require $package.'/examples/subscription.php')($team, 'signup-coupon-command', 'price-synthetic', 'source-synthetic', $signupTrialEnd, $signupCoupon['id']);
     $http->assertConsumed();
-    adoptionCheck($signup->onTrial() && Operation::where('action_key', 'signup-coupon-command')->sole()->observation['discount_proof']['id'] === $signupDiscount['id'], 'Signup Coupon or exact trial did not retain original canonical proof.');
+    adoptionCheck($signupResult->onTrial() && Operation::where('action_key', 'signup-coupon-command')->sole()->observation['discount_proof']['id'] === $signupDiscount['id'], 'Signup Coupon or exact trial did not retain original canonical proof.');
     $hostedInstructions = [['type' => 'COUPON', 'coupon' => ['id' => $signupCoupon['id']]]];
     $hostedRemote = [...Fixtures::checkout('checkout-coupon-signup', 'customer-adoption', 'SUBSCRIPTION'), 'currency' => 'USD', 'discounts' => $hostedInstructions];
     $http = $bind([Fixtures::request('GET', 'billing/coupons/'.$signupCoupon['id'], $signupCoupon), Fixtures::request('GET', 'billing/coupons/'.$signupCoupon['id'], $signupCoupon), Fixtures::request('POST', 'billing/billing_checkouts/create', $hostedRemote), Fixtures::request('GET', 'billing/billing_checkouts/'.$hostedRemote['id'], $hostedRemote)]);
