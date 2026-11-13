@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+Adds optional durable original-Invoice Credit Note creation, explicit partial line credits and consumer-approved finalization/refund allocation through the unreleased SDK extension. Direct resource/line correlation supports read-only recovery; actual Invoice/refund effects and unbilled partial free intervals remain unqualified. New deferred plans guard billing anchor, cadence and tax changes while preserving existing plan identities.
+
 Adds account-owned standalone Payments customers, saved instruments, explicit browser bootstrap, intent confirmation/capture/cancellation, partial/full refunds and separate signed receipts with durable observations. Original command identities and financial reservations survive ambiguity; recovery reads canonical resources without replay. Billing gains the provider-qualified Cashier coexistence wrapper, explicit queue connections, fair persisted sweeps, verified finite renewal restoration and durable deferred transitions.
 
 The 26 shipped recipes cover installed Billing/Payments APIs and application-owned accounting seams. Invoice transaction reads require released SDK v0.1.2 or later, explicitly selected by the consuming application; the package retains its `^0.1.1` baseline constraint. See [upgrade guidance](UPGRADING.md#upgrading-from-010), [supported profiles](docs/compatibility.md) and [programme #46](https://github.com/jojeringnax/airwallex-laravel/issues/46) for exact qualification and remaining evidence. No new release number or publication is designated here.

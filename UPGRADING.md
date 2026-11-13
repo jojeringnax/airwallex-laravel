@@ -6,6 +6,8 @@ Back up the application database and encryption keys before applying package mig
 
 ## Upgrading from 0.1.0
 
+Owned Invoice credits are an optional unreleased SDK extension; select and qualify its exact source before using the [three-stage credit workflow](docs/contracts.md#owned-invoice-credits). Run the existing operation-observation migration before adding lines. Existing Coupon and item commands keep their identities. Newly scheduled transitions retain a stronger financial baseline (shape v3); old v1/v2 plans are unchanged and can be explicitly cancelled/recreated before an attempted write.
+
 Apply the pending migrations for persisted sweeps, subscription transitions and Payments customers, operations, instruments, intents, refunds, receipts and observations. Existing Billing mappings and financial history remain authoritative. If the application publishes migrations, compare the package's migration files with its recorded migration names before copying only missing files; preserve customizations and avoid duplicate table creation.
 
 Review the new configuration keys against the application's published configuration, then rebuild its configuration cache and restart workers. Billing's `webhook.queue_connection` and `events.queue_connection` default to null and retain the application default. Payments uses separate environment/account/credentials and an opt-in `payments.webhook.enabled` receiver; a Billing organization, Source or signing secret is not a Payments identity. Provision the application's database queue/cache/lock tables when choosing that profile, and register the recurring commands in [operations](docs/operations.md) and [Payments recovery](docs/payments-webhooks.md).

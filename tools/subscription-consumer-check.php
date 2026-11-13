@@ -19,6 +19,7 @@ use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
+use Jojeringnax\AirwallexLaravel\Tests\Fixtures\CreditNoteHttpClient;
 use Psr\Http\Client\ClientInterface;
 use RuntimeException;
 use Throwable;
@@ -326,6 +327,32 @@ try {
     $report['allocation_evidence'] = 'synthetic application attestation only; provider allocation exclusivity and downstream implementation remain unverified';
     $report['recipes']['adoption-adapters.php'] = ['executed' => true, 'currencies' => 'illustrative injected exponents; no account eligibility claim'];
     $report['checks'][] = 'exact_amount_conversion_and_unknown_precision_refusal';
+    $creditHttp = new CreditNoteHttpClient;
+    $app->make('cache')->flush();
+    $app->bind(ClientInterface::class, static fn () => $creditHttp);
+    $app->forgetInstance(Client::class);
+    $creditBilling = new AirwallexBillable(Team::create(['id' => 'invoice-credit-team']));
+    $creditBilling->linkAirwallexCustomer('customer-test');
+    $creditInvoice = $creditBilling->findInvoice('invoice-test');
+    $creditRecipes = (require $package.'/examples/free-period.php')();
+    if (! method_exists($app->make(Client::class)->billing(), 'creditNotes')) {
+        $before = [Operation::count(), count($creditHttp->requests)];
+        try {
+            $creditRecipes['create_credit']($creditInvoice, 'invoice-free/create', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
+            throw new RuntimeException('Released SDK silently accepted unavailable Credit Notes.');
+        } catch (ConfigurationException) {
+            adoptionCheck($before === [Operation::count(), count($creditHttp->requests)], 'Missing Credit Note capability reached I/O or persisted a financial intent.');
+        }
+        $report['recipes']['free-period.php']['invoice_credit_path'] = 'explicit unavailable SDK capability; no credit mutation';
+    } else {
+        $createdCredit = $creditRecipes['create_credit']($creditInvoice, 'invoice-free/create', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
+        $creditItems = $creditRecipes['add_credit_items']($creditInvoice, 'invoice-free/items', 'invoice-free/create', [['invoice_line_item_id' => 'original-line', 'amount' => '15.00']]);
+        $finalCredit = $creditRecipes['finalize_credit']($creditInvoice, 'invoice-free/finalize', 'invoice-free/create', '15.00');
+        adoptionCheck($createdCredit->status === 'succeeded' && $creditItems->status === 'succeeded' && $finalCredit->status === 'succeeded', 'Original Invoice credit stages did not confirm.');
+        adoptionCheck($creditBilling->findInvoice('invoice-test')->toArray()['amount_due'] === '15.00', 'Synthetic partial credit did not retain its paid remainder.');
+        $report['recipes']['free-period.php']['invoice_credit_path'] = 'original finalized unpaid Invoice, explicit partial line credit and authorized finalization';
+        $report['recipes']['free-period.php']['invoice_credit_evidence'] = 'synthetic only; original-resource account, tax and remainder collection remain unverified';
+    }
     file_put_contents($options['evidence'], json_encode($report, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR).PHP_EOL);
     echo json_encode(['status' => 'passed', 'recipes_executed' => count($report['recipes'])], JSON_THROW_ON_ERROR).PHP_EOL;
 } catch (Throwable $error) {

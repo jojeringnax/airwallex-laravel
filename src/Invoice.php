@@ -5,9 +5,12 @@ declare(strict_types=1);
 namespace Jojeringnax\AirwallexLaravel;
 
 use Illuminate\Support\Collection;
+use Jojeringnax\AirwallexLaravel\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Services\InvoiceCreditManager;
 use Jojeringnax\AirwallexLaravel\Services\InvoiceManager;
 use JsonSerializable;
 use LogicException;
+use SensitiveParameter;
 use stdClass;
 
 /** An owned, immutable SDK-decoded observation, never a local invoice ledger. */
@@ -59,6 +62,26 @@ final readonly class Invoice implements JsonSerializable
     public function transaction(string $id): InvoiceTransaction
     {
         return app(InvoiceManager::class)->transaction($this, $id);
+    }
+
+    public function createCreditNote(string $actionKey, string $type, string $reason, #[SensitiveParameter] array $options = []): Operation
+    {
+        return app(InvoiceCreditManager::class)->create($this, $actionKey, $type, $reason, $options);
+    }
+
+    public function addCreditNoteItems(string $actionKey, string $createActionKey, #[SensitiveParameter] array $items): Operation
+    {
+        return app(InvoiceCreditManager::class)->addItems($this, $actionKey, $createActionKey, $items);
+    }
+
+    public function finalizeCreditNote(string $actionKey, string $createActionKey, mixed $expectedTotal, #[SensitiveParameter] array $allocation = []): Operation
+    {
+        return app(InvoiceCreditManager::class)->finalize($this, $actionKey, $createActionKey, $expectedTotal, $allocation);
+    }
+
+    public function creditNote(string $createActionKey): array
+    {
+        return app(InvoiceCreditManager::class)->retrieve($this, $createActionKey);
     }
 
     /** Explicit server-side access; includes provider links and customer snapshot. */
