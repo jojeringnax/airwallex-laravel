@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Models\DomainEvent;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Services\RecoveryManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionManager;
@@ -109,6 +110,17 @@ class RecoveryCommandTest extends TestCase
         self::assertCount(0, $http->requests);
         self::assertSame(0, Artisan::call('airwallex:allow-creation-retry', ['id' => $operation->id, '--actor' => 'operator-2', '--reason' => 'repeat']));
         self::assertSame('operator-1', $operation->fresh()->getAttribute('retry_release')['actor']);
+        $originalSetting = ini_set('zend.exception_ignore_args', '0');
+        $privateReason = str_repeat('private-retry-reason', 200);
+        try {
+            app(CreationRetries::class)->allowRetry($operation, 'private-actor', $privateReason);
+            self::fail('Oversized audit reason accepted.');
+        } catch (ConflictException $exception) {
+            self::assertStringNotContainsString('private-retry-reason', $exception->getTraceAsString());
+            self::assertStringNotContainsString('private-actor', $exception->getTraceAsString());
+        } finally {
+            ini_set('zend.exception_ignore_args', $originalSetting);
+        }
     }
 
     public function test_prepared_intent_is_never_submitted_by_read_recovery(): void

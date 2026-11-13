@@ -15,6 +15,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Context;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation as PaymentOperation;
 use Jojeringnax\AirwallexLaravel\Payments\Observations;
+use SensitiveParameter;
 
 /** A new consumer command may risk a duplicate; it never proves noncreation. */
 class CreationRetries
@@ -42,7 +43,7 @@ class CreationRetries
     }
 
     /** Explicit consumer/operator choice, also usable after a crashed in-flight worker. */
-    public function allowRetry(Operation|PaymentOperation $operation, string $actor, string $reason): void
+    public function allowRetry(Operation|PaymentOperation $operation, #[SensitiveParameter] string $actor, #[SensitiveParameter] string $reason): void
     {
         if ($actor === '' || strlen($actor) > 255 || $reason === '' || strlen($reason) > 2048) {
             throw new ConflictException('A bounded actor and reason are required for creation retry.');
@@ -60,7 +61,7 @@ class CreationRetries
         });
     }
 
-    private function supersede(Operation|PaymentOperation $old, string $actor, string $reason, ?string $key): void
+    private function supersede(Operation|PaymentOperation $old, #[SensitiveParameter] string $actor, #[SensitiveParameter] string $reason, ?string $key): void
     {
         $old->forceFill(['status' => 'superseded', 'lock_key' => null, 'error_code' => 'new_creation_requested',
             'retry_release' => ['actor' => $actor, 'replacement_action_key' => $key, 'reason' => $reason,
