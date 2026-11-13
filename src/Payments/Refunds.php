@@ -15,6 +15,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
@@ -113,6 +114,7 @@ class Refunds
 
     public function recover(Customer $customer, Operation $operation, ?string $knownId = null): Refund
     {
+        app(CreationRetries::class)->assertCurrent($operation, $knownId);
         $this->context->assertModel($operation);
         $operation = Operation::query()->findOrFail($operation->id);
         $this->context->assertModel($operation);
@@ -146,6 +148,11 @@ class Refunds
     }
 
     private function confirm(Customer $customer, Refund $refund, Operation $operation, string $id): Refund
+    {
+        return app(CreationRetries::class)->during($operation, fn () => $this->confirmCurrent($customer, $refund, $operation, $id));
+    }
+
+    private function confirmCurrent(Customer $customer, Refund $refund, Operation $operation, string $id): Refund
     {
         [$customer, $refund, $intent] = $this->owned($customer, $refund);
         $intent = $this->intents->reconcile($customer, $intent);
@@ -273,7 +280,7 @@ class Refunds
         }
         foreach (Refund::query()->where('intent_id', $intent->id)->get() as $local) {
             $operation = Operation::query()->findOrFail($local->operation_id);
-            if ($local->id === $excluding || $local->status === 'FAILED' || $operation->status === 'failed') {
+            if ($local->id === $excluding || $local->status === 'FAILED' || in_array($operation->status, ['failed', 'superseded'], true)) {
                 continue;
             }
             if ($local->remote_id !== null && isset($seen[$local->remote_id])) {

@@ -481,24 +481,26 @@ class CustomerTest extends TestCase
         self::assertSame(1, Customer::count());
     }
 
-    public function test_competing_create_requests_converge_on_one_confirmed_mapping(): void
+    public function test_new_creation_key_permits_duplicate_and_quarantines_the_late_original_response(): void
     {
         $team = $this->team();
-        $blocked = false;
-        $http = $this->http([FakeHttpClient::login(), self::remote('Customer-A')], function (RequestInterface $request) use ($team, &$blocked): void {
-            if (str_ends_with($request->getUri()->getPath(), '/create')) {
-                try {
-                    $team->createOrGetAirwallexCustomer('competing-create');
-                    self::fail('A competing create acquired the active customer hold.');
-                } catch (ConflictException) {
-                    $blocked = true;
-                }
+        $retried = false;
+        $http = $this->http([FakeHttpClient::login(), self::remote('Customer-B'), self::remote('Customer-A')], function (RequestInterface $request) use ($team, &$retried): void {
+            if (str_ends_with($request->getUri()->getPath(), '/create') && ! $retried) {
+                $retried = true;
+                self::assertSame('Customer-B', $team->createOrGetAirwallexCustomer('competing-create')->remote_id);
             }
         });
-        $customer = $team->createOrGetAirwallexCustomer('first-create');
-        self::assertTrue($blocked);
-        self::assertSame($customer->id, $team->createOrGetAirwallexCustomer('competing-create')->id);
-        self::assertCount(2, $http->requests);
+        try {
+            $team->createOrGetAirwallexCustomer('first-create');
+            self::fail('A late original response adopted the old customer.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('Customer-B', $team->customerMapping()->remote_id);
+        }
+        self::assertSame('superseded', Operation::where('action_key', 'first-create')->firstOrFail()->status);
+        self::assertSame('Customer-A', Operation::where('action_key', 'first-create')->firstOrFail()->remote_id);
+        self::assertSame('Customer-B', $team->createOrGetAirwallexCustomer('competing-create')->remote_id);
+        self::assertCount(3, $http->requests);
         self::assertSame(1, Customer::count());
     }
 

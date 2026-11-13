@@ -25,12 +25,12 @@ class Operation extends BillingModel
 {
     protected $table = 'airwallex_operations';
 
-    protected $casts = ['observed_routing' => LosslessJson::class, 'intent' => LosslessJson::class.':encrypted', 'observation' => LosslessJson::class.':encrypted'];
+    protected $casts = ['observed_routing' => LosslessJson::class, 'retry_release' => LosslessJson::class.':encrypted', 'intent' => LosslessJson::class.':encrypted', 'observation' => LosslessJson::class.':encrypted'];
 
-    protected $hidden = ['observed_routing', 'snapshot', 'intent', 'observation', 'url', 'body', 'payload'];
+    protected $hidden = ['retry_release', 'observed_routing', 'snapshot', 'intent', 'observation', 'url', 'body', 'payload'];
 
     protected function immutable(): array
     {
-        return [...parent::immutable(), 'customer_id', 'subscription_id', 'kind', 'action_key', 'intent_hash', 'intent', 'request_id', 'remote_id', 'observation'];
+        return [...parent::immutable(), 'customer_id', 'subscription_id', 'kind', 'action_key', 'intent_hash', 'intent', 'request_id', 'retry_release', 'remote_id', 'observation'];
     }
 }

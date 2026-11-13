@@ -14,6 +14,7 @@ use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
@@ -97,6 +98,7 @@ class Customers
 
     public function recover(Operation $operation, ?string $knownId = null): Customer
     {
+        app(CreationRetries::class)->assertCurrent($operation, $knownId);
         $this->context->assertModel($operation);
         if (! in_array($operation->kind, ['customer.create', 'customer.update'], true) || $operation->status === 'failed') {
             throw new ConflictException('This operation has no recoverable Payments customer action.');
@@ -144,6 +146,11 @@ class Customers
     }
 
     private function confirm(Customer $customer, Operation $operation, string $id): Customer
+    {
+        return app(CreationRetries::class)->during($operation, fn () => $this->confirmCurrent($customer, $operation, $id));
+    }
+
+    private function confirmCurrent(Customer $customer, Operation $operation, string $id): Customer
     {
         $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->customers()->retrieve($id));
         if (($remote['request_id'] ?? null) !== $operation->request_id || ! self::contains($remote, $operation->intent)) {

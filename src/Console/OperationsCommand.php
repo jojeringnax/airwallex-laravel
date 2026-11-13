@@ -28,7 +28,7 @@ class OperationsCommand extends BillingCommand
             if (is_string($id) && $id !== '') {
                 $query->whereKey($id);
             } else {
-                $query->whereIn('status', ['prepared', 'in_flight', 'ambiguous', 'acknowledged']);
+                $query->whereIn('status', ['prepared', 'in_flight', 'ambiguous', 'acknowledged', 'superseded']);
             }
             $query->limit($limit);
             $rows = $query->get();

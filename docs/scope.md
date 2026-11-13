@@ -36,7 +36,7 @@ ACTIVE denotes lifecycle eligibility, not settlement of every invoice. Provider 
 
 ## Identity and history
 
-One current reservation exists per explicit customer/name. PENDING, IN_TRIAL, ACTIVE, UNPAID, unknown and scheduled-ending observations reserve it, as do in-flight creation/checkout/import. Local access expiry cannot release a financial reservation. Confirmed termination permits a new generation, preserving history.
+One current reservation exists per explicit customer/name. PENDING, IN_TRIAL, ACTIVE, UNPAID, unknown and scheduled-ending observations reserve it, as do in-flight creation/checkout/import. Local access expiry cannot release a financial reservation. A new creation action key may explicitly supersede an attempted unknown-ID creation under the [duplicate-permitting retry policy](operations.md#retrying-an-unknown-creation); this releases its local reservation without asserting a provider outcome. Confirmed termination permits a new generation, preserving history.
 
 `subscription(name)` returns current, otherwise latest history for inspection. `subscribed(name)` checks current only; history cannot restore access. Stable local creation identity orders history, never mutable provider timestamps. All synchronization resolves immutable context/remote ID: late old-generation events update only that historical row and cannot displace or release its replacement.
 

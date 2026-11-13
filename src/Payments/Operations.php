@@ -15,6 +15,7 @@ use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Throwable;
@@ -50,10 +51,13 @@ class Operations
                     throw new ConflictException('Payments customer association changed; refresh the mapped customer.');
                 }
 
+                $lock ??= 'customer/'.$customer->id;
+                app(CreationRetries::class)->release($current, $lock, $key, $kind);
+
                 return Operation::query()->create([
                     ...$this->context->attributes(), 'customer_id' => $customer->id, 'action_key' => $key,
                     'kind' => $kind, 'target_id' => $target, 'intent_hash' => $hash, 'intent' => $intent,
-                    'request_id' => (string) Str::uuid(), 'status' => 'prepared', 'lock_key' => $lock ?? 'customer/'.$customer->id,
+                    'request_id' => (string) Str::uuid(), 'status' => 'prepared', 'lock_key' => $lock,
                 ]);
             });
         } catch (QueryException) {
@@ -68,6 +72,7 @@ class Operations
         // SDK construction validates local configuration without authentication or HTTP.
         // A local setup failure therefore leaves the original command safely prepared.
         app(Client::class);
+        app(CreationRetries::class)->assertCurrent($operation);
         DB::transaction(function () use ($operation, $beforeClaim): void {
             app(CommitGuard::class)->assertMayCommit();
             $query = Customer::query()->whereKey($operation->customer_id);
@@ -91,10 +96,14 @@ class Operations
             }
             // Persist identity before any further HTTP or interpretation of the result.
             $operation->refresh()->forceFill(['remote_id' => $remote['id']])->save();
+            app(CreationRetries::class)->assertCurrent($operation, $remote['id']);
             if ($operation->target_id !== null && $remote['id'] !== $operation->target_id) {
                 throw new EvidenceException('Payments mutation response contradicts the original target.');
             }
-            $result = $confirm($remote, $operation);
+            $result = app(CommitGuard::class)->during(
+                fn () => app(CreationRetries::class)->assertCurrent($operation),
+                fn () => $confirm($remote, $operation),
+            );
             if ($operation->fresh()->status !== 'acknowledged') {
                 $this->succeed($operation);
             }
@@ -121,6 +130,7 @@ class Operations
     {
         $this->context->assertModel($operation);
         app(CommitGuard::class)->assertMayCommit();
+        app(CreationRetries::class)->assertCurrent($operation);
         Operation::query()->whereKey($operation->id)->update(['status' => 'succeeded', 'lock_key' => null, 'error_code' => null]);
     }
 

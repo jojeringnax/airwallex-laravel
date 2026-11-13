@@ -22,6 +22,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 use Jojeringnax\AirwallexLaravel\Payments\Operations;
+use Jojeringnax\AirwallexLaravel\Payments\Recovery;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
@@ -162,21 +163,20 @@ class PaymentsRefundTest extends TestCase
         $this->payments->refundIntent($this->intent, 'second-too-large', '41');
     }
 
-    public function test_overlapping_partial_refunds_share_customer_mutex_and_preserve_remaining_capacity(): void
+    public function test_overlapping_new_creation_keys_permit_duplicates_but_observed_refunds_bound_capacity(): void
     {
-        $rejected = false;
-        $this->onWrite = function () use (&$rejected): void {
+        $this->onWrite = function (): void {
             $this->onWrite = null;
-            try {
-                $this->payments->refundIntent($this->intent, 'concurrent', '40');
-            } catch (ConflictException) {
-                $rejected = true;
-            }
+            $this->payments->refundIntent($this->intent, 'concurrent', '30');
         };
-        $this->payments->refundIntent($this->intent, 'first', '70');
-        self::assertTrue($rejected);
-        self::assertSame(1, $this->writes());
-        self::assertSame(1, Refund::count());
+        try {
+            $this->payments->refundIntent($this->intent, 'first', '40');
+            self::fail('The superseded response must remain quarantined.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('superseded', Operation::where('action_key', 'first')->firstOrFail()->status);
+        }
+        self::assertSame(2, $this->writes());
+        self::assertSame(2, Refund::count());
         self::assertSame('30.00', $this->payments->refundableAmount($this->intent));
         $this->payments->refundIntent($this->intent, 'last', '30');
         self::assertSame('0.00', $this->payments->refundableAmount($this->intent));
@@ -196,18 +196,17 @@ class PaymentsRefundTest extends TestCase
         self::assertSame(1, $this->writes());
         $operation = Operation::where('action_key', 'unknown')->firstOrFail();
         self::assertNull($operation->remote_id);
-        try {
-            $this->payments->refundIntent($this->intent, 'replacement-key-is-not-recovery', '20');
-            self::fail('A new command bypassed the unknown original refund.');
-        } catch (ConflictException) {
-            self::assertSame(1, $this->writes());
-            self::assertSame(1, Refund::count());
-        }
-        $refund = $this->payments->recoverRefund($operation->id, 'refund-1');
-        self::assertSame('refund-1', $refund->remote_id);
-        self::assertSame('RECEIVED', $refund->status);
-        self::assertSame(1, $this->writes());
-        self::assertSame('succeeded', $operation->fresh()->status);
+        $this->timeoutWrite = false;
+        $replacement = $this->payments->refundIntent($this->intent, 'replacement-key-is-not-recovery', '20');
+        self::assertSame(2, $this->writes());
+        self::assertSame(2, Refund::count());
+        self::assertSame('superseded', $operation->fresh()->status);
+        self::assertSame('refund-2', $replacement->remote_id);
+        self::assertSame('60.00', $this->payments->refundableAmount($this->intent));
+        self::assertTrue(app(Recovery::class)->process('operation', $operation, 'refund-1'));
+        self::assertNull(Refund::where('operation_id', $operation->id)->firstOrFail()->remote_id);
+        self::assertSame('SUPERSEDED_CREATION_LOCATOR', Observation::latest('id')->firstOrFail()->payload['status']);
+        self::assertSame(2, $this->writes());
     }
 
     public function test_returned_id_is_durable_before_readback_failure_and_known_recovery_never_posts_again(): void

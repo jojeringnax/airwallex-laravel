@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Jojeringnax\AirwallexLaravel\Billable;
@@ -54,6 +55,36 @@ class PersistenceTest extends TestCase
         self::assertFalse(Schema::hasTable('airwallex_customers'));
         $this->artisan('migrate', ['--force' => true])->assertSuccessful();
         self::assertTrue(Schema::hasTable('airwallex_subscriptions'));
+    }
+
+    public function test_retry_migration_backfills_legacy_orders_and_refuses_lossy_duplicate_history_rollback(): void
+    {
+        $migration = require __DIR__.'/../database/migrations/2026_11_13_000001_add_creation_retry_history.php';
+        $migration->down();
+        $context = ['environment' => 'sandbox', 'account_id' => 'migration-account'];
+        $customerId = (string) Str::ulid();
+        $operationId = (string) Str::ulid();
+        $intentId = (string) Str::ulid();
+        DB::table('airwallex_payment_customers')->insert(['id' => $customerId, ...$context, 'billable_type' => 'team', 'billable_id' => 'legacy']);
+        DB::table('airwallex_payment_operations')->insert(['id' => $operationId, ...$context, 'customer_id' => $customerId, 'kind' => 'intent.create', 'action_key' => 'old', 'intent_hash' => str_repeat('a', 64), 'intent' => '{}', 'request_id' => 'old-request', 'status' => 'ambiguous']);
+        $legacy = ['id' => $intentId, ...$context, 'customer_id' => $customerId, 'operation_id' => $operationId, 'merchant_order_id' => 'original-order', 'amount' => '10.00', 'currency' => 'USD'];
+        DB::table('airwallex_payment_intents')->insert($legacy);
+        $migration->up();
+        self::assertSame('original-order', DB::table('airwallex_payment_intents')->where('id', $intentId)->value('order_reservation'));
+        DB::table('airwallex_payment_intents')->where('id', $intentId)->update(['order_reservation' => null]);
+        $replacementId = (string) Str::ulid();
+        $replacementOperation = (string) Str::ulid();
+        DB::table('airwallex_payment_operations')->insert(['id' => $replacementOperation, ...$context, 'customer_id' => $customerId, 'kind' => 'intent.create', 'action_key' => 'new', 'intent_hash' => str_repeat('b', 64), 'intent' => '{}', 'request_id' => 'new-request', 'status' => 'prepared']);
+        DB::table('airwallex_payment_intents')->insert([...$legacy, 'id' => $replacementId, 'operation_id' => $replacementOperation, 'order_reservation' => 'original-order']);
+        try {
+            $migration->down();
+            self::fail('Rollback discarded duplicate financial history.');
+        } catch (\RuntimeException $exception) {
+            self::assertStringContainsString('duplicate-order history', $exception->getMessage());
+            self::assertTrue(Schema::hasColumn('airwallex_operations', 'retry_release'));
+            self::assertTrue(Schema::hasColumn('airwallex_payment_intents', 'order_reservation'));
+            self::assertSame(2, DB::table('airwallex_payment_intents')->count());
+        }
     }
 
     public function test_mixed_keys_morph_maps_and_configured_models_are_preserved(): void

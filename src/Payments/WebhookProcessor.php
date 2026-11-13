@@ -13,6 +13,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Receipt;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\ReceiptOutcome;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 
@@ -43,7 +44,7 @@ class WebhookProcessor
             };
             $operations = Operation::query()->where($this->context->attributes())->where('customer_id', $customer->id)->where('kind', 'like', $prefix.'%');
             $operations->where(fn ($query) => $query->where('target_id', $id)->orWhere('remote_id', $id));
-            $operations->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged'])->whereNotNull('lock_key');
+            $operations->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'superseded'])->whereNotNull('lock_key');
             $operation = $operations->first();
             if ($operation !== null && $family !== 'payment_method') {
                 $this->recover($customer, $operation, $id);
@@ -69,11 +70,14 @@ class WebhookProcessor
         $operation = null;
         if (is_string($requestId) && $kind !== null) {
             $operations = Operation::query()->where($this->context->attributes())->where('request_id', $requestId)->where('kind', $kind);
-            $operations->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged']);
+            $operations->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'superseded']);
             $operation = $operations->first();
         }
         if ($operation !== null) {
             $customer = Customer::query()->where($this->context->attributes())->findOrFail($operation->customer_id);
+            if (app(CreationRetries::class)->quarantined($operation, $id)) {
+                return new ReceiptOutcome('quarantined', 'superseded_creation_locator');
+            }
             $this->recover($customer, $operation, $id);
 
             return new ReceiptOutcome('processed', 'recorded_creation_recovered');

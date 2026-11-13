@@ -94,6 +94,23 @@ class RecoveryCommandTest extends TestCase
         self::assertStringNotContainsString($operation->id, Artisan::output());
     }
 
+    public function test_explicit_retry_release_audits_crashed_inflight_creation_without_claiming_noncreation(): void
+    {
+        $operation = $this->creation();
+        $operation->update(['status' => 'in_flight']);
+        $http = $this->fake([]);
+        self::assertSame(1, Artisan::call('airwallex:allow-creation-retry', ['id' => $operation->id]));
+        self::assertSame(0, Artisan::call('airwallex:allow-creation-retry', ['id' => $operation->id, '--actor' => 'operator-1', '--reason' => 'ticket-108']));
+        self::assertSame('superseded', $operation->fresh()->status);
+        self::assertNull($operation->fresh()->lock_key);
+        self::assertSame('operator-1', $operation->fresh()->getAttribute('retry_release')['actor']);
+        self::assertStringNotContainsString('ticket-108', Artisan::output());
+        self::assertSame(0, SubscriptionSlot::count());
+        self::assertCount(0, $http->requests);
+        self::assertSame(0, Artisan::call('airwallex:allow-creation-retry', ['id' => $operation->id, '--actor' => 'operator-2', '--reason' => 'repeat']));
+        self::assertSame('operator-1', $operation->fresh()->getAttribute('retry_release')['actor']);
+    }
+
     public function test_prepared_intent_is_never_submitted_by_read_recovery(): void
     {
         $operation = app(OperationManager::class)->prepare($this->customer, 'prepared', 'subscription.create', [], [], name: 'default');

@@ -80,6 +80,7 @@ class AirwallexServiceProvider extends ServiceProvider
             $this->commands([
                 Console\ReconcileCommand::class,
                 Console\OperationsCommand::class,
+                Console\CreationRetryCommand::class,
                 Console\ReceiptsCommand::class,
                 Console\EventsCommand::class,
                 Console\PruneReceiptsCommand::class,

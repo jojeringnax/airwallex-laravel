@@ -17,6 +17,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\PaymentModel;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Receipt;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 
 class Recovery
 {
@@ -44,7 +45,7 @@ class Recovery
         if (! $one) {
             match ($family) {
                 'intent', 'refund' => $query->whereNotNull('remote_id'),
-                'operation' => $query->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged']),
+                'operation' => $query->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'superseded']),
                 'receipt' => $query->whereNotNull('body')->where(fn ($query) => $query->whereIn('status', ['pending', 'failed'])
                     ->orWhere(fn ($query) => $query->where('status', 'processing')->where('lease_until', '<=', now()->utc()))),
                 'event' => $query->whereNull('dispatched_at')->where(fn ($query) => $query->whereNull('lease_until')->orWhere('lease_until', '<=', now()->utc())),
@@ -66,6 +67,9 @@ class Recovery
         }
         if ($row instanceof Observation) {
             return app(ObservationDispatcher::class)->dispatch($row->id);
+        }
+        if ($row instanceof Operation && app(CreationRetries::class)->quarantined($row, $candidate)) {
+            return true;
         }
         if ($row instanceof Operation && in_array($row->status, ['succeeded', 'failed'], true)) {
             return true;

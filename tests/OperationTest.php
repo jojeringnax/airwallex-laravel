@@ -4,14 +4,20 @@ declare(strict_types=1);
 
 namespace Jojeringnax\AirwallexLaravel\Tests;
 
+use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Exception\ApiException;
 use Jojeringnax\Airwallex\Exception\ValidationException;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Exception\BillingException;
+use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
+use Jojeringnax\AirwallexLaravel\Models\DomainEvent;
+use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
+use Jojeringnax\AirwallexLaravel\Services\RecoveryManager;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class OperationTest extends TestCase
 {
@@ -70,7 +76,7 @@ class OperationTest extends TestCase
 
     public function test_timeout_keeps_identity_and_never_replays_mutation(): void
     {
-        $operation = $this->manager->prepare($this->customer, 'command', 'create', [], [], name: 'default');
+        $operation = $this->manager->prepare($this->customer, 'command', 'subscription.create', [], [], name: 'default');
         $calls = 0;
         $write = function () use (&$calls): array {
             $calls++;
@@ -88,19 +94,73 @@ class OperationTest extends TestCase
         self::assertSame('ambiguous', $operation->fresh()->status);
         self::assertNotNull($operation->fresh()->lock_key);
         self::assertSame(1, SubscriptionSlot::count());
+        $replacement = $this->manager->prepare($this->customer, 'new-command', 'subscription.create', [], [], name: 'default');
+        self::assertSame('superseded', $operation->fresh()->status);
+        self::assertNull($operation->fresh()->lock_key);
+        self::assertSame('unknown', $operation->fresh()->getAttribute('retry_release')['outcome']);
+        self::assertSame($replacement->id, SubscriptionSlot::firstOrFail()->operation_id);
+        self::assertSame($operation->id, $this->manager->prepare($this->customer, 'command', 'subscription.create', [], [], name: 'default')->id);
+        app(RecoveryManager::class)->operation($operation, 'late-subscription');
+        self::assertSame($replacement->id, SubscriptionSlot::firstOrFail()->operation_id);
+        self::assertSame(0, Subscription::count());
+        self::assertSame(1, $calls);
+        self::assertSame('quarantined', DomainEvent::latest('id')->firstOrFail()->payload['outcome']);
     }
 
-    public function test_confirmed_response_then_local_failure_retains_remote_identity(): void
+    public function test_local_sdk_configuration_failure_keeps_original_command_prepared_for_correction(): void
     {
-        $operation = $this->manager->prepare($this->customer, 'command', 'create', [], [], name: 'default');
+        config(['airwallex.api_key' => null]);
+        $operation = $this->manager->prepare($this->customer, 'configure', 'customer.create', [], []);
+        $calls = 0;
+        $write = function () use (&$calls): array {
+            $calls++;
+
+            return ['id' => 'created'];
+        };
         try {
-            $this->manager->execute($operation, fn () => ['id' => 'remote-subscription'], fn () => throw new \RuntimeException('local write failed'));
+            $this->manager->execute($operation, $write, fn () => null);
+            self::fail('Missing configuration must fail before claiming dispatch.');
+        } catch (ConfigurationException) {
+            self::assertSame('prepared', $operation->fresh()->status);
+            self::assertSame(0, $calls);
+        }
+        config(['airwallex.api_key' => 'corrected-synthetic-key']);
+        $this->app->forgetInstance(Client::class);
+        $this->manager->execute($operation, $write, fn () => null);
+        self::assertSame(1, $calls);
+        self::assertSame('succeeded', $operation->fresh()->status);
+    }
+
+    #[DataProvider('confirmationFailures')]
+    public function test_confirmed_response_then_local_failure_retains_remote_identity(bool $supersede): void
+    {
+        $operation = $this->manager->prepare($this->customer, 'command', 'subscription.create', [], [], name: 'default');
+        $replacement = null;
+        $confirmed = false;
+        try {
+            $this->manager->execute($operation, function () use ($supersede, &$replacement): array {
+                if ($supersede) {
+                    $replacement = $this->manager->prepare($this->customer, 'replacement', 'subscription.create', [], [], name: 'default');
+                }
+
+                return ['id' => 'remote-subscription'];
+            }, function () use (&$confirmed): void {
+                $confirmed = true;
+                throw new \RuntimeException('local write failed');
+            });
             self::fail('Expected ambiguity');
         } catch (AmbiguousOperationException) {
         }
         self::assertSame('remote-subscription', $operation->fresh()->remote_id);
-        self::assertSame('ambiguous', $operation->fresh()->status);
+        self::assertSame($supersede ? 'superseded' : 'ambiguous', $operation->fresh()->status);
+        self::assertSame(! $supersede, $confirmed);
+        self::assertSame($replacement?->id ?? $operation->id, SubscriptionSlot::firstOrFail()->operation_id);
         self::assertSame(1, SubscriptionSlot::count());
+    }
+
+    public static function confirmationFailures(): array
+    {
+        return [[false], [true]];
     }
 
     public function test_sdk_preflight_rejection_releases_only_its_unconfirmed_reservation(): void

@@ -22,6 +22,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -217,7 +218,8 @@ class PaymentsIntentTest extends TestCase
         self::assertSame($writes, $this->writes());
     }
 
-    public function test_timeout_retains_returned_or_operator_known_identity_without_mutation_replay(): void
+    #[DataProvider('lostResponseChoices')]
+    public function test_timeout_retains_returned_or_operator_known_identity_without_mutation_replay(bool $retry): void
     {
         $this->afterWrite = fn () => throw new RuntimeException('synthetic lost response');
         try {
@@ -228,11 +230,28 @@ class PaymentsIntentTest extends TestCase
         }
         $this->afterWrite = null;
         $writes = $this->writes();
+        if ($retry) {
+            $replacement = $this->payments->createIntent('replacement', 'order', '10', 'USD');
+            self::assertSame($writes + 1, $this->writes());
+            self::assertSame('superseded', $operation->fresh()->status);
+            $history = Intent::where('operation_id', $operation->id)->firstOrFail();
+            self::assertNull($history->order_reservation);
+            self::assertSame('order', $history->merchant_order_id);
+            self::assertSame('order', $replacement->order_reservation);
+            self::assertSame(2, Intent::count());
+
+            return;
+        }
         $result = $this->payments->recoverIntent($operation->id, 'intent-owned');
         self::assertSame('intent-owned', $result->remote_id);
         self::assertFalse($result->paid());
         self::assertSame($writes, $this->writes());
         self::assertSame('succeeded', $operation->fresh()->status);
+    }
+
+    public static function lostResponseChoices(): array
+    {
+        return [[false], [true]];
     }
 
     public function test_zero_and_foreign_amount_owner_observations_never_create_financial_completion(): void

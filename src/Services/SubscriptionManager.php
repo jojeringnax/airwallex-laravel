@@ -326,6 +326,7 @@ class SubscriptionManager
     /** A candidate is a locator, never proof; verify canonical correlation before recording it. */
     public function recoverCreation(Operation $operation, ?string $candidateId = null): Subscription
     {
+        app(CreationRetries::class)->assertCurrent($operation, $candidateId);
         $this->context->assertModel($operation);
         $operation = ModelRegistry::query('operation')->findOrFail($operation->id);
         $this->context->assertModel($operation);

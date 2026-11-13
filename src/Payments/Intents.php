@@ -14,6 +14,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
@@ -35,8 +36,8 @@ class Intents
         try {
             [$operation, $intent] = DB::transaction(function () use ($customer, $key, $body, $merchantOrderId, $amount, $currency): array {
                 $operation = $this->operations->prepare($customer, $key, 'intent.create', $body);
-                $intent = Intent::query()->firstOrCreate([...$this->context->attributes(), 'merchant_order_id' => $merchantOrderId], [
-                    'customer_id' => $customer->id, 'operation_id' => $operation->id, 'amount' => $amount, 'currency' => $currency,
+                $intent = Intent::query()->firstOrCreate([...$this->context->attributes(), 'order_reservation' => $merchantOrderId], [
+                    'merchant_order_id' => $merchantOrderId, 'customer_id' => $customer->id, 'operation_id' => $operation->id, 'amount' => $amount, 'currency' => $currency,
                 ]);
                 if ($intent->operation_id !== $operation->id || $intent->customer_id !== $customer->id) {
                     throw new ConflictException('This merchant order already has an original Payments intent.', $intent->operation_id);
@@ -128,6 +129,7 @@ class Intents
 
     public function recover(Customer $customer, Operation $operation, ?string $operatorKnownId = null): Intent
     {
+        app(CreationRetries::class)->assertCurrent($operation, $operatorKnownId);
         $this->context->assertModel($operation);
         $customer = $this->confirmedCustomer($customer);
         if ($operation->customer_id !== $customer->id || ! str_starts_with($operation->kind, 'intent.') || $operation->status === 'failed') {
@@ -223,6 +225,11 @@ class Intents
     }
 
     private function confirm(Customer $customer, Intent $intent, Operation $operation, string $id): Intent
+    {
+        return app(CreationRetries::class)->during($operation, fn () => $this->confirmCurrent($customer, $intent, $operation, $id));
+    }
+
+    private function confirmCurrent(Customer $customer, Intent $intent, Operation $operation, string $id): Intent
     {
         $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentIntents()->retrieve($id));
         if (($remote['request_id'] ?? null) !== $operation->request_id) {

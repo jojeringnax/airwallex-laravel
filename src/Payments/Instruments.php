@@ -17,6 +17,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\PaymentSource;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\SourceManager;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
@@ -254,6 +255,7 @@ class Instruments
 
     public function recover(Operation $operation, ?string $operatorKnownId = null): Instrument
     {
+        app(CreationRetries::class)->assertCurrent($operation, $operatorKnownId);
         $this->context->assertModel($operation);
         if (! str_starts_with($operation->kind, 'consent.') || in_array($operation->status, ['prepared', 'failed'], true)) {
             throw new ConflictException('Only an attempted consent action can be recovered through reads.');
@@ -323,6 +325,11 @@ class Instruments
     }
 
     private function confirm(Customer $customer, Operation $operation, string $id): Instrument
+    {
+        return app(CreationRetries::class)->during($operation, fn () => $this->confirmCurrent($customer, $operation, $id));
+    }
+
+    private function confirmCurrent(Customer $customer, Operation $operation, string $id): Instrument
     {
         return $this->observe($customer, $id, operation: $operation, allowLink: $operation->kind === 'consent.create');
     }
