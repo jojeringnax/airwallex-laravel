@@ -61,7 +61,7 @@ class CheckoutManager
             }
             $couponId = $discounts[0]['coupon']['id'];
         }
-        if ($couponId !== null && ! array_key_exists('currency', $options) && config('airwallex.currency') !== null) {
+        if (isset($definition['coupon_id']) && ! array_key_exists('currency', $options) && config('airwallex.currency') !== null) {
             $options['currency'] = config('airwallex.currency');
         }
         if ($mode === 'SETUP' && ! array_key_exists('currency', $options)) {

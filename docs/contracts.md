@@ -99,7 +99,7 @@ This API uses the required released SDK v0.1.3 baseline; no additional dependenc
 
 ## Managed subscription coupons
 
-`SubscriptionBuilder::withCoupon(string $couponId)` freezes one existing Coupon for `create()` or `checkout()`. It is an additive builder definition field only when selected; existing builders keep their prior intent hashes. Direct raw `discounts` is managed. A valid single top-level hosted Coupon instruction remains supported through normalization and the same proof; nested/item discount input and stacking are refused.
+`SubscriptionBuilder::withCoupon(string $couponId)` freezes one existing Coupon for `create()` or `checkout()`. It is an additive builder definition field only when selected; existing builders keep their prior intent hashes. Direct raw `discounts` is managed. A valid single top-level hosted Coupon instruction remains supported through normalization and the same proof; already-recorded raw intents keep their specification/defaults and are not retroactively rewritten. New raw hosted FLAT selection requires explicit currency; nested/item discount input and stacking are refused.
 
 `Subscription::applyCoupon(string $actionKey, string $couponId): Subscription` applies a subscription-level PERCENTAGE or FLAT Coupon to the current undiscounted ACTIVE generation. CUSTOM and INDEFINITELY are supported; ONCE on existing ACTIVE is refused under the documented first-invoice boundary. `removeCoupon(string $actionKey, string $originalActionKey): Subscription` removes the exact Discount from an original managed direct creation, hosted creation or application command on current PENDING/IN_TRIAL/ACTIVE. Legacy bounded free-period and experimental first-charge commands retain their own removal helpers.
 

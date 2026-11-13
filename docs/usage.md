@@ -256,11 +256,14 @@ $checkout = $team->newSubscription('hosted-membership', $priceId)
         'currency' => 'USD', 'success_url' => 'https://app.example.test/billing/return',
         'back_url' => 'https://app.example.test/billing',
     ]);
-$subscription->applyCoupon($applyCommandKey, $laterCouponId);
-$subscription->removeCoupon($removeCommandKey, $originalCouponCommandKey);
+// A separate current, undiscounted ACTIVE subscription:
+$existingActiveSubscription->applyCoupon($applyCommandKey, $laterCouponId);
+$existingActiveSubscription->removeCoupon($removeCommandKey, $applyCommandKey);
 ```
 
 Creation supports ONCE, CUSTOM and INDEFINITELY. `applyCoupon()` on an existing ACTIVE subscription supports CUSTOM and INDEFINITELY; it refuses ONCE because the documented first-invoice rule does not establish later redemption. CUSTOM is a provider calendar duration, not a package promise of a particular invoice count after cadence changes or adjustments. Discounts are not separately prorated. Provider calculations and redemption remain remote; an observed Discount is not invoice payment or settlement.
+
+API keys need Coupon/Discount read permission (`billing.discount:read`) in addition to the ordinary Subscription/Checkout permissions. Fixed-amount creation also reads every Price and needs `billing.price:read`. Supply an explicit currency for a new raw hosted FLAT instruction; existing recorded raw hosted intents retain their original specification and payload defaults.
 
 Coupon financial terms are frozen in the durable intent and rechecked before its first write. Direct creation saves the original response Discount identity before canonical reads; a lost identity cannot be replaced merely by matching the Coupon later. Hosted creation first verifies the checkout's selected Coupon, then saves the resulting subscription's first complete canonical Discount proof before association. Browser completion alone establishes neither redemption nor access. Original proof survives natural discount expiry and later removal.
 

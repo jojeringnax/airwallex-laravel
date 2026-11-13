@@ -22,6 +22,7 @@ use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
 use Jojeringnax\AirwallexLaravel\PaymentSource;
 use Jojeringnax\AirwallexLaravel\Services\CheckoutManager;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
+use Jojeringnax\AirwallexLaravel\Support\Routing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\InterleavingHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
@@ -77,7 +78,7 @@ class CheckoutWorkflowTest extends TestCase
     }
 
     #[DataProvider('managedCouponCheckoutModes')]
-    public function test_managed_coupon_checkout_proves_frozen_terms_and_original_discount_before_subscription_association(bool $raw, bool $missing, bool $flat = false): void
+    public function test_managed_coupon_checkout_proves_frozen_terms_and_original_discount_before_subscription_association(bool $raw, bool $missing, bool $flat = false, bool $legacy = false): void
     {
         $coupon = ['id' => 'coupon-checkout', 'active' => true, 'discount_model' => $flat ? 'FLAT' : 'PERCENTAGE', 'percentage_off' => $flat ? null : 25, 'amount_off' => $flat ? '5.50' : null, 'currency' => $flat ? 'USD' : null, 'duration_type' => 'ONCE', 'duration' => null];
         $instructions = [['type' => 'COUPON', 'coupon' => ['id' => $coupon['id']]]];
@@ -88,6 +89,22 @@ class CheckoutWorkflowTest extends TestCase
         $builder = $this->team->newSubscription('coupon-checkout', 'price-test');
         if (! $raw) {
             $builder->withCoupon($coupon['id']);
+        }
+        if ($legacy) {
+            $oldOptions = [...Routing::defaults(), ...$options];
+            $payload = [...$oldOptions, 'billing_customer_id' => $this->customer->remote_id, 'mode' => 'SUBSCRIPTION', 'ui_mode' => 'HOSTED', 'line_items' => $builder->definition()['items'], 'subscription_data' => []];
+            $original = app(OperationManager::class)->prepare($this->customer, 'coupon-checkout', 'checkout.subscription', ['definition' => $builder->definition(), 'options' => $oldOptions], ['payload' => $payload, 'name' => 'coupon-checkout'], name: 'coupon-checkout');
+            $identity = [$original->intent_hash, $original->request_id, $original->intent];
+            $http = $this->fake([FakeHttpClient::json($remote), FakeHttpClient::json($remote)]);
+            $checkout = $builder->checkout('coupon-checkout', $options);
+            self::assertSame($original->id, $checkout->operation_id);
+            self::assertSame($identity, [$original->fresh()->intent_hash, $original->fresh()->request_id, $original->fresh()->intent]);
+            self::assertArrayNotHasKey('currency', json_decode((string) $http->requests[1]->getBody(), true));
+            self::assertSame($original->request_id, json_decode((string) $http->requests[1]->getBody(), true)['request_id']);
+            $this->fake([]);
+            self::assertSame($checkout->id, $builder->checkout('coupon-checkout', $options)->id);
+
+            return;
         }
         $checkout = $builder->checkout('coupon-checkout', $options);
         $operation = Operation::sole();
@@ -132,7 +149,7 @@ class CheckoutWorkflowTest extends TestCase
 
     public static function managedCouponCheckoutModes(): array
     {
-        return [[false, false], [false, true], [true, false], [false, false, true]];
+        return [[false, false], [false, true], [true, false], [false, false, true], [true, false, false, true]];
     }
 
     public function test_hosted_checkout_is_redirectable_but_browser_success_never_grants_access(): void
