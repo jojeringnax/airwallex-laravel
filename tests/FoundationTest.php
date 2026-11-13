@@ -31,7 +31,7 @@ class FoundationTest extends TestCase
         $this->assertNotEmpty(ServiceProvider::pathsToPublish(AirwallexServiceProvider::class, 'airwallex-migrations'));
         $composer = json_decode(file_get_contents(__DIR__.'/../composer.json'), true, flags: JSON_THROW_ON_ERROR);
         $this->assertSame([AirwallexServiceProvider::class], $composer['extra']['laravel']['providers']);
-        $this->assertSame('^0.1.1', $composer['require']['jojeringnax/airwallex-php-sdk']);
+        $this->assertSame('^0.1.3', $composer['require']['jojeringnax/airwallex-php-sdk']);
     }
 
     public function test_context_and_package_boot_do_not_require_credentials(): void
