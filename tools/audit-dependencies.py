@@ -16,8 +16,8 @@ def audit(command, *, run=subprocess.run, pause=time.sleep):
         result = run([*command, "audit", "--locked"], capture_output=True, text=True)
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
-        # Composer reserves 100 for dependency repository/network failures. Advisory,
-        # abandoned-package and configuration failures must retain their exit status.
+        # The observed transport failure returned 100; other resolver errors can too.
+        # Require transient connection evidence as well, and preserve all other failures.
         if result.returncode != 100 or not TRANSIENT_CURL.search(result.stdout + result.stderr) or attempt == 2:
             return result.returncode
         print("Transient advisory-service connection failure; retrying the locked audit.", file=sys.stderr)
