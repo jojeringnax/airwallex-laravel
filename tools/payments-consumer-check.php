@@ -11,10 +11,12 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
+use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Events\PaymentObserved;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
+use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Payments;
 use Jojeringnax\AirwallexLaravel\Payments\Client;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
@@ -117,7 +119,20 @@ try {
     check(! str_contains(json_encode($setup).print_r($setup, true), 'SYNTHETIC-PRIVATE'), 'Setup diagnostics exposed a secret.');
     $http->methods['mtd-payments'] = ['id' => 'mtd-payments', 'customer_id' => $customer->remote_id, 'status' => 'CREATED', 'type' => 'card', 'updated_at' => $http->time()];
     $http->consents['cst-payments'] = [...$http->consents['cst-payments'], 'status' => 'VERIFIED', 'payment_method' => ['id' => 'mtd-payments', 'type' => 'card'], 'updated_at' => $http->time()];
-    $instruments = $recipe('payments-instruments.php')($owner, 'cst-payments');
+    $collector = config('airwallex.linked_payment_account_id');
+    config(['airwallex.environment' => 'sandbox', 'airwallex.organization_id' => 'org-synthetic-payments-billing',
+        'airwallex.client_id' => 'client-synthetic-billing', 'airwallex.api_key' => 'key-synthetic-billing',
+        'airwallex.linked_payment_account_id' => $customer->account_id]);
+    $app->forgetInstance(\Jojeringnax\Airwallex\Client::class);
+    $billingCustomer = ModelRegistry::make('customer', [...app(BillingContext::class)->attributes(),
+        'billable_type' => $customer->getAttribute('billable_type'), 'billable_id' => $customer->getAttribute('billable_id'), 'remote_id' => 'billing-payments-owner']);
+    $billingCustomer->save();
+    $instruments = $recipe('payments-instruments.php')($owner, 'cst-payments', $billingCustomer, 'source-original');
+    check($instruments['source']->id === 'source-payments' && $instruments['source']->linkedPaymentAccountId === $customer->account_id, 'Owned Billing Source creation did not preserve its Payments account.');
+    $writes = $http->writes();
+    check($recipe('payments-instruments.php')($owner, 'cst-payments', $billingCustomer, 'source-original')['source']->id === 'source-payments' && $http->writes() === $writes,
+        'Same-key Billing Source recovery repeated a mutation.');
+    config(['airwallex.linked_payment_account_id' => $collector]);
     check($instruments['default']->id === $instruments['instrument']->id && $instruments['all']->count() === 1, 'Canonical setup and explicit local default did not converge.');
     $done('payments-setup.php');
     $done('payments-instruments.php');

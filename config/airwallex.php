@@ -40,6 +40,7 @@ return [
             'queue_connection' => env('AIRWALLEX_PAYMENTS_WEBHOOK_QUEUE_CONNECTION'),
         ],
         'events' => [
+            'instrument_revoked_handler' => null,
             'lease_seconds' => 300,
             'queue' => env('AIRWALLEX_PAYMENTS_EVENTS_QUEUE'),
             'queue_connection' => env('AIRWALLEX_PAYMENTS_EVENTS_QUEUE_CONNECTION'),

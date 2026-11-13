@@ -112,6 +112,17 @@ $subscription->cancelAtPeriodEnd($endingCommandKey);
 $subscription->cancelNow($cancelCommandKey, 'NONE');
 ```
 
+A card already verified through embedded Payments setup can create a Billing Source without another hosted checkout:
+
+```php
+$paymentsCustomer = \Jojeringnax\AirwallexLaravel\Payments::for($authorizedBillable)->customer();
+$source = app(\Jojeringnax\AirwallexLaravel\Payments\Instruments::class)
+    ->createBillingSource($paymentsCustomer, $verifiedConsentId, $authorizedBillingCustomer, $sourceCommandKey);
+$subscription->updatePaymentSource($replacementCommandKey, $source->id);
+```
+
+Both local Customer mappings must belong to the same billable/environment and linked Payments account. Setup must finish any required browser action first. Creation is durable and same-key retries read the original Source; it does not prove successful subscription collection. [Instrument servicing](instruments.md#optional-subscription-servicing-after-revocation) explains the optional consumer-configured revocation handler and the default of leaving subscriptions unchanged.
+
 Setup verifies a Billing Source and grants no subscription access. Source replacement is a separate explicit financial action and may immediately retry the latest failed invoice. Successful setup/replacement does not itself restore UNPAID access; reconcile the Subscription. Billing Sources differ from Payments Customers, Methods and Consents. No default/delete/detach source behavior is invented. Use [setup](../examples/setup.php) and [source replacement](../examples/replace-source.php) recipes.
 
 Item quantities supplied to writes must be native positive int32 integers. Observed quantities/money remain exact strings and can be fractional; never cast them through float. Single-item conveniences require exactly one item unless an explicit ID is supplied. Unsupported observed item models block unsafe item changes without automatically denying lifecycle access. A swap deletes the old ID and adds the new price; provide an explicit replacement quantity when the observed value cannot be a native integer. Omitted existing items stay unchanged.

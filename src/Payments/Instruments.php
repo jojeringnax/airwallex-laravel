@@ -90,7 +90,7 @@ class Instruments
                 if ($method['status'] !== 'CREATED') {
                     DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->where('instrument_id', $instrument->id)->update(['instrument_id' => null]);
                 }
-                app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status, 'method_status' => $instrument->method_status, 'payment_method_id' => $instrument->method_id]);
+                app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status, 'method_status' => $instrument->method_status, 'payment_method_id' => $instrument->method_id, 'revoked_at' => $instrument->revoked_at]);
             }
         });
     }
@@ -253,6 +253,12 @@ class Instruments
         return $source;
     }
 
+    /** Stable-key creation; source identity does not imply successful collection. */
+    public function createBillingSource(Customer $customer, string $consentId, BillingCustomer $billingCustomer, string $actionKey): PaymentSource
+    {
+        return app(SourceManager::class)->createFromInstrument($customer, $consentId, $billingCustomer, $actionKey);
+    }
+
     public function recover(Operation $operation, ?string $operatorKnownId = null): Instrument
     {
         app(CreationRetries::class)->assertCurrent($operation, $operatorKnownId);
@@ -294,6 +300,10 @@ class Instruments
             DB::transaction(function () use ($customer, $instrument): void {
                 $this->lockCustomer($customer, enabled: true);
                 Instrument::query()->whereKey($instrument->id)->whereNull('revoked_at')->update(['revoked_at' => now()->utc()]);
+                $instrument->refresh();
+                app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status,
+                    'method_status' => $instrument->method_status, 'payment_method_id' => $instrument->method_id,
+                    'revoked_at' => $instrument->revoked_at]);
                 DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->where('instrument_id', $instrument->id)->update(['instrument_id' => null]);
             });
         }
@@ -403,7 +413,7 @@ class Instruments
             if ($instrument->status !== 'VERIFIED' || $instrument->method_status !== 'CREATED' || $instrument->revoked_at !== null) {
                 DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->where('instrument_id', $instrument->id)->update(['instrument_id' => null]);
             }
-            app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status, 'method_status' => $instrument->method_status, 'payment_method_id' => $instrument->method_id]);
+            app(Observations::class)->record($instrument, ['remote_id' => $instrument->remote_id, 'status' => $instrument->status, 'method_status' => $instrument->method_status, 'payment_method_id' => $instrument->method_id, 'revoked_at' => $instrument->revoked_at]);
 
             return $instrument;
         });

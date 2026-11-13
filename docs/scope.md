@@ -8,7 +8,7 @@ The released v0.1 baseline is [release tracker #1](https://github.com/jojeringna
 | --- | --- |
 | Billable Eloquent User, Team, Company or custom model | Separate polymorphic Customer; application authorizes its local model without a package authentication guard |
 | Direct subscription and hosted subscription checkout | Explicit local name, multi-item builder, provider trials/future starts, one configured Billing organization |
-| Hosted setup and source selection/replacement | Billing Source identity/owner/collector verified; setup grants no subscription access |
+| Hosted/embedded setup and source creation/selection/replacement | Billing Source identity/owner/collector verified; setup grants no subscription access |
 | Existing customer link and subscription import | Explicit authorized association and caller-supplied name, read-only import, no email-based adoption |
 | Subscription changes/cancellation | Exact values and explicit provider financial controls; no package proration calculation |
 | Invoice access | Owned invoice/line-item reads and provider PDF/hosted links; transaction observations follow [public contracts](contracts.md#invoice-transaction-observations); no local cash ledger, allocation or settlement inference |
