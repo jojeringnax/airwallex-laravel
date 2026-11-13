@@ -33,16 +33,16 @@ use Throwable;
 
 class SubscriptionManager
 {
-    private const CHANGE_KINDS = ['subscription.quantity', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item', 'subscription.items', 'subscription.free_period', 'subscription.remove_free_period', 'subscription.first_charge_discount', 'subscription.remove_first_charge_discount', 'subscription.schedule_ending', 'subscription.schedule_ending_at', 'subscription.restore_renewal', 'subscription.cancel', 'subscription.payment_source'];
+    private const CHANGE_KINDS = ['subscription.quantity', 'subscription.swap', 'subscription.add_item', 'subscription.remove_item', 'subscription.items', 'subscription.free_period', 'subscription.remove_free_period', 'subscription.coupon', 'subscription.remove_coupon', 'subscription.first_charge_discount', 'subscription.remove_first_charge_discount', 'subscription.schedule_ending', 'subscription.schedule_ending_at', 'subscription.restore_renewal', 'subscription.cancel', 'subscription.payment_source'];
 
-    private const DISCOUNT_KINDS = ['subscription.free_period', 'subscription.first_charge_discount'];
+    private const DISCOUNT_KINDS = ['subscription.free_period', 'subscription.first_charge_discount', 'subscription.coupon'];
 
     public function __construct(private readonly BillingContext $context, private readonly OperationManager $operations, private readonly SubscriptionSynchronizer $synchronizer, private readonly CustomerManager $customers) {}
 
     public function create(SubscriptionBuilder $builder, string $actionKey, array $options = []): Subscription
     {
         $customer = $this->customers->requireCustomer($builder->billable());
-        $this->managed($options, ['request_id', 'billing_customer_id', 'items', 'starts_at', 'trial_ends_at']);
+        $this->managed($options, ['request_id', 'billing_customer_id', 'items', 'starts_at', 'trial_ends_at', 'discounts']);
         $options = [...Routing::defaults($options), 'collection_method' => config('airwallex.collection_method'), ...$options];
         if (! array_key_exists('currency', $options) && config('airwallex.currency') !== null) {
             $options['currency'] = config('airwallex.currency');
@@ -53,7 +53,15 @@ class SubscriptionManager
             return $this->finishCreation($customer, $builder->name(), $existing);
         }
         $payload = [...$options, ...$builder->resolvePayload(), 'billing_customer_id' => $customer->remote_id];
-        $operation = $this->operations->prepare($customer, $actionKey, 'subscription.create', $specification, ['name' => $builder->name(), 'payload' => $payload], name: $builder->name());
+        $intent = ['name' => $builder->name(), 'payload' => $payload];
+        $couponId = $builder->definition()['coupon_id'] ?? null;
+        if ($couponId !== null) {
+            $terms = app(CouponEvidence::class)->coupon($couponId);
+            app(CouponEvidence::class)->assertCreation($payload, $terms);
+            $payload['discounts'] = [['type' => 'COUPON', 'coupon' => ['id' => $couponId]]];
+            $intent = ['name' => $builder->name(), 'payload' => $payload, 'coupon_terms' => $terms];
+        }
+        $operation = $this->operations->prepare($customer, $actionKey, 'subscription.create', $specification, $intent, name: $builder->name());
 
         return $this->finishCreation($customer, $builder->name(), $operation);
     }
@@ -117,6 +125,22 @@ class SubscriptionManager
         });
     }
 
+    public function applyCoupon(Subscription $subscription, string $actionKey, string $couponId): Subscription
+    {
+        $guard = fn (Subscription $current) => app(CouponEvidence::class)->assertCurrent($current);
+
+        return $this->change($subscription, $actionKey, 'subscription.coupon', ['coupon_id' => $couponId], function (Subscription $current) use ($guard, $couponId): array {
+            $guard($current);
+
+            return ['discounts' => [['type' => 'COUPON', 'coupon' => ['id' => $couponId]]], 'default_proration_mode' => 'NONE', 'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE'];
+        }, $guard);
+    }
+
+    public function removeCoupon(Subscription $subscription, string $actionKey, string $originalActionKey): Subscription
+    {
+        return $this->removeDiscount($subscription, $actionKey, $originalActionKey, ['subscription.coupon', 'subscription.create', 'checkout.subscription'], 'subscription.remove_coupon');
+    }
+
     public function applyFreePeriod(Subscription $subscription, string $actionKey, string $couponId): Subscription
     {
         return $this->change($subscription, $actionKey, 'subscription.free_period', ['coupon_id' => $couponId], function (Subscription $current) use ($couponId): array {
@@ -156,12 +180,14 @@ class SubscriptionManager
         return $this->removeDiscount($subscription, $actionKey, $originalActionKey, 'subscription.first_charge_discount', 'subscription.remove_first_charge_discount');
     }
 
-    private function removeDiscount(Subscription $subscription, string $actionKey, string $originalActionKey, string $originalKind, string $kind): Subscription
+    private function removeDiscount(Subscription $subscription, string $actionKey, string $originalActionKey, string|array $originalKind, string $kind): Subscription
     {
-        $guard = function (Subscription $current) use ($originalActionKey, $originalKind): void {
-            app(FreePeriodEvidence::class)->assertGeneration($current);
-            $original = ModelRegistry::query('operation')->where([...$this->context->attributes(), 'subscription_id' => $current->id, 'kind' => $originalKind, 'action_key' => $originalActionKey, 'status' => 'succeeded'])->first();
-            if ($original === null || $original->remote_id !== $current->remote_id || ! is_array($original->observation['discount_proof'] ?? null)) {
+        $guard = function (Subscription $current) use ($originalActionKey, $originalKind, $kind): void {
+            app($kind === 'subscription.remove_coupon' ? CouponEvidence::class : FreePeriodEvidence::class)->assertGeneration($current);
+            $query = ModelRegistry::query('operation')->where([...$this->context->attributes(), 'subscription_id' => $current->id, 'action_key' => $originalActionKey, 'status' => 'succeeded']);
+            $query->whereIn('kind', is_array($originalKind) ? $originalKind : [$originalKind]);
+            $original = $query->first();
+            if ($original === null || ! $this->discountTargetMatches($original, $current) || ! is_array($original->observation['discount_proof'] ?? null)) {
                 throw new EvidenceException('Free-period removal requires its original confirmed owned command.');
             }
             $proof = $this->discountEvidence($original->kind)->proof($current, $current->snapshot, $original->intent['coupon_terms']);
@@ -443,15 +469,31 @@ class SubscriptionManager
             if (is_string($payload['payment_source_id'] ?? null)) {
                 app(SourceManager::class)->retrieve($customer, $payload['payment_source_id']);
             }
+            if (array_key_exists('discounts', $payload)) {
+                if (! isset($operation->intent['coupon_terms']) || app(CouponEvidence::class)->coupon($operation->intent['coupon_terms']['id']) !== $operation->intent['coupon_terms']) {
+                    throw new EvidenceException('Creation Coupon terms changed or lack a managed original intent.');
+                }
+                app(CouponEvidence::class)->assertCreation($payload, $operation->intent['coupon_terms']);
+            }
         });
 
         return $this->operations->execute($operation, function () use ($operation): array {
             $payload = $operation->intent['payload'];
+            if (isset($operation->intent['coupon_terms'])) {
+                $expires = $operation->intent['coupon_terms']['expires_at'];
+                if (is_string($expires) && Timestamp::compare($expires, now()->format('Y-m-d\TH:i:s.uP')) <= 0) {
+                    throw new EvidenceException('Coupon redemption expired before creation dispatch.');
+                }
+            }
             $payload['metadata'] = $this->metadata(array_key_exists('metadata', $payload) ? $payload['metadata'] : new stdClass, $operation->id);
 
             return app(Client::class)->billing()->subscriptions()->create([...$payload, 'request_id' => $operation->request_id]);
         }, function (array $response) use ($customer, $name, $operation): Subscription {
             $this->response($response, $response['id'], $customer);
+            if (isset($operation->intent['coupon_terms'])) {
+                $pending = ModelRegistry::make('subscription', [...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $response['id']]);
+                $this->recordDiscountProof($operation, $pending, $response);
+            }
 
             return $this->confirmCreation($customer, $name, $response['id'], $operation);
         });
@@ -475,7 +517,12 @@ class SubscriptionManager
             return $result;
         }
 
-        return $this->synchronizer->confirm($customer, $name, $id, $operation);
+        $result = $this->synchronizer->confirm($customer, $name, $id, $operation);
+        if (isset($operation->intent['coupon_terms'])) {
+            $this->outcome($operation, $result);
+        }
+
+        return $result;
     }
 
     private function change(Subscription $subscription, string $actionKey, string $kind, array $specification, Closure $build, ?Closure $dispatchGuard = null): Subscription
@@ -506,6 +553,9 @@ class SubscriptionManager
             }
             if (in_array($kind, self::DISCOUNT_KINDS, true)) {
                 $intent['coupon_terms'] = $this->discountEvidence($kind)->coupon($specification['coupon_id']);
+                if ($kind === 'subscription.coupon') {
+                    app(CouponEvidence::class)->assertCompatible($subscription, $intent['coupon_terms']);
+                }
                 if ($kind === 'subscription.first_charge_discount') {
                     if ($intent['coupon_terms']['amount_off'] !== FirstChargeDiscountEvidence::amount($specification['amount_off']) || $intent['coupon_terms']['currency'] !== $specification['currency']) {
                         throw new EvidenceException('Coupon terms differ from the consumer-approved amount and currency.');
@@ -565,7 +615,7 @@ class SubscriptionManager
             if (isset($payload['items']) && ! in_array($collection, ['AUTO_CHARGE', 'CHARGE_ON_CHECKOUT', 'OUT_OF_BAND'], true)) {
                 throw new EvidenceException('Item mutation requires verified effective collection semantics.');
             }
-            if ((isset($payload['items']) || in_array($operation->kind, ['subscription.restore_renewal', 'subscription.free_period', 'subscription.remove_free_period', 'subscription.first_charge_discount', 'subscription.remove_first_charge_discount'], true)) && $collection === 'AUTO_CHARGE') {
+            if ((isset($payload['items']) || in_array($operation->kind, ['subscription.restore_renewal', 'subscription.free_period', 'subscription.remove_free_period', 'subscription.first_charge_discount', 'subscription.remove_first_charge_discount', 'subscription.coupon', 'subscription.remove_coupon'], true)) && $collection === 'AUTO_CHARGE') {
                 if (! is_string($sourceId) || $sourceId === '') {
                     throw new EvidenceException('Automatic collection requires a confirmed owned source.');
                 }
@@ -602,22 +652,7 @@ class SubscriptionManager
         }, function (array $response) use ($subscription, $customer, $operation): Subscription {
             $this->response($response, $subscription->remote_id, $customer);
             if (in_array($operation->kind, self::DISCOUNT_KINDS, true)) {
-                $proof = $this->discountEvidence($operation->kind)->proof($subscription, $response, $operation->intent['coupon_terms']);
-                DB::transaction(function () use ($operation, $proof): void {
-                    app(CommitGuard::class)->assertMayCommit();
-                    ModelRegistry::query('customer')->whereKey($operation->customer_id)->lockForUpdate()->firstOrFail();
-                    $current = ModelRegistry::query('operation')->findOrFail($operation->id);
-                    $this->context->assertModel($current);
-                    if ($current->observation !== null) {
-                        if (! $this->discountEvidence($operation->kind)->sameProof($proof, $current->observation['discount_proof'] ?? [])) {
-                            throw new EvidenceException('Original Discount response evidence cannot be replaced.');
-                        }
-                    } else {
-                        $current->observation = ['discount_proof' => $proof];
-                        $current->save();
-                    }
-                });
-                $operation->refresh();
+                $this->recordDiscountProof($operation, $subscription, $response);
             }
             $result = $this->reconcileChange($subscription, $operation);
             Routing::assertSubscription([...($operation->observed_routing ?? []), ...$result->snapshot]);
@@ -634,13 +669,16 @@ class SubscriptionManager
     {
         $payload = $operation->intent['payload'];
         $controlsConfirmed = $operation->status === 'acknowledged';
-        if (in_array($operation->kind, self::DISCOUNT_KINDS, true)) {
+        if (in_array($operation->kind, self::DISCOUNT_KINDS, true) || ($operation->kind === 'subscription.create' && isset($operation->intent['coupon_terms']))) {
+            if (in_array($operation->kind, ['subscription.create', 'subscription.coupon'], true)) {
+                app(CouponEvidence::class)->assertNoItemDiscounts($subscription);
+            }
             $proof = $this->discountEvidence($operation->kind)->proof($subscription, $subscription->snapshot, $operation->intent['coupon_terms']);
             if (! is_array($operation->observation['discount_proof'] ?? null) || ! $this->discountEvidence($operation->kind)->sameProof($proof, $operation->observation['discount_proof'])) {
                 throw new EvidenceException('The canonical free-period Discount does not match the original response identity and bounds.');
             }
         }
-        if (in_array($operation->kind, ['subscription.remove_free_period', 'subscription.remove_first_charge_discount'], true)) {
+        if (in_array($operation->kind, ['subscription.remove_free_period', 'subscription.remove_first_charge_discount', 'subscription.remove_coupon'], true)) {
             app(FreePeriodEvidence::class)->assertRemoved($subscription);
         }
         if ($operation->kind === 'subscription.schedule_ending_at') {
@@ -987,9 +1025,28 @@ class SubscriptionManager
         return hash('sha256', CanonicalJson::encode([$subscription->snapshot, $items]));
     }
 
+    private function discountTargetMatches(Operation $operation, Subscription $subscription): bool
+    {
+        if ($operation->kind !== 'checkout.subscription') {
+            return $operation->remote_id === $subscription->remote_id;
+        }
+
+        return ModelRegistry::query('checkout')->where('operation_id', $operation->id)
+            ->where('subscription_id', $subscription->id)->where('remote_subscription_id', $subscription->remote_id)->exists();
+    }
+
+    private function recordDiscountProof(Operation $operation, Subscription $subscription, array $response): void
+    {
+        app(DiscountProof::class)->record($operation, $subscription, $response, $this->discountEvidence($operation->kind));
+    }
+
     private function discountEvidence(string $kind): FreePeriodEvidence
     {
-        return app($kind === 'subscription.first_charge_discount' ? FirstChargeDiscountEvidence::class : FreePeriodEvidence::class);
+        return app(match ($kind) {
+            'subscription.first_charge_discount' => FirstChargeDiscountEvidence::class,
+            'subscription.coupon', 'subscription.create', 'checkout.subscription' => CouponEvidence::class,
+            default => FreePeriodEvidence::class,
+        });
     }
 
     private function preflight(Operation $operation, Closure $check): void

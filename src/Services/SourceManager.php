@@ -24,6 +24,7 @@ use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\Pages;
 use Jojeringnax\AirwallexLaravel\Support\Routing;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
+use SensitiveParameter;
 
 class SourceManager
 {
@@ -71,7 +72,7 @@ class SourceManager
 
                 return $this->client->billing()->paymentSources()->create([...$operation->intent['body'], 'request_id' => $operation->request_id]);
             },
-            function (array $response) use ($customer, $operation): PaymentSource {
+            function (#[SensitiveParameter] array $response) use ($customer, $operation): PaymentSource {
                 $this->proof($customer, $operation, $response);
 
                 return $this->proof($customer, $operation, SdkResponseShape::normalize($this->client->billing()->paymentSources()->retrieve($response['id'])), $response['id']);
@@ -128,7 +129,7 @@ class SourceManager
         return $paymentsCustomer;
     }
 
-    private function proof(Customer $customer, Operation $operation, array $remote, ?string $id = null): PaymentSource
+    private function proof(Customer $customer, Operation $operation, #[SensitiveParameter] array $remote, ?string $id = null): PaymentSource
     {
         $source = $this->verify($customer, $remote, $id);
         $body = $operation->intent['body'] ?? [];
@@ -179,7 +180,7 @@ class SourceManager
         return $customer;
     }
 
-    private function verify(Customer $customer, array $remote, ?string $expectedId = null): PaymentSource
+    private function verify(Customer $customer, #[SensitiveParameter] array $remote, ?string $expectedId = null): PaymentSource
     {
         $id = $remote['id'] ?? null;
         if (! is_string($id) || $id === '' || ($expectedId !== null && $id !== $expectedId)

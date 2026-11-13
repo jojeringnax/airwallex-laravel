@@ -146,6 +146,29 @@ class SubscriptionSynchronizer
             }
             app(SourceManager::class)->retrieve($customer, $after['payment_source_id']);
         }
+        if ($operation !== null && isset($operation->intent['coupon_terms'])
+            && ($operation->kind !== 'checkout.subscription' || $operation->subscription_id === null || ! is_array($operation->observation['discount_proof'] ?? null))) {
+            $evidence = app(CouponEvidence::class);
+            $pending = ModelRegistry::make('subscription', [...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $remoteId]);
+            $firstProof = $evidence->proof($pending, $remote, $operation->intent['coupon_terms']);
+            $lastProof = $evidence->proof($pending, $after, $operation->intent['coupon_terms']);
+            if (! $evidence->sameProof($firstProof, $lastProof)) {
+                throw new EvidenceException('The original Coupon Discount changed during canonical reads.');
+            }
+            foreach ($items as $item) {
+                if (($item['applied_discounts'] ?? null) !== []) {
+                    throw new EvidenceException('Managed Coupon creation cannot stack with item-level discounts.');
+                }
+            }
+            if ($operation->kind === 'checkout.subscription') {
+                // Checkout returns the Subscription only after hosted completion. Preserve
+                // its first complete canonical Discount identity before local association.
+                app(DiscountProof::class)->record($operation, $pending, $after, $evidence);
+            } elseif (! is_array($operation->observation['discount_proof'] ?? null)
+                || ! $evidence->sameProof($lastProof, $operation->observation['discount_proof'])) {
+                throw new EvidenceException('Canonical Coupon matching cannot replace the original direct-create Discount response.');
+            }
+        }
         try {
             return DB::transaction(function () use ($customer, $name, $remoteId, $before, $operation, $remote, $after, $items, $afterProjection): Subscription {
                 app(CommitGuard::class)->assertMayCommit();

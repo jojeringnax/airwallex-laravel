@@ -39,7 +39,7 @@ class ArchiveBoundaryTest(unittest.TestCase):
         manifest, metadata = qualifier.inspect_archive(self.archive, {"src/Service.php", "config/airwallex.php"})
         self.assertEqual(qualifier.digest(b"<?php"), manifest["src/Service.php"]["sha256"])
         repository = qualifier.package_repository(metadata, self.archive, "a" * 40)
-        self.assertEqual("0.1.0-RC1", repository["package"]["version"])
+        self.assertEqual("0.2.0-RC1", repository["package"]["version"])
         self.assertEqual("^0.1.3", repository["package"]["require"][qualifier.SDK])
         self.assertEqual("a" * 40, repository["package"]["dist"]["reference"])
         self.assertNotIn("scripts", repository["package"])

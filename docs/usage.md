@@ -10,7 +10,7 @@ Start here when installing the package or writing application billing code. [Sco
 
 ## Install and configure
 
-Use the exact review candidate archive and Composer descriptor from the [release-candidate tooling and installation instructions](release.md); Laravel v0.1.0 is already published to Packagist; use the candidate archive for these unreleased additions. Its dependency is the released Packagist SDK `jojeringnax/airwallex-php-sdk:^0.1.3`, with no sibling/path repository. Once a Laravel package release is actually published, the normal registry installation is `composer require jojeringnax/airwallex-laravel:^0.1`. See [compatibility](compatibility.md) for the PHP, Laravel 12/13, SQLite/MySQL, cache and queue support boundary.
+This guide describes v0.2.0. Use the [exact review candidate archive](release.md) before publication; once v0.2.0 is listed on [Packagist](https://packagist.org/packages/jojeringnax/airwallex-laravel), install it with `composer require jojeringnax/airwallex-laravel:^0.2`. The required released SDK is `jojeringnax/airwallex-php-sdk:^0.1.3`, with no sibling/path repository. Review [upgrade guidance](../UPGRADING.md) for existing v0.1.0 applications and [compatibility](compatibility.md) for supported runtime/backends.
 
 Laravel discovers the provider automatically. Publish configuration, configure external credentials, and migrate:
 
@@ -243,6 +243,31 @@ Both amount callbacks reject floats even from weak PHP callers, unknown exponent
 The optional cash callback requires an application-owned table with unique/primary `financial_identity`, string `provider`, `environment`, `account_id`, `resource_id`, `invoice_id`, `currency`, `proof_reference`, `clearing_account`, and exact string/text `amount_minor`. Supply allocation evidence from trusted server-side reconciliation: owning environment/account, invoice and PaymentIntent IDs, currency/amount, independent proof reference, clearing account and an independently established exclusive-to-invoice allocation. A caller-supplied boolean is not that proof. Missing allocation, manual/refund/pending/failed observations and zero cash return `unallocated`; repeated canonical intent identity returns `duplicate`; contradictory existing allocation fails. Distinct webhook delivery IDs and Billing/Payments references must resolve to that same verified account/intent key. The application must adapt this example to its real atomic ledger, partial/cross-document allocations, credit notes, accounting configuration and retention policy.
 
 The [owned invoice transaction recipe](../examples/invoice-transactions.php), [renewal restoration recipe](../examples/restore-renewal.php) and [due transition recipe](../examples/schedule-transition.php) are qualified through the selected subscription track. Restoration follows its explicitly supported combinations; the transition recipe establishes local due execution. The bounded native discount helper uses the required released SDK; actual financial effects and atomic scheduled provider execution require separate evidence. Applications own their catalogue, clients and accounting integration. Separately authorized Sandbox evidence remains a library validation gate.
+
+## Managed subscription coupons
+
+Select an existing organization-owned Coupon; creating, updating and archiving templates remains application work through the SDK. The package supports one subscription-level percentage or fixed-amount Coupon and refuses item/subtotal stacking. Fixed amounts must match the explicit subscription currency and every verified Price currency.
+
+```php
+$subscription = $team->newSubscription('membership', $priceId)
+    ->withCoupon($couponId)->create($commandKey, ['currency' => 'USD', 'payment_source_id' => $ownedSourceId]);
+$checkout = $team->newSubscription('hosted-membership', $priceId)
+    ->withCoupon($couponId)->checkout($checkoutCommandKey, [
+        'currency' => 'USD', 'success_url' => 'https://app.example.test/billing/return',
+        'back_url' => 'https://app.example.test/billing',
+    ]);
+// A separate current, undiscounted ACTIVE subscription:
+$existingActiveSubscription->applyCoupon($applyCommandKey, $laterCouponId);
+$existingActiveSubscription->removeCoupon($removeCommandKey, $applyCommandKey);
+```
+
+Creation supports ONCE, CUSTOM and INDEFINITELY. `applyCoupon()` on an existing ACTIVE subscription supports CUSTOM and INDEFINITELY; it refuses ONCE because the documented first-invoice rule does not establish later redemption. CUSTOM is a provider calendar duration, not a package promise of a particular invoice count after cadence changes or adjustments. Discounts are not separately prorated. Provider calculations and redemption remain remote; an observed Discount is not invoice payment or settlement.
+
+API keys need Coupon/Discount read permission (`billing.discount:read`) in addition to the ordinary Subscription/Checkout permissions. Fixed-amount creation also reads every Price and needs `billing.price:read`. Supply an explicit currency for a new raw hosted FLAT instruction; existing recorded raw hosted intents retain their original specification and payload defaults.
+
+Coupon financial terms are frozen in the durable intent and rechecked before its first write. Direct creation saves the original response Discount identity before canonical reads; a lost identity cannot be replaced merely by matching the Coupon later. Hosted creation first verifies the checkout's selected Coupon, then saves the resulting subscription's first complete canonical Discount proof before association. Browser completion alone establishes neither redemption nor access. Original proof survives natural discount expiry and later removal.
+
+Removal requires the original successful managed command and its exact currently observed Discount. It supports current PENDING, IN_TRIAL and ACTIVE generations. Use the original `create()`, hosted checkout or `applyCoupon()` action key. The existing single raw top-level hosted `discounts` instruction is normalized into the same managed flow; direct creation's raw `discounts` field is now managed and requires `withCoupon()`. Item-level and nested raw discounts are refused. Existing `applyFreePeriod()` and the explicitly experimental `applyFirstChargeDiscount()` retain their separate bounded contracts and removal methods.
 
 ## Earned ACTIVE free periods
 
