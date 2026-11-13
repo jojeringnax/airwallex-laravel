@@ -174,7 +174,7 @@ class InvoiceCreditTest extends TestCase
         $this->invoice->createCreditNote('free/create', 'AFTER_PAYMENT', 'GOODWILL_GESTURE');
     }
 
-    public function test_uncertain_stage_holds_the_invoice_financial_mutex_against_a_new_action(): void
+    public function test_new_creation_key_releases_unknown_credit_note_without_asserting_noncreation(): void
     {
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic timeout.');
@@ -184,13 +184,11 @@ class InvoiceCreditTest extends TestCase
         } catch (AmbiguousOperationException) {
         }
         $this->http->afterWrite = null;
-        try {
-            $this->invoice->createCreditNote('replacement', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
-            self::fail('A new financial action bypassed an uncertain original.');
-        } catch (ConflictException) {
-            self::assertCount(1, $this->posts());
-            self::assertSame(1, Operation::count());
-        }
+        $replacement = $this->invoice->createCreditNote('replacement', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
+        self::assertCount(2, $this->posts());
+        self::assertSame(2, Operation::count());
+        self::assertSame('superseded', Operation::where('action_key', 'free/create')->firstOrFail()->status);
+        self::assertSame('succeeded', $replacement->status);
     }
 
     public function test_duplicate_noncanonical_line_indexes_cannot_prove_a_multi_line_action(): void

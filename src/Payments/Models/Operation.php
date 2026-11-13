@@ -22,10 +22,12 @@ class Operation extends PaymentModel
 {
     protected $table = 'airwallex_payment_operations';
 
-    protected $casts = ['intent' => LosslessJson::class.':encrypted'];
+    protected $hidden = ['retry_release', 'intent', 'snapshot', 'body', 'payload'];
+
+    protected $casts = ['retry_release' => LosslessJson::class.':encrypted', 'intent' => LosslessJson::class.':encrypted'];
 
     protected function immutable(): array
     {
-        return [...parent::immutable(), 'customer_id', 'kind', 'action_key', 'intent_hash', 'intent', 'request_id', 'target_id', 'remote_id'];
+        return [...parent::immutable(), 'customer_id', 'kind', 'action_key', 'intent_hash', 'intent', 'request_id', 'retry_release', 'target_id', 'remote_id'];
     }
 }

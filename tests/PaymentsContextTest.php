@@ -67,7 +67,7 @@ class PaymentsContextTest extends TestCase
         $payments->createCustomer('customer-one', ['email' => 'different@example.test']);
     }
 
-    public function test_timeout_retains_original_identity_and_prohibits_new_key_or_explicit_link(): void
+    public function test_timeout_retains_original_identity_while_new_creation_key_may_duplicate(): void
     {
         $payments = Payments::for(PaymentsOwner::create(['id' => 'owner-one']));
         $http = $this->transport(fn () => throw new RuntimeException('synthetic timeout'));
@@ -86,8 +86,10 @@ class PaymentsContextTest extends TestCase
                 self::assertSame($original->request_id, Operation::first()->request_id);
             }
         }
-        self::assertCount(2, $http->requests);
-        self::assertSame(1, Operation::count());
+        self::assertCount(3, $http->requests);
+        self::assertSame(2, Operation::count());
+        self::assertSame('superseded', $original->fresh()->status);
+        self::assertNull($original->fresh()->lock_key);
     }
 
     public function test_explicit_link_is_owned_unique_and_can_sync_without_reassigning_merchant_identity(): void

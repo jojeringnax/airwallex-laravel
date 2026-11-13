@@ -49,6 +49,7 @@ class OutboxDispatcher
     public static function eventClass(string $name): string
     {
         return match ($name) {
+            'CreationRetryObserved' => Events\CreationRetryObserved::class,
             'SubscriptionReconciled' => Events\SubscriptionReconciled::class,
             'CheckoutReconciled' => Events\CheckoutReconciled::class,
             'InvoiceObserved' => Events\InvoiceObserved::class,

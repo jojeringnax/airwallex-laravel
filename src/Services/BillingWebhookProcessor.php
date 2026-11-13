@@ -85,6 +85,9 @@ class BillingWebhookProcessor
         if (! $operation) {
             return new ReceiptOutcome('ignored', 'unknown_resource');
         }
+        if (app(CreationRetries::class)->quarantined($operation, $resource['id'])) {
+            return new ReceiptOutcome('quarantined', 'superseded_creation_locator');
+        }
         if ($operation->kind === 'subscription.create') {
             app(SubscriptionManager::class)->recoverCreation($operation, $resource['id']);
 
@@ -111,6 +114,9 @@ class BillingWebhookProcessor
         $operation = $checkout ? ModelRegistry::query('operation')->findOrFail($checkout->operation_id) : $this->correlatedOperation($resource);
         if (! $operation || ! in_array($operation->kind, ['checkout.subscription', 'checkout.setup'], true)) {
             return new ReceiptOutcome('ignored', 'unknown_resource');
+        }
+        if (app(CreationRetries::class)->quarantined($operation, $resource['id'])) {
+            return new ReceiptOutcome('quarantined', 'superseded_creation_locator');
         }
         if (! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded'], true)) {
             return new ReceiptOutcome('quarantined', 'unattempted_operation');
@@ -156,7 +162,7 @@ class BillingWebhookProcessor
             return null;
         }
         $operation = ModelRegistry::query('operation')->where($this->context->attributes())->find($id);
-        if (! $operation || ! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded'], true)) {
+        if (! $operation || ! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded', 'superseded'], true)) {
             return null;
         }
         $customer = ModelRegistry::query('customer')->findOrFail($operation->customer_id);

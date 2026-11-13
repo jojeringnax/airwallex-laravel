@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Exception\ValidationException;
 use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
@@ -66,8 +67,10 @@ class OperationManager
 
                     return $existing;
                 }
+                $lockKey ??= $subscription ? 'subscription/'.$subscription->id : 'customer/'.$customer->id;
+                app(CreationRetries::class)->release($customer, $lockKey, $identity['action_key'], $kind);
                 /** @var Operation $operation */
-                $operation = ModelRegistry::make('operation', [...$identity, 'customer_id' => $customer->id, 'subscription_id' => $subscription?->id, 'kind' => $kind, 'intent_hash' => $hash, 'intent' => $intent, 'request_id' => (string) Str::uuid(), 'status' => 'prepared', 'lock_key' => $lockKey ?? ($subscription ? 'subscription/'.$subscription->id : 'customer/'.$customer->id)]);
+                $operation = ModelRegistry::make('operation', [...$identity, 'customer_id' => $customer->id, 'subscription_id' => $subscription?->id, 'kind' => $kind, 'intent_hash' => $hash, 'intent' => $intent, 'request_id' => (string) Str::uuid(), 'status' => 'prepared', 'lock_key' => $lockKey]);
                 $operation->save();
                 if ($name !== null) {
                     if (ModelRegistry::query('subscription_slot')->where('customer_id', $customer->id)->where('name', $name)->exists()) {
@@ -89,6 +92,8 @@ class OperationManager
     public function execute(Operation $operation, Closure $write, Closure $confirm): mixed
     {
         $this->context->assertModel($operation);
+        app(Client::class);
+        app(CreationRetries::class)->assertCurrent($operation);
         $changed = ModelRegistry::query('operation')->whereKey($operation->id)->where('status', 'prepared')->update(['status' => 'in_flight']);
         if ($changed !== 1) {
             throw new AmbiguousOperationException($operation->id);
@@ -104,7 +109,11 @@ class OperationManager
             $operation->observed_routing = Routing::responseEvidence($result);
             $operation->remote_id = $result['id'];
             $operation->save();
-            $confirmed = $confirm($result, $operation);
+            app(CreationRetries::class)->assertCurrent($operation, $result['id']);
+            $confirmed = app(CommitGuard::class)->during(
+                fn () => app(CreationRetries::class)->assertCurrent($operation),
+                fn () => $confirm($result, $operation),
+            );
             $operation->refresh();
             if ($operation->status !== 'acknowledged') {
                 $this->succeed($operation);
@@ -160,6 +169,7 @@ class OperationManager
         DB::transaction(function () use ($operation): void {
             app(CommitGuard::class)->assertMayCommit();
             $operation->refresh();
+            app(CreationRetries::class)->assertCurrent($operation);
             $operation->forceFill(['status' => 'succeeded', 'lock_key' => null, 'error_code' => null])->save();
         });
     }

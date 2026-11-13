@@ -34,7 +34,7 @@ class SweepRegistry
 
                     match ($name) {
                         'customer' => $query->whereNotNull('remote_id'),
-                        'operation' => $query->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged']),
+                        'operation' => $query->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'superseded']),
                         'receipt' => $query->where(fn ($query) => $query->whereIn('status', ['pending', 'failed'])
                             ->orWhere(fn ($query) => $query->where('status', 'processing')->where('lease_until', '<=', now()->utc()))),
                         'event' => $query->whereNull('dispatched_at')->where(fn ($query) => $query->whereNull('lease_until')->orWhere('lease_until', '<=', now()->utc())),

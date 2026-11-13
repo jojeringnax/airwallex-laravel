@@ -135,6 +135,7 @@ class CheckoutManager
     /** Read-only recovery; unknown IDs require explicit, canonically verified correlation. */
     public function recover(Operation $operation, ?string $remoteId = null): Checkout
     {
+        app(CreationRetries::class)->assertCurrent($operation, $remoteId);
         $this->context->assertModel($operation);
         $operation = ModelRegistry::query('operation')->findOrFail($operation->id);
         if (! in_array($operation->kind, ['checkout.subscription', 'checkout.setup'], true) || ! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded'], true)) {
@@ -205,6 +206,7 @@ class CheckoutManager
             $checkout = DB::transaction(function () use ($operation, $customer, $before, $remote, $id): Checkout {
                 app(CommitGuard::class)->assertMayCommit();
                 ModelRegistry::query('customer')->whereKey($customer->id)->lockForUpdate()->firstOrFail();
+                app(CreationRetries::class)->assertCurrent($operation, $id);
                 $checkout = ModelRegistry::query('checkout')->where($this->context->attributes())->where('remote_id', $id)->first();
                 if ($before !== null && ($checkout === null || $checkout->id !== $before->id)) {
                     throw new ConflictException('The known checkout mapping was removed during reconciliation.');

@@ -47,3 +47,7 @@ $schedule->command('airwallex:payments-recover --family=prune --limit=100')
 ```
 
 Shared scheduler locks, database access, synchronized clocks, queue reservation/worker timeouts and supervision remain deployment prerequisites. Direct event recovery invokes listeners synchronously; receipt recovery enqueues stored jobs. Scheduling does not start workers. Monitor failed/expired leases, quarantines, unresolved operations, stale completed sweeps and undispatched observations. Provider sandbox delivery, client/wallet readiness and deployed-consumer qualification remain separate work.
+
+## Superseded unknown creations
+
+A consumer's new creation key can release an older unknown-ID creation automatically; no operator wait or provider-absence assertion is required. The [shared retry runbook](operations.md#retrying-an-unknown-creation) defines the encrypted audit, optional `airwallex:allow-creation-retry --payments`, order/refund reservations and retained original request identity. Same-key mutation replay remains prohibited. A late signed original request locator produces a quarantined receipt and `PaymentObserved` classification `SUPERSEDED_CREATION_LOCATOR`, never a silently adopted current resource or financial completion. Monitor and service possible duplicates through explicitly authorized consumer workflows.

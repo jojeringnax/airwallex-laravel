@@ -19,6 +19,9 @@ class RecoveryManager
     {
         $this->context->assertModel($operation);
         $operation = ModelRegistry::query('operation')->where($this->context->attributes())->findOrFail($operation->id);
+        if (app(CreationRetries::class)->quarantined($operation, $candidateId)) {
+            return $operation;
+        }
         if (! in_array($operation->status, ['in_flight', 'ambiguous', 'acknowledged', 'succeeded'], true)) {
             throw new ConflictException('Recovery cannot submit an unattempted or rejected financial command.', $operation->id);
         }

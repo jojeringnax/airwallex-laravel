@@ -257,6 +257,7 @@ class CustomerManager
     /** @internal Attempted-operation recovery performs canonical reads only. */
     public function reconcileOperation(Operation $operation): Customer
     {
+        app(CreationRetries::class)->assertCurrent($operation);
         $this->context->assertModel($operation);
         $operation = ModelRegistry::query('operation')->findOrFail($operation->id);
         $this->context->assertModel($operation);
@@ -272,6 +273,7 @@ class CustomerManager
 
     private function recover(Customer $customer, Operation $operation): Customer
     {
+        app(CreationRetries::class)->assertCurrent($operation);
         $id = $operation->kind === 'customer.update' ? ($operation->intent['remote_id'] ?? null) : $operation->remote_id;
         if (! in_array($operation->status, ['in_flight', 'ambiguous'], true) || ! is_string($id) || $id === '' || ($operation->remote_id !== null && $operation->remote_id !== $id) || ($customer->remote_id !== null && $customer->remote_id !== $id)) {
             throw new AmbiguousOperationException($operation->id);
@@ -282,7 +284,7 @@ class CustomerManager
             if ($operation->kind === 'customer.update' && ! self::contains($remote, $operation->intent['profile'])) {
                 throw new EvidenceException('The intended customer update is not confirmed.');
             }
-            $customer = $this->attach($customer, $remote, expectedId: $id);
+            $customer = app(CreationRetries::class)->during($operation, fn () => $this->attach($customer, $remote, expectedId: $id));
             if ($operation->remote_id === null) {
                 $operation->remote_id = $id;
                 $operation->save();

@@ -42,6 +42,8 @@ Facade::setFacadeApplication($app);
 Model::encryptUsing(new Encrypter(str_repeat('a', 32), 'AES-256-CBC'));
 $context = new BillingContext('sandbox', 'org-test');
 $app->instance(BillingContext::class, $context);
+$factory = new HttpFactory;
+$app->instance(Client::class, new Client(Environment::Sandbox, new Credentials('synthetic-client', 'synthetic-key'), new FakeHttpClient([]), $factory, $factory));
 $manager = new OperationManager($context);
 if (($argv[4] ?? '') === 'stale') {
     $factory = new HttpFactory;

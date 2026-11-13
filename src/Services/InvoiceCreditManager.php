@@ -140,6 +140,7 @@ class InvoiceCreditManager
     /** @internal Read-only recovery, including unknown-ID original creation candidates. */
     public function recover(Operation $operation, ?string $candidateId = null): Operation
     {
+        app(CreationRetries::class)->assertCurrent($operation, $candidateId);
         $this->resource();
         $this->context->assertModel($operation);
         $operation = ModelRegistry::query('operation')->findOrFail($operation->id);
@@ -289,6 +290,7 @@ class InvoiceCreditManager
         DB::transaction(function () use ($invoice, $operation, $note, $proof): void {
             app(CommitGuard::class)->assertMayCommit();
             ModelRegistry::query('customer')->whereKey($operation->customer_id)->lockForUpdate()->firstOrFail();
+            app(CreationRetries::class)->assertCurrent($operation);
             [$customer] = $this->mapping($invoice);
             $current = ModelRegistry::query('operation')->findOrFail($operation->id);
             $this->context->assertModel($current);
