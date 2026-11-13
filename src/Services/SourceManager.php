@@ -81,6 +81,7 @@ class SourceManager
     /** A candidate is only a locator; canonical original correlation establishes identity. */
     public function recover(Operation $operation, ?string $candidateId = null): PaymentSource
     {
+        app(CreationRetries::class)->assertCurrent($operation, $candidateId);
         $this->context->assertModel($operation);
         $operation = ModelRegistry::query('operation')->findOrFail($operation->id);
         if ($operation->kind !== 'payment_source.create' || ! in_array($operation->status, ['in_flight', 'ambiguous', 'succeeded'], true)) {
@@ -95,8 +96,10 @@ class SourceManager
             throw new OwnershipException('Source recovery cannot replace its original resource identity.');
         }
         $source = $this->proof($customer, $operation, SdkResponseShape::normalize($this->client->billing()->paymentSources()->retrieve($id)), $id);
+        app(CreationRetries::class)->assertCurrent($operation, $id);
         DB::transaction(function () use ($operation, $id): void {
             app(CommitGuard::class)->assertMayCommit();
+            app(CreationRetries::class)->assertCurrent($operation, $id);
             $query = ModelRegistry::query('operation')->whereKey($operation->id);
             $query->lockForUpdate();
             $current = $query->firstOrFail();

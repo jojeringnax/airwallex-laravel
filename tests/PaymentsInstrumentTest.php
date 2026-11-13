@@ -487,7 +487,8 @@ class PaymentsInstrumentTest extends TestCase
         return [[false], [true]];
     }
 
-    public function test_unknown_source_creation_recovers_only_original_correlation_without_another_write(): void
+    #[DataProvider('sourceRecoveryChoices')]
+    public function test_unknown_source_creation_recovers_only_original_correlation_without_another_write(bool $retry): void
     {
         $this->seedInstrument();
         config(['airwallex.linked_payment_account_id' => 'account-payments']);
@@ -513,6 +514,20 @@ class PaymentsInstrumentTest extends TestCase
         } catch (AmbiguousOperationException) {
             self::assertNull(BillingOperation::sole()->remote_id);
         }
+        if ($retry) {
+            $original = BillingOperation::sole();
+            try {
+                app(Instruments::class)->createBillingSource($this->customer, 'cst-one', $billing, 'source-new-key');
+                self::fail('The synthetic second lost response must remain unknown.');
+            } catch (AmbiguousOperationException) {
+                self::assertSame('superseded', $original->fresh()->status);
+            }
+            self::assertSame('superseded', app(RecoveryManager::class)->operation($original, 'source-late')->status);
+            self::assertNull($original->fresh()->remote_id);
+            self::assertCount(2, array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/payment_sources/create')));
+
+            return;
+        }
         $wrongMethod = true;
         try {
             app(RecoveryManager::class)->operation(BillingOperation::sole(), 'source-one');
@@ -525,6 +540,11 @@ class PaymentsInstrumentTest extends TestCase
         self::assertSame('succeeded', BillingOperation::sole()->status);
         self::assertSame('source-one', BillingOperation::sole()->remote_id);
         self::assertCount(1, array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/payment_sources/create')));
+    }
+
+    public static function sourceRecoveryChoices(): array
+    {
+        return [[false], [true]];
     }
 
     public function test_failed_expired_or_customer_triggered_consents_are_not_saved_charge_eligibility(): void
