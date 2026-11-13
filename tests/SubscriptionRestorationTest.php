@@ -51,17 +51,28 @@ class SubscriptionRestorationTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_original_finite_bound_is_saved_before_schedule_and_restored_with_distinct_identity(): void
+    #[DataProvider('endingModes')]
+    public function test_original_finite_bound_is_saved_before_schedule_and_restored_with_distinct_identity(bool $dated): void
     {
         $original = $this->original();
         $subscription = $this->seedSubscription($original);
-        $scheduled = $this->scheduled();
-        $this->http([...$this->observation($original), FakeHttpClient::json($scheduled), ...$this->observation($scheduled)]);
-        $subscription = $subscription->cancelAtPeriodEnd('off');
+        $end = $dated ? '2026-11-20T12:34:56.123456789+0230' : '2026-12-01T00:00:00Z';
+        $scheduled = $this->scheduled($dated ? ['cancel_at_period_end' => false, 'ends_at' => $end] : []);
+        $http = $this->http([...$this->observation($original), FakeHttpClient::json($scheduled), ...$this->observation($scheduled)]);
+        $subscription = $dated ? $subscription->cancelAt('off', $end, $this->endingOptions()) : $subscription->cancelAtPeriodEnd('off');
         $off = Operation::where('action_key', 'off')->firstOrFail();
         self::assertSame(self::ORIGINAL_END, $off->intent['original_bounds']['ends_at']);
         self::assertFalse($off->intent['original_bounds']['cancel_at_period_end']);
-        self::assertSame('2026-12-01T00:00:00Z', $subscription->scheduled_ends_at);
+        self::assertSame($end, $subscription->scheduled_ends_at);
+        self::assertTrue($subscription->onGracePeriod());
+        if ($dated) {
+            $body = json_decode((string) $http->requests[4]->getBody(), true);
+            self::assertSame($end, $body['ends_at']);
+            self::assertNull($body['duration']);
+            self::assertNull($body['remaining_duration']);
+            self::assertArrayNotHasKey('cancel_at_period_end', $body);
+            self::assertFalse($subscription->cancel_at_period_end);
+        }
         $restored = $this->original(['updated_at' => '2026-11-10T12:02:00Z']);
         $http = $this->http([...$this->observation($scheduled), FakeHttpClient::json($restored), ...$this->observation($restored)]);
         $result = $subscription->restoreRenewal('on', 'off');
@@ -75,6 +86,82 @@ class SubscriptionRestorationTest extends TestCase
         self::assertSame(self::ORIGINAL_END, $result->ends_at);
         $result->restoreRenewal('on', 'off');
         self::assertCount(8, $http->requests);
+    }
+
+    public static function endingModes(): array
+    {
+        return [[false], [true]];
+    }
+
+    private function endingOptions(): array
+    {
+        return ['default_proration_mode' => 'NONE', 'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE'];
+    }
+
+    #[DataProvider('invalidDatedEnds')]
+    public function test_invalid_dated_ending_refuses_before_http(string $end, array $changes): void
+    {
+        $subscription = $this->seedSubscription($this->original($changes));
+        $http = $this->http([]);
+        try {
+            $subscription->cancelAt('invalid-date', $end, $this->endingOptions());
+            self::fail('Unsupported dated ending reached HTTP.');
+        } catch (EvidenceException|ConflictException) {
+            self::assertCount(0, $http->requests);
+            self::assertSame(0, Operation::count());
+        }
+    }
+
+    public static function invalidDatedEnds(): array
+    {
+        return [
+            ['2026-11-10T12:00:00Z', []],
+            ['2026-11-10T11:00:00Z', []],
+            ['2028-01-01T00:00:00Z', []],
+            ['2026-11-20T00:00:00Z', ['status' => 'UNPAID']],
+            ['2026-11-20T00:00:00Z', ['status' => 'NEW_STATE']],
+            ['2026-11-20T00:00:00Z', ['cancel_at_period_end' => true]],
+            ['2026-11-20T00:00:00Z', ['starts_at' => '2026-12-01T00:00:00Z', 'status' => 'PENDING']],
+        ];
+    }
+
+    public function test_dated_end_recovers_original_response_and_retains_cap_across_missing_bounds_and_old_observations(): void
+    {
+        $original = $this->original();
+        $subscription = $this->seedSubscription($original);
+        $end = '2026-11-20T12:00:00.123456+02:00';
+        $scheduled = $this->scheduled(['cancel_at_period_end' => false, 'ends_at' => $end]);
+        $this->http([...$this->observation($original), FakeHttpClient::json($scheduled), new RuntimeException('synthetic canonical read interruption')]);
+        try {
+            $subscription->cancelAt('dated', new \DateTimeImmutable($end), $this->endingOptions());
+            self::fail('Expected ambiguous canonical read.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame('sub-test', Operation::first()->remote_id);
+        }
+        $competing = $this->http($this->observation($original));
+        try {
+            $subscription->cancelNow('competing-date', 'NONE');
+            self::fail('A competing cancellation bypassed the dated action.');
+        } catch (ConflictException) {
+            self::assertCount(4, $competing->requests);
+            self::assertSame(1, Operation::count());
+        }
+        $http = $this->http($this->observation($scheduled));
+        $result = $subscription->cancelAt('dated', $end, $this->endingOptions());
+        self::assertSame($end, $result->scheduled_ends_at);
+        self::assertTrue($result->onGracePeriod());
+        self::assertCount(4, $http->requests);
+        self::assertSame('succeeded', Operation::first()->status);
+        $missing = [...$scheduled, 'ends_at' => null, 'updated_at' => '2026-11-10T12:02:00Z'];
+        $this->http($this->observation($missing));
+        $result = $result->reconcile();
+        self::assertSame($end, $result->scheduled_ends_at);
+        $this->http($this->observation($original));
+        $result = $result->reconcile();
+        self::assertSame($end, $result->scheduled_ends_at);
+        Carbon::setTestNow($end);
+        self::assertFalse($result->valid());
+        self::assertFalse($result->onGracePeriod());
     }
 
     public function test_false_flag_without_exact_original_end_retains_access_cap_until_read_recovery_proves_restoration(): void
@@ -156,14 +243,14 @@ class SubscriptionRestorationTest extends TestCase
     }
 
     #[DataProvider('automaticCombinations')]
-    public function test_verified_automatic_restoration_preserves_state_and_source_and_clears_only_proven_bounds(string $status, bool $indefinite): void
+    public function test_verified_automatic_restoration_preserves_state_and_source_and_clears_only_proven_bounds(string $status, bool $indefinite, bool $dated): void
     {
         $original = $this->automatic($status, $indefinite);
         $subscription = $this->seedSubscription($original);
-        $scheduled = [...$original, 'cancel_at_period_end' => true, 'ends_at' => '2026-12-01T00:00:00Z', 'duration' => ['period' => 1, 'period_unit' => 'MONTH'], 'updated_at' => '2026-11-10T12:01:00Z'];
+        $scheduled = [...$original, 'cancel_at_period_end' => ! $dated, 'ends_at' => '2026-12-01T00:00:00Z', 'duration' => ['period' => 1, 'period_unit' => 'MONTH'], 'updated_at' => '2026-11-10T12:01:00Z'];
         $bounds = $indefinite ? ['ends_at' => null, 'duration' => null, 'remaining_duration' => null] : null;
         $this->http([...$this->observation($original), FakeHttpClient::json($scheduled), ...$this->observation($scheduled)]);
-        $subscription = $subscription->cancelAtPeriodEnd('off', $bounds);
+        $subscription = $dated ? $subscription->cancelAt('off', '2026-12-01T00:00:00Z', $this->endingOptions(), $bounds) : $subscription->cancelAtPeriodEnd('off', $bounds);
         $off = Operation::where('action_key', 'off')->firstOrFail();
         self::assertSame($bounds ?? ['ends_at' => self::ORIGINAL_END], $off->intent['renewal_bounds']);
         $restored = [...$original, 'updated_at' => '2026-11-10T12:02:00Z'];
@@ -192,7 +279,7 @@ class SubscriptionRestorationTest extends TestCase
 
     public static function automaticCombinations(): array
     {
-        return [['ACTIVE', false], ['ACTIVE', true], ['PENDING', true], ['IN_TRIAL', true], ['UNPAID', true]];
+        return [['ACTIVE', false, false], ['ACTIVE', true, false], ['PENDING', true, false], ['IN_TRIAL', true, false], ['UNPAID', true, false], ['ACTIVE', false, true], ['ACTIVE', true, true], ['PENDING', true, true], ['IN_TRIAL', true, true]];
     }
 
     public function test_optional_omission_before_scheduling_does_not_invent_indefinite_intent(): void

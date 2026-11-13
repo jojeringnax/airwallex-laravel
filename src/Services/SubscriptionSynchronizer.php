@@ -188,7 +188,15 @@ class SubscriptionSynchronizer
                 $previousStatus = $subscription->status;
                 $restorationPending = $subscription->exists && ModelRegistry::query('operation')->where('subscription_id', $subscription->id)
                     ->where('kind', 'subscription.restore_renewal')->whereIn('status', ['prepared', 'in_flight', 'ambiguous'])->exists();
-                $scheduleEnd = (($subscription->cancel_at_period_end === true && $after['cancel_at_period_end']) || $restorationPending) ? $subscription->scheduled_ends_at : null;
+                $latestSchedule = $subscription->exists ? ModelRegistry::query('operation')->where('subscription_id', $subscription->id)
+                    ->whereIn('kind', ['subscription.schedule_ending', 'subscription.schedule_ending_at', 'subscription.restore_renewal'])
+                    ->whereIn('status', ['in_flight', 'ambiguous', 'succeeded'])->orderByDesc('id')->first() : null;
+                $datedEnding = $latestSchedule?->kind === 'subscription.schedule_ending_at';
+                $scheduleEnd = (($subscription->cancel_at_period_end === true && $after['cancel_at_period_end']) || $restorationPending || $datedEnding) ? $subscription->scheduled_ends_at : null;
+                if ($datedEnding && is_string($after['ends_at'] ?? null)
+                    && Timestamp::compare($after['ends_at'], $latestSchedule->intent['payload']['ends_at']) === 0) {
+                    $scheduleEnd = $scheduleEnd ?? $after['ends_at'];
+                }
                 if ($after['cancel_at_period_end']) {
                     foreach (['ends_at', 'current_period_ends_at'] as $key) {
                         if (is_string($after[$key] ?? null) && ($scheduleEnd === null || Timestamp::compare($after[$key], $scheduleEnd) < 0)) {
