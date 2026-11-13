@@ -244,6 +244,28 @@ The optional cash callback requires an application-owned table with unique/prima
 
 The [owned invoice transaction recipe](../examples/invoice-transactions.php), [renewal restoration recipe](../examples/restore-renewal.php) and [due transition recipe](../examples/schedule-transition.php) are qualified through the selected subscription track. Restoration follows its explicitly supported combinations; the transition recipe establishes local due execution. The bounded native discount helper uses the required released SDK; actual financial effects and atomic scheduled provider execution require separate evidence. Applications own their catalogue, clients and accounting integration. Separately authorized Sandbox evidence remains a library validation gate.
 
+## Managed subscription coupons
+
+Select an existing organization-owned Coupon; creating, updating and archiving templates remains application work through the SDK. The package supports one subscription-level percentage or fixed-amount Coupon and refuses item/subtotal stacking. Fixed amounts must match the explicit subscription currency and every verified Price currency.
+
+```php
+$subscription = $team->newSubscription('membership', $priceId)
+    ->withCoupon($couponId)->create($commandKey, ['currency' => 'USD', 'payment_source_id' => $ownedSourceId]);
+$checkout = $team->newSubscription('hosted-membership', $priceId)
+    ->withCoupon($couponId)->checkout($checkoutCommandKey, [
+        'currency' => 'USD', 'success_url' => 'https://app.example.test/billing/return',
+        'back_url' => 'https://app.example.test/billing',
+    ]);
+$subscription->applyCoupon($applyCommandKey, $laterCouponId);
+$subscription->removeCoupon($removeCommandKey, $originalCouponCommandKey);
+```
+
+Creation supports ONCE, CUSTOM and INDEFINITELY. `applyCoupon()` on an existing ACTIVE subscription supports CUSTOM and INDEFINITELY; it refuses ONCE because the documented first-invoice rule does not establish later redemption. CUSTOM is a provider calendar duration, not a package promise of a particular invoice count after cadence changes or adjustments. Discounts are not separately prorated. Provider calculations and redemption remain remote; an observed Discount is not invoice payment or settlement.
+
+Coupon financial terms are frozen in the durable intent and rechecked before its first write. Direct creation saves the original response Discount identity before canonical reads; a lost identity cannot be replaced merely by matching the Coupon later. Hosted creation first verifies the checkout's selected Coupon, then saves the resulting subscription's first complete canonical Discount proof before association. Browser completion alone establishes neither redemption nor access. Original proof survives natural discount expiry and later removal.
+
+Removal requires the original successful managed command and its exact currently observed Discount. It supports current PENDING, IN_TRIAL and ACTIVE generations. Use the original `create()`, hosted checkout or `applyCoupon()` action key. The existing single raw top-level hosted `discounts` instruction is normalized into the same managed flow; direct creation's raw `discounts` field is now managed and requires `withCoupon()`. Item-level and nested raw discounts are refused. Existing `applyFreePeriod()` and the explicitly experimental `applyFirstChargeDiscount()` retain their separate bounded contracts and removal methods.
+
 ## Earned ACTIVE free periods
 
 For a free interval with a paid remainder, use the [partial-period requirement and strategy](scope.md#catalogue-coupons-and-access). The following recipe applies a 100 percent Coupon; it does not calculate or demonstrate that remainder charge.

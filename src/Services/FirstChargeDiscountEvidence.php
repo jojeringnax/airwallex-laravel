@@ -154,7 +154,7 @@ class FirstChargeDiscountEvidence extends FreePeriodEvidence
         return $final;
     }
 
-    public static function amount(mixed $value): string
+    public static function amount(#[SensitiveParameter] mixed $value): string
     {
         if (! is_string($value) || ! preg_match('/^([0-9]+)(?:\.([0-9]+))?$/D', $value, $parts)) {
             throw new EvidenceException('Discount amounts require exact unsigned decimal strings.');

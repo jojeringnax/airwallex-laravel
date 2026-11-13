@@ -4,6 +4,8 @@
 
 New creation keys may supersede unknown-ID attempted creations without blocking the customer, deliberately permitting provider duplicates while retaining original history and encrypted audit. Late original locators are quarantined and exposed as consumer observations; same-key writes are never replayed. Adds a local audited retry-release command and fixes Billing configuration validation before dispatch claim. The additive migration preserves historical merchant orders while allowing a new current reservation.
 
+Adds verified subscription-level percentage/fixed Coupons for direct and hosted creation, supported ACTIVE application, and original-command removal. Frozen exact terms, currency checks and set-once Discount proof cover ONCE/CUSTOM/INDEFINITELY creation; general ONCE application to existing ACTIVE remains refused. Direct raw creation discounts now use `withCoupon()`; existing valid single hosted Coupon instructions enter the managed flow.
+
 Adds optional consumer-selected FLAT/ONCE first-charge discounts, explicit original-Discount removal and owned finalized-Invoice attribution for a paid remainder. Saved original response identity supports read-only confirmation after the Discount leaves current Subscription reads; exact future-phase targeting and actual financial effects remain unqualified.
 
 Adds optional durable original-Invoice Credit Note creation, explicit partial line credits and consumer-approved finalization/refund allocation through released SDK v0.1.3. Direct resource/line correlation supports read-only recovery; actual Invoice/refund effects and unbilled partial free intervals remain unqualified. New deferred plans guard billing anchor, cadence and tax changes while preserving existing plan identities.

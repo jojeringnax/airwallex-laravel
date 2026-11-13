@@ -6,6 +6,8 @@ Back up the application database and encryption keys before applying package mig
 
 ## Upgrading from 0.1.0
 
+Managed subscription Coupons add `withCoupon()`, `applyCoupon()` and `removeCoupon()`. Replace direct raw `discounts` creation options with `withCoupon($couponId)`. A valid single top-level hosted Coupon instruction remains accepted through the same managed proof; stacking and nested/item discounts are refused. Existing free-period and experimental first-charge intent identities remain unchanged. See the [Coupon contract](docs/contracts.md#managed-subscription-coupons) for supported durations, original-command removal and the documented ONCE-on-ACTIVE boundary.
+
 Update the application lock to the package’s new SDK requirement, `jojeringnax/airwallex-php-sdk:^0.1.3`, before using the [three-stage credit workflow](docs/contracts.md#owned-invoice-credits). Run the existing operation-observation migration before adding lines. Existing Coupon and item commands keep their identities. Newly scheduled transitions retain a stronger financial baseline (shape v3); old v1/v2 plans are unchanged and can be explicitly cancelled/recreated before an attempted write.
 
 The optional experimental [fixed first-charge discount](docs/contracts.md#fixed-first-charge-discounts) uses the Coupon API included in SDK v0.1.3 and operation-observation migration. Existing 100-percent/CUSTOM calls retain their signatures, intent hashes and behavior. Choose a FLAT/ONCE Coupon and approve its exact amount explicitly; Invoice attribution is a separate confirmation. Whether a new ONCE application affects subsequent Invoices on an already-ACTIVE Subscription needs provider/account proof, and ONCE is not an arbitrary future-phase selector.

@@ -102,7 +102,7 @@ try {
         DB::table('candidate_adoption_commands')->insert(['action_key' => $actionKey, 'purpose' => 'approved initial free period']);
 
         return (new AirwallexBillable($billable))->newSubscription('trial', $adapters['price']('sandbox', 'membership', 'USD'))
-            ->startsAt('2026-11-12T12:00:00Z')->trialDays(7)
+            ->startsAt('2026-11-12T12:00:00Z')->trialUntil('2026-11-19T14:30:00.123456789+0230')
             ->create($actionKey, ['collection_method' => 'OUT_OF_BAND']);
     };
     $beforeDenial = [DB::table('candidate_adoption_commands')->count(), Operation::count(), Subscription::count(), SubscriptionSlot::count()];
@@ -115,12 +115,12 @@ try {
     adoptionCheck($http->requests === 0, 'Denied application action reached SDK authentication or a provider request.');
     adoptionCheck($beforeDenial === [DB::table('candidate_adoption_commands')->count(), Operation::count(), Subscription::count(), SubscriptionSlot::count()], 'Denied application action persisted a command, operation, subscription or reservation.');
     $report['checks'][] = 'application_policy_denial_before_command_reservation_and_sdk_request';
-    $pending = Fixtures::subscription('sub-future-trial', 'customer-adoption', ['status' => 'PENDING', 'starts_at' => '2026-11-12T12:00:00Z', 'trial_starts_at' => '2026-11-12T12:00:00Z', 'trial_ends_at' => '2026-11-19T12:00:00Z', 'collection_method' => 'OUT_OF_BAND']);
+    $pending = Fixtures::subscription('sub-future-trial', 'customer-adoption', ['status' => 'PENDING', 'starts_at' => '2026-11-12T12:00:00Z', 'trial_starts_at' => '2026-11-12T12:00:00Z', 'trial_ends_at' => '2026-11-19T14:30:00.123456789+0230', 'collection_method' => 'OUT_OF_BAND']);
     $http = $bind([Fixtures::request('POST', 'billing/subscriptions/create', $pending), ...Fixtures::observation($pending, [Fixtures::item('item-trial', 'sub-future-trial')])]);
     $subscription = $startTrial($owner, $team, 'future-trial-command');
     $http->assertConsumed();
-    adoptionCheck(! $billing->subscribed('trial') && $subscription->trial_ends_at === '2026-11-19T12:00:00Z', 'Future/free-period intent granted early access or lost dates.');
-    adoptionCheck(Operation::where('action_key', 'future-trial-command')->first()->intent['payload']['trial_ends_at'] === '2026-11-19T12:00:00Z', 'Resolved application free-period date was not persisted.');
+    adoptionCheck(! $billing->subscribed('trial') && $subscription->trial_ends_at === '2026-11-19T14:30:00.123456789+0230', 'Future/free-period intent granted early access or lost dates.');
+    adoptionCheck(Operation::where('action_key', 'future-trial-command')->first()->intent['payload']['trial_ends_at'] === '2026-11-19T14:30:00.123456789+0230', 'Resolved application free-period date was not persisted.');
     adoptionCheck(DB::table('candidate_adoption_commands')->where('action_key', 'future-trial-command')->count() === 1 && ! DB::table('candidate_adoption_commands')->where('action_key', 'denied-trial-command')->exists(), 'Authorized and denied application commands lost their distinct persistence outcome.');
     $report['checks'][] = 'authorized_provider_entry_point_persisted_command_catalogue_and_exact_free_period';
 
@@ -199,6 +199,41 @@ try {
     $freeRecipes['remove']($free, 'remove-earned-free', 'earned-free-command');
     $http->assertConsumed();
     adoptionCheck(Operation::where('action_key', 'remove-earned-free')->sole()->status === 'succeeded', 'Explicit original-discount removal did not converge.');
+    $generalCoupon = [...$coupon, 'id' => 'coupon-general', 'percentage_off' => 25, 'duration' => ['period' => 2, 'period_unit' => 'MONTH']];
+    $generalDiscount = [...$discount, 'id' => 'discount-general', 'source_id' => $generalCoupon['id'], 'percentage_off' => 25, 'duration' => $generalCoupon['duration'], 'created_at' => '2026-11-10T12:04:00Z', 'starts_at' => '2026-11-10T12:04:00Z', 'ends_at' => '2027-01-10T12:04:00Z'];
+    $general = [...$removed, 'applied_discounts' => [$generalDiscount], 'updated_at' => '2026-11-10T12:04:00Z'];
+    $http = $bind([...Fixtures::observation($removed, [$lowerFreeItem]), Fixtures::request('GET', 'billing/coupons/'.$generalCoupon['id'], $generalCoupon), Fixtures::request('GET', 'billing/coupons/'.$generalCoupon['id'], $generalCoupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $general), ...Fixtures::observation($general, [$lowerFreeItem])]);
+    $free = $freeRecipes['apply_coupon']($free->fresh(), 'general-coupon-command', $generalCoupon['id']);
+    $http->assertConsumed();
+    adoptionCheck(Operation::where('action_key', 'general-coupon-command')->sole()->observation['discount_proof']['id'] === $generalDiscount['id'], 'General Coupon original Discount identity was lost.');
+    $generalRemoved = [...$general, 'applied_discounts' => [], 'updated_at' => '2026-11-10T12:05:00Z'];
+    $http = $bind([...Fixtures::observation($general, [$lowerFreeItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $generalRemoved), ...Fixtures::observation($generalRemoved, [$lowerFreeItem])]);
+    $freeRecipes['remove_coupon']($free, 'remove-general-coupon-command', 'general-coupon-command');
+    $http->assertConsumed();
+    $signupCoupon = [...$generalCoupon, 'id' => 'coupon-signup', 'duration_type' => 'ONCE', 'duration' => null];
+    $signupTrialEnd = '2026-11-19T14:30:00.123456789+0230';
+    $signupDiscount = [...$generalDiscount, 'id' => 'discount-signup', 'source_id' => $signupCoupon['id'], 'applied_to_id' => 'sub-signup-coupon', 'duration_type' => 'ONCE', 'duration' => null, 'starts_at' => $signupTrialEnd, 'ends_at' => null];
+    $signup = Fixtures::subscription('sub-signup-coupon', 'customer-adoption', ['status' => 'IN_TRIAL', 'trial_starts_at' => '2026-11-10T12:00:00Z', 'trial_ends_at' => $signupTrialEnd, 'applied_discounts' => [$signupDiscount]]);
+    $signupItem = Fixtures::item('signup-coupon-item', $signup['id'], '2');
+    $http = $bind([Fixtures::request('GET', 'billing/coupons/'.$signupCoupon['id'], $signupCoupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('GET', 'billing/coupons/'.$signupCoupon['id'], $signupCoupon), Fixtures::request('POST', 'billing/subscriptions/create', $signup), ...Fixtures::observation($signup, [$signupItem])]);
+    $signup = (require $package.'/examples/subscription.php')($team, 'signup-coupon-command', 'price-synthetic', 'source-synthetic', $signupTrialEnd, $signupCoupon['id']);
+    $http->assertConsumed();
+    adoptionCheck($signup->onTrial() && Operation::where('action_key', 'signup-coupon-command')->sole()->observation['discount_proof']['id'] === $signupDiscount['id'], 'Signup Coupon or exact trial did not retain original canonical proof.');
+    $hostedInstructions = [['type' => 'COUPON', 'coupon' => ['id' => $signupCoupon['id']]]];
+    $hostedRemote = [...Fixtures::checkout('checkout-coupon-signup', 'customer-adoption', 'SUBSCRIPTION'), 'currency' => 'USD', 'discounts' => $hostedInstructions];
+    $http = $bind([Fixtures::request('GET', 'billing/coupons/'.$signupCoupon['id'], $signupCoupon), Fixtures::request('GET', 'billing/coupons/'.$signupCoupon['id'], $signupCoupon), Fixtures::request('POST', 'billing/billing_checkouts/create', $hostedRemote), Fixtures::request('GET', 'billing/billing_checkouts/'.$hostedRemote['id'], $hostedRemote)]);
+    $hosted = $billing->newSubscription('hosted-coupon', 'price-synthetic')->withCoupon($signupCoupon['id'])->checkout('hosted-coupon-command', ['success_url' => 'https://example.test/success', 'back_url' => 'https://example.test/back']);
+    $http->assertConsumed();
+    adoptionCheck(! $billing->subscribed('hosted-coupon'), 'Hosted Coupon session alone granted access.');
+    $hostedDiscount = [...$signupDiscount, 'id' => 'discount-hosted-signup', 'applied_to_id' => 'sub-hosted-signup'];
+    $hostedSubscription = [...$signup, 'id' => 'sub-hosted-signup', 'collection_method' => 'OUT_OF_BAND', 'applied_discounts' => [$hostedDiscount]];
+    $hostedItem = Fixtures::item('hosted-signup-item', $hostedSubscription['id'], '1');
+    $hostedCompleted = [...$hostedRemote, 'status' => 'COMPLETED', 'subscription_id' => $hostedSubscription['id'], 'updated_at' => '2026-11-10T12:06:00Z'];
+    $http = $bind([Fixtures::request('GET', 'billing/billing_checkouts/'.$hostedRemote['id'], $hostedCompleted), ...Fixtures::observation($hostedSubscription, [$hostedItem])]);
+    $hosted->reconcile();
+    $http->assertConsumed();
+    adoptionCheck($billing->subscribed('hosted-coupon') && Operation::where('action_key', 'hosted-coupon-command')->sole()->observation['discount_proof']['id'] === $hostedDiscount['id'], 'Hosted Coupon result was associated without original canonical Discount proof.');
+    $report['checks'][] = 'managed_coupon_creation_active_application_and_original_identity_removal';
     $report['recipes']['free-period.php'] = ['executed' => true, 'path' => '100 percent CUSTOM Coupon, following next-cycle tier and explicit removal', 'financial_effects' => 'synthetic only; no invoice or cash proof'];
     Carbon::setTestNow('2026-11-10T12:00:00Z');
 
@@ -208,9 +243,10 @@ try {
     $http = $bind(Fixtures::observation($original, [$item]));
     $finite = $billing->importSubscription('finite', 'sub-finite');
     $http->assertConsumed();
-    $scheduled = array_replace($original, ['cancel_at_period_end' => true, 'ends_at' => '2026-12-01T00:00:00Z', 'updated_at' => '2026-11-10T12:01:00Z']);
+    $scheduled = array_replace($original, ['cancel_at_period_end' => false, 'ends_at' => '2026-11-20T14:30:00.123456789+0230', 'updated_at' => '2026-11-10T12:01:00Z']);
     $http = $bind([...Fixtures::observation($original, [$item]), Fixtures::request('POST', 'billing/subscriptions/sub-finite/update', $scheduled), ...Fixtures::observation($scheduled, [$item])]);
-    $finite = $finite->cancelAtPeriodEnd('finite-off');
+    $finite = (require $package.'/examples/schedule-ending.php')($finite, 'finite-off', null, $scheduled['ends_at'], ['default_proration_mode' => 'NONE', 'billing_action' => 'DEFER_CHARGE_AND_KEEP_CYCLE']);
+    adoptionCheck($finite->cancel_at_period_end === false && $finite->onGracePeriod() && $finite->scheduled_ends_at === $scheduled['ends_at'], 'Dated ending lost its exact cap or invented a period-end flag.');
     $http->assertConsumed();
     $restored = array_replace($original, ['updated_at' => '2026-11-10T12:02:00Z']);
     $http = $bind([...Fixtures::observation($scheduled, [$item]), Fixtures::request('POST', 'billing/subscriptions/sub-finite/update', $restored), ...Fixtures::observation($restored, [$item])]);

@@ -26,6 +26,7 @@ use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\InterleavingHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
 
 class CheckoutWorkflowTest extends TestCase
@@ -73,6 +74,65 @@ class CheckoutWorkflowTest extends TestCase
         $this->fake([FakeHttpClient::json(Billing::checkout()), FakeHttpClient::json(Billing::checkout())]);
 
         return $this->team->newSubscription('default', 'price-test')->checkout('checkout', $this->checkoutOptions());
+    }
+
+    #[DataProvider('managedCouponCheckoutModes')]
+    public function test_managed_coupon_checkout_proves_frozen_terms_and_original_discount_before_subscription_association(bool $raw, bool $missing, bool $flat = false): void
+    {
+        $coupon = ['id' => 'coupon-checkout', 'active' => true, 'discount_model' => $flat ? 'FLAT' : 'PERCENTAGE', 'percentage_off' => $flat ? null : 25, 'amount_off' => $flat ? '5.50' : null, 'currency' => $flat ? 'USD' : null, 'duration_type' => 'ONCE', 'duration' => null];
+        $instructions = [['type' => 'COUPON', 'coupon' => ['id' => $coupon['id']]]];
+        $remote = Billing::checkout(['discounts' => $instructions, 'currency' => 'USD']);
+        $prices = $flat ? [FakeHttpClient::json(['id' => 'price-test', 'currency' => 'USD'])] : [];
+        $http = $this->fake([FakeHttpClient::json($coupon), ...$prices, FakeHttpClient::json($coupon), ...$prices, FakeHttpClient::json($remote), FakeHttpClient::json($remote)]);
+        $options = [...$this->checkoutOptions(), ...($raw ? ['discounts' => $instructions] : [])];
+        $builder = $this->team->newSubscription('coupon-checkout', 'price-test');
+        if (! $raw) {
+            $builder->withCoupon($coupon['id']);
+        }
+        $checkout = $builder->checkout('coupon-checkout', $options);
+        $operation = Operation::sole();
+        self::assertSame('ONCE', $operation->intent['coupon_terms']['duration_type']);
+        self::assertSame($instructions, json_decode((string) $http->requests[$flat ? 5 : 3]->getBody(), true)['discounts']);
+        self::assertNull($operation->observation);
+        self::assertSame(0, Subscription::count());
+        self::assertFalse($this->team->subscribed('coupon-checkout'));
+        $discount = ['id' => 'discount-checkout', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => 'sub-coupon-checkout', 'billing_customer_id' => 'customer-test', 'source' => 'COUPON', 'source_id' => $coupon['id'], 'discount_model' => $coupon['discount_model'], 'percentage_off' => $coupon['percentage_off'], 'amount_off' => $coupon['amount_off'], 'currency' => $coupon['currency'], 'duration_type' => 'ONCE', 'duration' => null, 'created_at' => '2026-11-10T12:01:00Z', 'starts_at' => '2026-11-10T12:01:00Z'];
+        $subscription = Billing::subscription(['id' => 'sub-coupon-checkout', 'applied_discounts' => $missing ? [] : [$discount]]);
+        $completed = [...$remote, 'status' => 'COMPLETED', 'subscription_id' => $subscription['id'], 'updated_at' => '2026-11-10T12:01:00Z'];
+        $plan = [FakeHttpClient::json($completed), FakeHttpClient::json($subscription), Billing::page([]), FakeHttpClient::json($subscription)];
+        $this->fake($plan);
+        if ($missing) {
+            try {
+                $checkout->reconcile();
+                self::fail('Hosted success without Discount proof associated a subscription.');
+            } catch (EvidenceException) {
+                self::assertSame(0, Subscription::count());
+                self::assertNull($operation->fresh()->observation);
+                self::assertFalse($this->team->subscribed('coupon-checkout'));
+            }
+            $subscription['applied_discounts'] = [$discount];
+            $this->fake([FakeHttpClient::json($completed), FakeHttpClient::json($subscription), Billing::page([]), FakeHttpClient::json($subscription)]);
+        }
+        $checkout = $checkout->reconcile();
+        self::assertSame('discount-checkout', $operation->fresh()->observation['discount_proof']['id']);
+        self::assertSame($checkout->subscription_id, $operation->fresh()->subscription_id);
+        self::assertTrue($this->team->subscribed('coupon-checkout'));
+        if (! $raw && ! $missing && ! $flat) {
+            $removed = [...$subscription, 'applied_discounts' => [], 'updated_at' => '2026-11-10T12:02:00Z'];
+            $this->fake([FakeHttpClient::json($subscription), Billing::page([]), FakeHttpClient::json($subscription), FakeHttpClient::json($removed), FakeHttpClient::json($removed), Billing::page([]), FakeHttpClient::json($removed)]);
+            Subscription::sole()->removeCoupon('hosted-remove', 'coupon-checkout');
+            self::assertSame('succeeded', Operation::where('action_key', 'hosted-remove')->sole()->status);
+        }
+        $later = [...$subscription, 'applied_discounts' => [], 'updated_at' => '2026-12-10T12:00:00Z'];
+        $this->fake([FakeHttpClient::json($completed), FakeHttpClient::json($later), Billing::page([]), FakeHttpClient::json($later)]);
+        $checkout->reconcile();
+        self::assertSame('discount-checkout', $operation->fresh()->observation['discount_proof']['id']);
+        self::assertTrue($this->team->subscribed('coupon-checkout'));
+    }
+
+    public static function managedCouponCheckoutModes(): array
+    {
+        return [[false, false], [false, true], [true, false], [false, false, true]];
     }
 
     public function test_hosted_checkout_is_redirectable_but_browser_success_never_grants_access(): void

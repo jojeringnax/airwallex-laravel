@@ -19,6 +19,8 @@ class SubscriptionBuilder
     /** @var list<array{price_id:string,quantity:mixed}> */
     private array $items;
 
+    private ?string $couponId = null;
+
     private ?int $trialDays = null;
 
     private ?string $trialEndsAt = null;
@@ -31,6 +33,19 @@ class SubscriptionBuilder
             throw new ConflictException('An explicit bounded subscription name is required.');
         }
         $this->items = [['price_id' => $priceId, 'quantity' => 1]];
+    }
+
+    public function withCoupon(string $couponId): static
+    {
+        if ($couponId === '') {
+            throw new ConflictException('A Coupon ID is required.');
+        }
+        if ($this->couponId !== null && $this->couponId !== $couponId) {
+            throw new ConflictException('Coupon stacking requires a separately qualified strategy.');
+        }
+        $this->couponId = $couponId;
+
+        return $this;
     }
 
     public function quantity(mixed $quantity): static
@@ -109,10 +124,10 @@ class SubscriptionBuilder
         return $this->subscriptionName;
     }
 
-    /** @internal @return array{items:list<array{price_id:string,quantity:mixed}>,trial_days:?int,starts_at:?string,trial_ends_at?:string} */
+    /** @internal @return array{items:list<array{price_id:string,quantity:mixed}>,trial_days:?int,starts_at:?string,trial_ends_at?:string,coupon_id?:string} */
     public function definition(): array
     {
-        return ['items' => $this->items, 'trial_days' => $this->trialDays, 'starts_at' => $this->startsAt, ...($this->trialEndsAt === null ? [] : ['trial_ends_at' => $this->trialEndsAt])];
+        return ['items' => $this->items, 'trial_days' => $this->trialDays, 'starts_at' => $this->startsAt, ...($this->trialEndsAt === null ? [] : ['trial_ends_at' => $this->trialEndsAt]), ...($this->couponId === null ? [] : ['coupon_id' => $this->couponId])];
     }
 
     /** @internal @return array<string,mixed> */

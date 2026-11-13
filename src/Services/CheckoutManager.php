@@ -51,6 +51,19 @@ class CheckoutManager
             }
         }
         $options = [...Routing::defaults($options), ...$options];
+        $couponId = $definition['coupon_id'] ?? null;
+        if (array_key_exists('discounts', $options) && $options['discounts'] !== []) {
+            $discounts = $options['discounts'];
+            if ($mode !== 'SUBSCRIPTION' || $couponId !== null || ! is_array($discounts) || ! array_is_list($discounts) || count($discounts) !== 1
+                || ! is_array($discounts[0]) || ($discounts[0]['type'] ?? null) !== 'COUPON'
+                || ! is_array($discounts[0]['coupon'] ?? null) || ! is_string($discounts[0]['coupon']['id'] ?? null) || $discounts[0]['coupon']['id'] === '') {
+                throw new ConflictException('Hosted Coupon creation supports one exclusive subscription-level Coupon.');
+            }
+            $couponId = $discounts[0]['coupon']['id'];
+        }
+        if ($couponId !== null && ! array_key_exists('currency', $options) && config('airwallex.currency') !== null) {
+            $options['currency'] = config('airwallex.currency');
+        }
         if ($mode === 'SETUP' && ! array_key_exists('currency', $options)) {
             $options['currency'] = config('airwallex.currency');
         }
@@ -73,7 +86,7 @@ class CheckoutManager
             if (! is_array($subscriptionData)) {
                 throw new ConflictException('Subscription checkout data must be an SDK-shaped object map.');
             }
-            foreach (['starts_at', 'trial_ends_at'] as $key) {
+            foreach (['starts_at', 'trial_ends_at', 'discounts'] as $key) {
                 if (array_key_exists($key, $subscriptionData)) {
                     throw new ConflictException('Checkout timing is managed by its builder.');
                 }
@@ -83,7 +96,14 @@ class CheckoutManager
             }
             $payload['subscription_data'] = $subscriptionData;
         }
-        $operation = $this->operations->prepare($customer, $actionKey, $kind, $specification, ['payload' => $payload, 'name' => $name], name: $name);
+        $intent = ['payload' => $payload, 'name' => $name];
+        if ($couponId !== null) {
+            $terms = app(CouponEvidence::class)->coupon($couponId);
+            app(CouponEvidence::class)->assertCreation($payload, $terms);
+            $payload['discounts'] = [['type' => 'COUPON', 'coupon' => ['id' => $couponId]]];
+            $intent = ['payload' => $payload, 'name' => $name, 'coupon_terms' => $terms];
+        }
+        $operation = $this->operations->prepare($customer, $actionKey, $kind, $specification, $intent, name: $name);
 
         return $this->finish($operation);
     }
@@ -119,12 +139,25 @@ class CheckoutManager
         }
         try {
             $this->payload($operation);
+            if (isset($operation->intent['coupon_terms'])) {
+                if (app(CouponEvidence::class)->coupon($operation->intent['coupon_terms']['id']) !== $operation->intent['coupon_terms']) {
+                    throw new EvidenceException('Hosted Coupon terms changed before the first write.');
+                }
+                app(CouponEvidence::class)->assertCreation($operation->intent['payload'], $operation->intent['coupon_terms']);
+            }
         } catch (Throwable $exception) {
             $this->rejectPrepared($operation);
             throw $exception;
         }
 
-        return $this->operations->execute($operation, fn () => $this->client->billing()->checkouts()->create($this->payload($operation)), function (array $response, Operation $current): Checkout {
+        return $this->operations->execute($operation, function () use ($operation): array {
+            $expires = $operation->intent['coupon_terms']['expires_at'] ?? null;
+            if (is_string($expires) && Timestamp::compare($expires, now()->format('Y-m-d\TH:i:s.uP')) <= 0) {
+                throw new EvidenceException('Hosted Coupon redemption expired before dispatch.');
+            }
+
+            return $this->client->billing()->checkouts()->create($this->payload($operation));
+        }, function (array $response, Operation $current): Checkout {
             $customer = ModelRegistry::query('customer')->findOrFail($current->customer_id);
             $this->verify($response, $response['id'], $customer, $current);
 
@@ -488,6 +521,15 @@ class CheckoutManager
             throw new OwnershipException('Checkout identity, mode or customer does not match its durable intent.');
         }
         Routing::assertCheckout([...($operation->observed_routing ?? []), ...$remote]);
+        if (isset($operation->intent['coupon_terms'])) {
+            $discounts = $remote['discounts'] ?? null;
+            if (! is_array($discounts) || ! array_is_list($discounts) || count($discounts) !== 1
+                || ! is_array($discounts[0]) || ($discounts[0]['type'] ?? null) !== 'COUPON'
+                || ($discounts[0]['coupon']['id'] ?? null) !== $operation->intent['coupon_terms']['id']
+                || ($operation->intent['coupon_terms']['discount_model'] === 'FLAT' && ($remote['currency'] ?? null) !== $operation->intent['coupon_terms']['currency'])) {
+                throw new EvidenceException('The hosted checkout does not confirm its frozen Coupon selection and currency.');
+            }
+        }
         foreach (['org_id' => $this->context->organizationId, 'organization_id' => $this->context->organizationId, 'environment' => $this->context->environment] as $key => $expected) {
             if (array_key_exists($key, $remote) && $remote[$key] !== $expected) {
                 throw new OwnershipException('Checkout response belongs to a foreign context.');
