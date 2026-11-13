@@ -6,10 +6,13 @@ namespace Jojeringnax\AirwallexLaravel\Tests;
 
 use Closure;
 use Illuminate\Support\Facades\DB;
+use Jojeringnax\AirwallexLaravel\Contracts\InstrumentRevocationHandler;
+use Jojeringnax\AirwallexLaravel\Events\PaymentObserved;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
+use Jojeringnax\AirwallexLaravel\Models\Operation as BillingOperation;
 use Jojeringnax\AirwallexLaravel\Payments\BrowserSetup;
 use Jojeringnax\AirwallexLaravel\Payments\Client;
 use Jojeringnax\AirwallexLaravel\Payments\Context;
@@ -18,6 +21,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Services\RecoveryManager;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
@@ -216,6 +220,9 @@ class PaymentsInstrumentTest extends TestCase
     public function test_disable_timeout_clears_default_and_late_canonical_reads_cannot_restore_local_revocation(): void
     {
         $instrument = $this->seedInstrument();
+        $handler = new RecordingInstrumentRevocation;
+        app()->instance(RecordingInstrumentRevocation::class, $handler);
+        config(['airwallex.payments.events.instrument_revoked_handler' => RecordingInstrumentRevocation::class]);
         $http = $this->transport(function (RequestInterface $request): ResponseInterface {
             if ($request->getMethod() === 'POST') {
                 throw new RuntimeException('Synthetic disable timeout');
@@ -233,6 +240,10 @@ class PaymentsInstrumentTest extends TestCase
         }
         app(Instruments::class)->complete($this->customer, 'cst-one');
         self::assertNotNull($instrument->fresh()->revoked_at);
+        self::assertCount(1, $handler->events);
+        self::assertSame($instrument->id, $handler->events[0]->resourceId);
+        self::assertNotNull($handler->events[0]->payload['revoked_at']);
+        self::assertSame(0, BillingOperation::count());
         self::assertSame(1, count(array_filter($http->requests, fn ($request) => str_ends_with($request->getUri()->getPath(), '/disable'))));
         $this->expectException(EvidenceException::class);
         app(Instruments::class)->verified($this->customer, 'cst-one');
@@ -385,14 +396,103 @@ class PaymentsInstrumentTest extends TestCase
 
             return FakeHttpClient::json(str_contains($path, '/payment_methods/') ? $this->method() : $this->consent());
         });
+        try {
+            app(Instruments::class)->createBillingSource($this->customer, 'cst-one', $billing, 'foreign-collector-source');
+            self::fail('A foreign collector created a source.');
+        } catch (OwnershipException) {
+            self::assertSame(0, BillingOperation::count());
+        }
         $this->expectException(OwnershipException::class);
         app(Instruments::class)->billingSource($this->customer, 'cst-one', $billing, 'source-one');
+    }
+
+    public function test_source_creation_and_same_key_reads_retain_the_owned_method_after_local_revocation(): void
+    {
+        $instrument = $this->seedInstrument();
+        config(['airwallex.linked_payment_account_id' => 'account-payments']);
+        $billing = \Jojeringnax\AirwallexLaravel\Models\Customer::create(['environment' => 'sandbox', 'organization_id' => 'org-test', 'billable_type' => 'instrument_owner', 'billable_id' => 'one', 'remote_id' => 'billing-one']);
+        $source = [];
+        $http = $this->transport(function (RequestInterface $request) use (&$source): ResponseInterface {
+            if (str_contains($request->getUri()->getPath(), '/billing/payment_sources/')) {
+                if ($request->getMethod() === 'POST') {
+                    self::assertSame('in_flight', BillingOperation::sole()->status);
+                    self::assertSame(0, DB::transactionLevel());
+                    $body = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+                    self::assertSame('mtd-one', $body['external_id']);
+                    self::assertSame('account-payments', $body['linked_payment_account_id']);
+                    self::assertSame(BillingOperation::sole()->request_id, $body['request_id']);
+                    $source = ['id' => 'source-one', ...$body, 'created_at' => '2026-11-01T00:00:00Z', 'updated_at' => '2026-11-11T09:00:00Z'];
+                }
+
+                return FakeHttpClient::json($source);
+            }
+
+            return FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent());
+        });
+        $service = app(Instruments::class);
+        self::assertSame('source-one', $service->createBillingSource($this->customer, 'cst-one', $billing, 'source-command')->id);
+        self::assertSame('succeeded', BillingOperation::sole()->status);
+        try {
+            $service->createBillingSource($this->customer, 'different-consent', $billing, 'source-command');
+            self::fail('An action key changed its original consent.');
+        } catch (ConflictException) {
+            self::assertSame(1, BillingOperation::count());
+        }
+        $instrument->refresh()->update(['revoked_at' => now()->utc()]);
+        self::assertSame('source-one', $service->createBillingSource($this->customer, 'cst-one', $billing, 'source-command')->id);
+        try {
+            $service->createBillingSource($this->customer, 'cst-one', $billing, 'new-source-command');
+            self::fail('A revoked instrument created a new source.');
+        } catch (EvidenceException) {
+            self::assertSame(1, BillingOperation::count());
+        }
+        self::assertCount(1, array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/payment_sources/create')));
+    }
+
+    public function test_unknown_source_creation_recovers_only_original_correlation_without_another_write(): void
+    {
+        $this->seedInstrument();
+        config(['airwallex.linked_payment_account_id' => 'account-payments']);
+        $billing = \Jojeringnax\AirwallexLaravel\Models\Customer::create(['environment' => 'sandbox', 'organization_id' => 'org-test', 'billable_type' => 'instrument_owner', 'billable_id' => 'one', 'remote_id' => 'billing-one']);
+        $source = [];
+        $wrongMethod = false;
+        $http = $this->transport(function (RequestInterface $request) use (&$source, &$wrongMethod): ResponseInterface {
+            if (str_contains($request->getUri()->getPath(), '/billing/payment_sources/')) {
+                if ($request->getMethod() === 'POST') {
+                    $source = ['id' => 'source-one', ...json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR),
+                        'created_at' => '2026-11-01T00:00:00Z', 'updated_at' => '2026-11-11T09:00:00Z'];
+                    throw new RuntimeException('Synthetic response loss after source creation');
+                }
+
+                return FakeHttpClient::json($wrongMethod ? [...$source, 'external_id' => 'another-method'] : $source);
+            }
+
+            return FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent());
+        });
+        try {
+            app(Instruments::class)->createBillingSource($this->customer, 'cst-one', $billing, 'source-lost');
+            self::fail('Lost response was reported successful.');
+        } catch (AmbiguousOperationException) {
+            self::assertNull(BillingOperation::sole()->remote_id);
+        }
+        $wrongMethod = true;
+        try {
+            app(RecoveryManager::class)->operation(BillingOperation::sole(), 'source-one');
+            self::fail('A different Method was accepted as original source proof.');
+        } catch (OwnershipException) {
+            self::assertNull(BillingOperation::sole()->remote_id);
+        }
+        $wrongMethod = false;
+        self::assertSame('source-one', app(RecoveryManager::class)->operation(BillingOperation::sole(), 'source-one')->id);
+        self::assertSame('succeeded', BillingOperation::sole()->status);
+        self::assertSame('source-one', BillingOperation::sole()->remote_id);
+        self::assertCount(1, array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/payment_sources/create')));
     }
 
     public function test_failed_expired_or_customer_triggered_consents_are_not_saved_charge_eligibility(): void
     {
         $instrument = $this->seedInstrument();
-        foreach ([$this->consent(['status' => 'EXPIRED']), $this->consent(['status' => 'REQUIRES_PAYMENT_METHOD']), $this->consent(['next_triggered_by' => 'customer'])] as $remote) {
+        foreach ([$this->consent(['status' => 'EXPIRED']), $this->consent(['status' => 'REQUIRES_PAYMENT_METHOD']), $this->consent(['status' => 'REQUIRES_CUSTOMER_ACTION']), $this->consent(['next_triggered_by' => 'customer'])] as $remote) {
             $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $remote));
             try {
                 app(Instruments::class)->verified($this->customer, 'cst-one');
@@ -432,5 +532,15 @@ class PaymentsInstrumentTest extends TestCase
         foreach (array_slice($http->requests, 1) as $request) {
             self::assertSame('GET', $request->getMethod());
         }
+    }
+}
+
+final class RecordingInstrumentRevocation implements InstrumentRevocationHandler
+{
+    public array $events = [];
+
+    public function handle(PaymentObserved $event): void
+    {
+        $this->events[] = $event;
     }
 }

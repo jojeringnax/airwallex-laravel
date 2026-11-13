@@ -26,6 +26,8 @@ final class PaymentsTransport implements ClientInterface
 
     public array $refunds = [];
 
+    public array $sources = [];
+
     public array $requests = [];
 
     public bool $loseNextIntentResponse = false;
@@ -61,11 +63,20 @@ final class PaymentsTransport implements ClientInterface
             throw new RuntimeException('Qualification transport rejected a non-synthetic endpoint.');
         }
         if ($path === '/api/v1/authentication/login' && $method === 'POST') {
-            if ($request->getHeaderLine('x-login-as') !== 'account-synthetic-payments') {
+            if (! in_array($request->getHeaderLine('x-login-as'), ['', 'account-synthetic-payments'], true)) {
                 throw new RuntimeException('Payments authentication used the wrong account context.');
             }
 
             return $this->response(['token' => 'synthetic-token', 'expires_at' => '2130-01-01T00:00:00Z']);
+        }
+        if ($path === '/api/v1/billing/payment_sources/create' && $method === 'POST') {
+            $operation = \Jojeringnax\AirwallexLaravel\Models\Operation::where('kind', 'payment_source.create')->where('status', 'in_flight')->sole();
+
+            return $this->response($this->sources['source-payments'] = ['id' => 'source-payments', ...$operation->intent['body'],
+                'created_at' => $this->time(), 'updated_at' => $this->time()]);
+        }
+        if ($path === '/api/v1/billing/payment_sources/source-payments' && $method === 'GET') {
+            return $this->response($this->sources['source-payments']);
         }
         if ($method === 'POST') {
             $operation = Operation::where('status', 'in_flight')->sole();
