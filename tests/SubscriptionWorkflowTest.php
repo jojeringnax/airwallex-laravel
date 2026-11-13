@@ -64,6 +64,62 @@ class SubscriptionWorkflowTest extends TestCase
         $default = (new SubscriptionBuilder($this->team, 'support', 'price'))->trialDays(7)->resolvePayload();
         self::assertArrayNotHasKey('starts_at', $default);
         self::assertSame('2026-11-17T12:00:00.000000+00:00', $default['trial_ends_at']);
+        $exact = (new SubscriptionBuilder($this->team, 'exact', 'price'))->trialUntil('2026-12-01T12:34:56.123456789+0230')->startsAt('2026-12-01T10:00:00Z');
+        self::assertSame('2026-12-01T12:34:56.123456789+0230', $exact->resolvePayload()['trial_ends_at']);
+        self::assertSame($exact->resolvePayload()['trial_ends_at'], $exact->definition()['trial_ends_at']);
+        $date = new \DateTimeImmutable('2026-12-02T12:00:00.123456+02:00');
+        self::assertSame('2026-12-02T12:00:00.123456+02:00', (new SubscriptionBuilder($this->team, 'date', 'price'))->trialUntil($date)->resolvePayload()['trial_ends_at']);
+    }
+
+    #[DataProvider('invalidExactTrials')]
+    public function test_invalid_or_conflicting_exact_trial_never_prepares_a_command(string $mode): void
+    {
+        $http = $this->fake([]);
+        try {
+            $builder = $this->team->newSubscription('default', 'price-test');
+            match ($mode) {
+                'past' => $builder->trialUntil('2026-11-10T11:59:59Z'),
+                'equal' => $builder->trialUntil('2026-11-10T12:00:00Z'),
+                'start' => $builder->trialUntil('2026-12-01T12:00:00+02:00')->startsAt('2026-12-01T10:00:00Z'),
+                'malformed' => $builder->trialUntil('2026-12-01'),
+                'days-first' => $builder->trialDays(7)->trialUntil('2026-12-01T00:00:00Z'),
+                'until-first' => $builder->trialUntil('2026-12-01T00:00:00Z')->trialDays(7),
+            };
+            $builder->create('invalid', ['collection_method' => 'OUT_OF_BAND']);
+            self::fail('Invalid trial was accepted.');
+        } catch (ConflictException|EvidenceException) {
+            self::assertCount(0, $http->requests);
+            self::assertSame(0, Operation::count());
+        }
+    }
+
+    public static function invalidExactTrials(): array
+    {
+        return array_map(fn ($mode) => [$mode], ['past', 'equal', 'start', 'malformed', 'days-first', 'until-first']);
+    }
+
+    #[DataProvider('exactTrialCreationModes')]
+    public function test_exact_trial_creation_reuses_original_intent_and_rejects_a_changed_timestamp(bool $hosted): void
+    {
+        $ends = '2026-12-01T12:34:56.123456789+0230';
+        $remote = Billing::subscription();
+        $http = $this->fake($hosted ? [FakeHttpClient::json(Billing::checkout()), FakeHttpClient::json(Billing::checkout())] : [FakeHttpClient::json($remote), ...$this->observation($remote)]);
+        $options = $hosted ? ['success_url' => 'https://app.example.test/success', 'back_url' => 'https://app.example.test/back'] : ['collection_method' => 'OUT_OF_BAND'];
+        $method = $hosted ? 'checkout' : 'create';
+        $result = $this->team->newSubscription('default', 'price-test')->trialUntil($ends)->{$method}('exact', $options);
+        $body = self::body($http, 1);
+        self::assertSame($ends, $hosted ? $body['subscription_data']['trial_ends_at'] : $body['trial_ends_at']);
+        $count = count($http->requests);
+        Carbon::setTestNow('2027-01-01T00:00:00Z');
+        self::assertSame($result->id, $this->team->newSubscription('default', 'price-test')->trialUntil($ends)->{$method}('exact', $options)->id);
+        self::assertCount($count, $http->requests);
+        $this->expectException(ConflictException::class);
+        $this->team->newSubscription('default', 'price-test')->trialUntil('2027-02-01T00:00:00Z')->{$method}('exact', $options);
+    }
+
+    public static function exactTrialCreationModes(): array
+    {
+        return [[false], [true]];
     }
 
     public function test_direct_multi_item_create_uses_durable_request_and_canonical_pending_state(): void

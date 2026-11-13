@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Jojeringnax\AirwallexLaravel\Models;
 
+use DateTimeInterface;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Support\Collection;
@@ -136,6 +137,12 @@ class Subscription extends BillingModel
         return app(SubscriptionManager::class)->cancelAtPeriodEnd($this, $actionKey, $renewalBounds);
     }
 
+    /** @param array{default_proration_mode:string,billing_action:string} $options */
+    public function cancelAt(string $actionKey, string|DateTimeInterface $endsAt, array $options, ?array $renewalBounds = null): Subscription
+    {
+        return app(SubscriptionManager::class)->cancelAt($this, $actionKey, $endsAt, $options, $renewalBounds);
+    }
+
     public function restoreRenewal(string $actionKey, string $scheduleActionKey): Subscription
     {
         return app(SubscriptionManager::class)->restoreRenewal($this, $actionKey, $scheduleActionKey);
@@ -173,6 +180,6 @@ class Subscription extends BillingModel
 
     public function onGracePeriod(): bool
     {
-        return $this->cancel_at_period_end === true && ($this->active() || $this->onTrial());
+        return ($this->cancel_at_period_end === true || $this->scheduled_ends_at !== null) && ($this->active() || $this->onTrial());
     }
 }
