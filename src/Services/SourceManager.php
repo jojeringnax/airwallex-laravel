@@ -18,6 +18,7 @@ use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Customers as PaymentsCustomers;
 use Jojeringnax\AirwallexLaravel\Payments\Instruments;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer as PaymentsCustomer;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\PaymentSource;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Support\Pages;
@@ -58,10 +59,14 @@ class SourceManager
         return $operations->execute($operation,
             function () use ($paymentsCustomer, $consentId, $operation): array {
                 // Claim eligibility under the same Customer lock used by local revocation.
-                DB::transaction(function () use ($paymentsCustomer, $consentId): void {
+                DB::transaction(function () use ($paymentsCustomer, $consentId, $operation): void {
                     app(CommitGuard::class)->assertMayCommit();
                     PaymentsCustomer::query()->whereKey($paymentsCustomer->id)->lockForUpdate()->firstOrFail();
                     app(Instruments::class)->assertUsableReservation($paymentsCustomer, $consentId);
+                    $current = Instrument::query()->where('customer_id', $paymentsCustomer->id)->where('remote_id', $consentId)->firstOrFail();
+                    if ($current->method_id !== $operation->intent['body']['external_id']) {
+                        throw new EvidenceException('Consent Method changed before the source dispatch claim.');
+                    }
                 });
 
                 return $this->client->billing()->paymentSources()->create([...$operation->intent['body'], 'request_id' => $operation->request_id]);

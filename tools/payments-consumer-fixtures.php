@@ -63,7 +63,12 @@ final class PaymentsTransport implements ClientInterface
             throw new RuntimeException('Qualification transport rejected a non-synthetic endpoint.');
         }
         if ($path === '/api/v1/authentication/login' && $method === 'POST') {
-            if (! in_array($request->getHeaderLine('x-login-as'), ['', 'account-synthetic-payments'], true)) {
+            $expectedAccount = match ($request->getHeaderLine('x-client-id')) {
+                'client-synthetic-payments' => 'account-synthetic-payments',
+                'client-synthetic-billing' => '',
+                default => throw new RuntimeException('Unexpected synthetic authentication client.'),
+            };
+            if ($request->getHeaderLine('x-login-as') !== $expectedAccount) {
                 throw new RuntimeException('Payments authentication used the wrong account context.');
             }
 

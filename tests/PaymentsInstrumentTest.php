@@ -6,6 +6,7 @@ namespace Jojeringnax\AirwallexLaravel\Tests;
 
 use Closure;
 use Illuminate\Support\Facades\DB;
+use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Contracts\InstrumentRevocationHandler;
 use Jojeringnax\AirwallexLaravel\Events\PaymentObserved;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
@@ -21,8 +22,10 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Services\RecoveryManager;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
@@ -406,7 +409,8 @@ class PaymentsInstrumentTest extends TestCase
         app(Instruments::class)->billingSource($this->customer, 'cst-one', $billing, 'source-one');
     }
 
-    public function test_source_creation_and_same_key_reads_retain_the_owned_method_after_local_revocation(): void
+    #[DataProvider('sourceClaimChanges')]
+    public function test_source_creation_and_same_key_reads_retain_the_owned_method_after_local_revocation(bool $changeAtClaim): void
     {
         $instrument = $this->seedInstrument();
         config(['airwallex.linked_payment_account_id' => 'account-payments']);
@@ -429,6 +433,35 @@ class PaymentsInstrumentTest extends TestCase
 
             return FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent());
         });
+        if ($changeAtClaim) {
+            app()->instance(OperationManager::class, new class(app(BillingContext::class), $instrument) extends OperationManager
+            {
+                public function __construct(BillingContext $context, private Instrument $instrument)
+                {
+                    parent::__construct($context);
+                }
+
+                public function execute(BillingOperation $operation, Closure $write, Closure $confirm): mixed
+                {
+                    return parent::execute($operation, function () use ($write): array {
+                        MethodObservation::create([...app(Context::class)->attributes(), 'customer_id' => $this->instrument->customer_id,
+                            'remote_id' => 'mtd-replacement', 'status' => 'CREATED', 'method_type' => 'card', 'provider_updated_at' => '2026-11-11T09:01:00Z']);
+                        $this->instrument->refresh()->update(['method_id' => 'mtd-replacement']);
+
+                        return $write();
+                    }, $confirm);
+                }
+            });
+            try {
+                app(Instruments::class)->createBillingSource($this->customer, 'cst-one', $billing, 'source-command');
+                self::fail('The source dispatched a Method that changed after canonical preflight.');
+            } catch (AmbiguousOperationException) {
+                self::assertSame('ambiguous', BillingOperation::sole()->status);
+                self::assertCount(0, array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/payment_sources/create')));
+            }
+
+            return;
+        }
         $service = app(Instruments::class);
         self::assertSame('source-one', $service->createBillingSource($this->customer, 'cst-one', $billing, 'source-command')->id);
         self::assertSame('succeeded', BillingOperation::sole()->status);
@@ -447,6 +480,11 @@ class PaymentsInstrumentTest extends TestCase
             self::assertSame(1, BillingOperation::count());
         }
         self::assertCount(1, array_filter($http->requests, fn ($request) => $request->getMethod() === 'POST' && str_ends_with($request->getUri()->getPath(), '/payment_sources/create')));
+    }
+
+    public static function sourceClaimChanges(): array
+    {
+        return [[false], [true]];
     }
 
     public function test_unknown_source_creation_recovers_only_original_correlation_without_another_write(): void
