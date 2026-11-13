@@ -10,7 +10,7 @@ Start here when installing the package or writing application billing code. [Sco
 
 ## Install and configure
 
-Use the exact review candidate archive and Composer descriptor from the [release-candidate tooling and installation instructions](release.md); Laravel v0.1.0 is already published to Packagist; use the candidate archive for these unreleased additions. Its dependency is the released Packagist SDK `jojeringnax/airwallex-php-sdk:^0.1.3`, with no sibling/path repository. Once a Laravel package release is actually published, the normal registry installation is `composer require jojeringnax/airwallex-laravel:^0.1`. See [compatibility](compatibility.md) for the PHP, Laravel 12/13, SQLite/MySQL, cache and queue support boundary.
+This guide describes v0.2.0. Use the [exact review candidate archive](release.md) before publication; once v0.2.0 is listed on [Packagist](https://packagist.org/packages/jojeringnax/airwallex-laravel), install it with `composer require jojeringnax/airwallex-laravel:^0.2`. The required released SDK is `jojeringnax/airwallex-php-sdk:^0.1.3`, with no sibling/path repository. Review [upgrade guidance](../UPGRADING.md) for existing v0.1.0 applications and [compatibility](compatibility.md) for supported runtime/backends.
 
 Laravel discovers the provider automatically. Publish configuration, configure external credentials, and migrate:
 

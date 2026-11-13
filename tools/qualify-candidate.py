@@ -20,7 +20,7 @@ import time
 import zipfile
 
 
-VERSION = "0.1.0-RC1"
+VERSION = "0.2.0-RC1"
 PACKAGE = "jojeringnax/airwallex-laravel"
 SDK = "jojeringnax/airwallex-php-sdk"
 # Official 2.11.2 PHAR, independently verified during foundation qualification.

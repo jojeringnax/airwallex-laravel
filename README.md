@@ -14,4 +14,4 @@ A Cashier-style Laravel Billing integration built on [airwallex-php-sdk](https:/
 - [Release notes](CHANGELOG.md), [upgrade guidance](UPGRADING.md) and [security](SECURITY.md)
 - [Release tracker](https://github.com/jojeringnax/airwallex-laravel/issues/1) and [delivery project](https://github.com/users/jojeringnax/projects/3)
 
-[**Publish for the first time →**](https://packagist.org/packages/submit) · [Update Packagist action](https://github.com/jojeringnax/airwallex-laravel/actions/workflows/packagist.yml) · [Registration instructions](docs/release.md#first-packagist-registration-and-updates)
+[**Package on Packagist →**](https://packagist.org/packages/jojeringnax/airwallex-laravel) · [Update Packagist action](https://github.com/jojeringnax/airwallex-laravel/actions/workflows/packagist.yml) · [Release update instructions](docs/release.md#packagist-release-updates)

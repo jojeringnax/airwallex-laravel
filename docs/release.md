@@ -1,6 +1,6 @@
 # Reproducing a review candidate
 
-Use this reference to prepare or install an exact first-release review archive. [Compatibility](compatibility.md#release-evidence) defines the release gates; [provider evidence](provider-contracts.md) distinguishes deterministic checks from account observations. These tools prepare local artifacts and do not merge, tag, publish or perform Airwallex financial operations.
+Use this reference to prepare or install an exact release review archive. [Compatibility](compatibility.md#release-evidence) defines the release gates; [provider evidence](provider-contracts.md) distinguishes deterministic checks from account observations. These tools prepare local artifacts and do not merge, tag, publish or perform Airwallex financial operations.
 
 Run from a complete repository checkout of the reviewed candidate, with Git, Python 3, a supported PHP runtime and the verified [Composer 2.11.2 PHAR](https://getcomposer.org/download/2.11.2/composer.phar). Compare the PHAR against the [official SHA256](https://getcomposer.org/download/2.11.2/composer.phar.sha256sum); the qualifier also rejects a different hash. Runtime archives intentionally omit the repository's development tools/tests.
 
@@ -24,7 +24,7 @@ Every run creates new private directories rather than overwriting existing work.
 
 The final JSON output names an `evidence-*/evidence.json` file. Its directory also contains `airwallex-laravel-FULL_COMMIT.zip`, `archive-manifest.json`, `package-repository.json`, `tooling-manifest.json`, `consumer-recipes.json`, `consumer.lock` and `dependency-versions.json`.
 
-Keep the emitted evidence JSON, archive, `archive-manifest.json`, `package-repository.json`, consumer lock and dependency versions together with the 24 PHP/framework/database/dependency CI job locks. The descriptor's provisional `0.1.0-RC1` identifies a local review candidate, not a Git tag or published version. Use `--dependencies lowest` for the audited minimum graph and `--dependencies latest` for the current graph. CI runs both native-consumer resolutions for Laravel 12/13 and SQLite/MySQL on PHP 8.3, 8.4 and 8.5 at the exact PR head and retains their bundles alongside the development locks. A local passing consumer check does not replace that full matrix, backend journeys, independent reviews or sandbox evidence policy.
+Keep the emitted evidence JSON, archive, `archive-manifest.json`, `package-repository.json`, consumer lock and dependency versions together with the 24 PHP/framework/database/dependency CI job locks. The descriptor's provisional `0.2.0-RC1` identifies a local review candidate, not a Git tag or published version. Use `--dependencies lowest` for the audited minimum graph and `--dependencies latest` for the current graph. CI runs both native-consumer resolutions for Laravel 12/13 and SQLite/MySQL on PHP 8.3, 8.4 and 8.5 at the exact PR head and retains their bundles alongside the development locks. A local passing consumer check does not replace that full matrix, backend journeys or independent reviews. Account-specific Sandbox journeys are supplemental to library release qualification: record unavailable/unexecuted cases explicitly; deterministic fixtures establish no provider account readiness or financial outcome.
 
 For a MySQL native consumer, precreate a dedicated empty schema named `airwallex_test_consumer` (or another `airwallex_test_` suffix), then pass `--database mysql --laravel 12` or `13`. `AIRWALLEX_QUALIFY_MYSQL_DATABASE` selects that disposable schema; `AIRWALLEX_TEST_MYSQL_HOST`, `PORT`, `USER`, `PASSWORD` supply only its test connection (defaults 127.0.0.1:33079/root/empty). Use a separate schema from package tests. Qualification isolates these values from provider credentials and excludes the consumer environment file from artifacts. Reuse only a fresh empty schema, since migrations/recipes deliberately leave evidence in it.
 
@@ -34,7 +34,7 @@ The generated package descriptor contains the exact archive's local file URL, di
 
 ```sh
 composer config repositories.airwallex-candidate "$(cat /absolute/path/package-repository.json)"
-composer require jojeringnax/airwallex-laravel:0.1.0-RC1 --with-all-dependencies
+composer require jojeringnax/airwallex-laravel:0.2.0-RC1 --with-all-dependencies
 php artisan package:discover
 php artisan vendor:publish --tag=airwallex-config
 php artisan migrate
