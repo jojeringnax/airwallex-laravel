@@ -10,13 +10,11 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
-use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
-use Jojeringnax\AirwallexLaravel\Services\FreePeriodEvidence;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
@@ -48,18 +46,8 @@ class SubscriptionFreePeriodTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_released_baseline_has_an_explicit_coupon_capability_prerequisite(): void
-    {
-        if (method_exists(app(Client::class)->billing(), 'coupons')) {
-            self::markTestSkipped('This profile explicitly selects the unreleased Coupon resource.');
-        }
-        $this->expectException(ConfigurationException::class);
-        app(FreePeriodEvidence::class)->coupon('coupon-test');
-    }
-
     public function test_apply_and_explicit_remove_preserve_original_discount_identity_and_financial_commands(): void
     {
-        $this->requireCoupons();
         $discounted = $this->remote([$this->discount()], '2026-11-10T12:01:00Z');
         $http = $this->http($this->applyPlan($discounted));
         $result = $this->subscription->applyFreePeriod('free', 'coupon-test');
@@ -83,7 +71,6 @@ class SubscriptionFreePeriodTest extends TestCase
     #[DataProvider('invalidCoupons')]
     public function test_foreign_inactive_nonfree_or_unbounded_coupon_never_reaches_subscription_write(array $changes): void
     {
-        $this->requireCoupons();
         $http = $this->http([...$this->observation($this->remote()), FakeHttpClient::json($this->coupon($changes))]);
         try {
             $this->subscription->applyFreePeriod('invalid', 'coupon-test');
@@ -101,7 +88,6 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public function test_contradictory_discount_keeps_original_hold_and_recovers_only_its_response_identity(): void
     {
-        $this->requireCoupons();
         $discounted = $this->remote([$this->discount()], '2026-11-10T12:01:00Z');
         $different = $this->remote([$this->discount(['id' => 'other-discount'])], '2026-11-10T12:02:00Z');
         $this->http([...array_slice($this->applyPlan($discounted), 0, -3), ...$this->observation($different)]);
@@ -120,7 +106,6 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public function test_timeout_does_not_replay_when_the_coupon_later_expires(): void
     {
-        $this->requireCoupons();
         $plan = $this->applyPlan($this->remote([$this->discount()], '2026-11-10T12:01:00Z'));
         $http = $this->http([...array_slice($plan, 0, 6), new RuntimeException('synthetic timeout')]);
         try {
@@ -142,7 +127,6 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public function test_response_proof_is_encrypted_hidden_and_immutable_without_rewriting_intent(): void
     {
-        $this->requireCoupons();
         $discounted = $this->remote([$this->discount()], '2026-11-10T12:01:00Z');
         $this->http($this->applyPlan($discounted));
         $this->subscription->applyFreePeriod('free', 'coupon-test');
@@ -157,7 +141,6 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public function test_changed_coupon_terms_block_the_prepared_command_before_dispatch(): void
     {
-        $this->requireCoupons();
         $http = $this->http([...$this->observation($this->remote()), FakeHttpClient::json($this->coupon()), FakeHttpClient::json($this->coupon(['duration' => ['period' => 2, 'period_unit' => 'DAY']]))]);
         $this->expectException(EvidenceException::class);
         try {
@@ -171,7 +154,6 @@ class SubscriptionFreePeriodTest extends TestCase
     #[DataProvider('invalidDiscounts')]
     public function test_unowned_or_unbounded_response_proof_keeps_the_original_command_ambiguous(array $changes): void
     {
-        $this->requireCoupons();
         $result = $this->remote([$this->discount($changes)], '2026-11-10T12:01:00Z');
         $http = $this->http(array_slice($this->applyPlan($result), 0, -3));
         $this->expectException(AmbiguousOperationException::class);
@@ -193,7 +175,6 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public function test_conflicting_discount_reads_cannot_fulfil_the_original_response(): void
     {
-        $this->requireCoupons();
         $result = $this->remote([$this->discount()], '2026-11-10T12:01:00Z');
         $this->http([...array_slice($this->applyPlan($result), 0, -3), FakeHttpClient::json($result), Billing::page([]), FakeHttpClient::json([...$result, 'applied_discounts' => []])]);
         $this->expectException(AmbiguousOperationException::class);
@@ -208,7 +189,6 @@ class SubscriptionFreePeriodTest extends TestCase
     #[DataProvider('invalidCollections')]
     public function test_unverified_collection_semantics_never_prepare_a_discount_write(mixed $collection): void
     {
-        $this->requireCoupons();
         $remote = [...$this->remote([], '2026-11-10T12:01:00Z'), 'collection_method' => $collection];
         $http = $this->http($this->observation($remote));
         $this->expectException(EvidenceException::class);
@@ -227,7 +207,6 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public function test_changed_effective_start_cannot_confirm_the_original_response_bounds(): void
     {
-        $this->requireCoupons();
         $result = $this->remote([$this->discount()], '2026-11-10T12:01:00Z');
         $changed = $this->remote([$this->discount(['starts_at' => '2026-11-10T12:02:00Z'])], '2026-11-10T12:02:00Z');
         $this->http([...array_slice($this->applyPlan($result), 0, -3), ...$this->observation($changed)]);
@@ -241,7 +220,6 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public function test_original_confirmed_discount_is_required_for_removal(): void
     {
-        $this->requireCoupons();
         $result = $this->remote([$this->discount()], '2026-11-10T12:01:00Z');
         $this->http($this->applyPlan($result));
         $this->subscription->applyFreePeriod('free', 'coupon-test');
@@ -258,7 +236,6 @@ class SubscriptionFreePeriodTest extends TestCase
 
     public function test_malformed_observed_duration_is_redacted_from_removal_exception_arguments(): void
     {
-        $this->requireCoupons();
         $prior = ini_get('zend.exception_ignore_args');
         ini_set('zend.exception_ignore_args', '0');
         try {
@@ -310,13 +287,6 @@ class SubscriptionFreePeriodTest extends TestCase
         $options = ['default_proration_mode' => 'NONE'];
 
         return [[[$item], [...$options, 'discounts' => [$discount]]], [[[...$item, 'discounts' => [$discount]]], $options]];
-    }
-
-    private function requireCoupons(): void
-    {
-        if (! method_exists(app(Client::class)->billing(), 'coupons')) {
-            self::markTestSkipped('Requires the explicitly selected exact SDK Coupon extension archive.');
-        }
     }
 
     private function remote(array $discounts = [], string $updated = '2026-11-10T12:00:00Z'): array

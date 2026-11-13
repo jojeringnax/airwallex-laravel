@@ -1,12 +1,15 @@
-"""Deterministic artifact-boundary checks; no Composer or network access."""
+"""Deterministic release-tool checks; no Composer or network access."""
 
+import contextlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import stat
 import subprocess
 import tempfile
 from types import SimpleNamespace
+from unittest.mock import Mock
 import unittest
 import warnings
 import zipfile
@@ -21,7 +24,7 @@ class ArchiveBoundaryTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(prefix="airwallex-artifact-test-")
         self.addCleanup(self.directory.cleanup)
         self.archive = Path(self.directory.name) / "candidate.zip"
-        self.metadata = {"name": qualifier.PACKAGE, "require": {qualifier.SDK: "^0.1.1"}, "autoload": {"psr-4": {"Example\\": "src/"}}, "autoload-dev": {"psr-4": {"Tests\\": "tests/"}}, "scripts": {"test": "not-a-runtime-command"}}
+        self.metadata = {"name": qualifier.PACKAGE, "require": {qualifier.SDK: "^0.1.3"}, "autoload": {"psr-4": {"Example\\": "src/"}}, "autoload-dev": {"psr-4": {"Tests\\": "tests/"}}, "scripts": {"test": "not-a-runtime-command"}}
 
     def make(self, extras=None, omit=()):
         files = {"composer.json": json.dumps(self.metadata), "LICENSE": "MIT", "README.md": "Candidate", "src/Service.php": "<?php", "config/airwallex.php": "<?php return [];"}
@@ -37,7 +40,7 @@ class ArchiveBoundaryTest(unittest.TestCase):
         self.assertEqual(qualifier.digest(b"<?php"), manifest["src/Service.php"]["sha256"])
         repository = qualifier.package_repository(metadata, self.archive, "a" * 40)
         self.assertEqual("0.1.0-RC1", repository["package"]["version"])
-        self.assertEqual("^0.1.1", repository["package"]["require"][qualifier.SDK])
+        self.assertEqual("^0.1.3", repository["package"]["require"][qualifier.SDK])
         self.assertEqual("a" * 40, repository["package"]["dist"]["reference"])
         self.assertNotIn("scripts", repository["package"])
         self.assertNotIn("autoload-dev", repository["package"])
@@ -47,22 +50,22 @@ class ArchiveBoundaryTest(unittest.TestCase):
         self.metadata = {"name": qualifier.SDK, "require": {"php": ">=8.3 <8.6"}, "autoload": {"psr-4": {"Jojeringnax\\Airwallex\\": "src/"}}}
         self.make({"resources/contracts/payments.json": "{}"})
         manifest, metadata = qualifier.inspect_archive(self.archive, {"resources/contracts/payments.json"}, package_name=qualifier.SDK)
-        repository = qualifier.package_repository(metadata, self.archive, "b" * 40, version="0.1.2-dev")
-        self.assertEqual("0.1.2-dev", repository["package"]["version"])
+        repository = qualifier.package_repository(metadata, self.archive, "b" * 40, version="0.1.4-dev")
+        self.assertEqual("0.1.4-dev", repository["package"]["version"])
         self.assertEqual("b" * 40, repository["package"]["dist"]["reference"])
         self.assertEqual(self.archive.as_uri(), repository["package"]["dist"]["url"])
         self.assertIn("resources/contracts/payments.json", manifest)
         self.assertNotIn("source", repository["package"])
 
     def test_released_sdk_selection_rejects_development_or_ambiguous_sources(self):
-        qualifier.validate_sdk_selection(None, None, "0.1.2")
+        qualifier.validate_sdk_selection(None, None, "0.1.3")
         qualifier.validate_sdk_selection(None, None, None)
         qualifier.validate_sdk_selection(Path("/read-only/sdk"), "a" * 40, None)
         for repo, candidate, version in [
-            (Path("/read-only/sdk"), "a" * 40, "0.1.2"),
+            (Path("/read-only/sdk"), "a" * 40, "0.1.3"),
             (None, "a" * 40, None),
             (Path("/read-only/sdk"), None, None),
-            *[(None, None, version) for version in ["^0.1.2", "v0.1.2", "0.1.2-dev", "dev-main", "0.1", "01.1.2", "../sdk", ""]],
+            *[(None, None, version) for version in ["^0.1.3", "v0.1.3", "0.1.4-dev", "dev-main", "0.1", "01.1.2", "../sdk", ""]],
         ]:
             with self.subTest(repo=repo, candidate=candidate, version=version):
                 with self.assertRaises(ValueError):
@@ -155,6 +158,31 @@ class ArchiveBoundaryTest(unittest.TestCase):
             subprocess.run(["git", "archive", "--format=zip", f"--output={path}", commit], cwd=repo, env=dict(environment, TZ=timezone), check=True)
         self.assertNotEqual(utc.read_bytes(), honolulu.read_bytes(), "Control archives must expose Git's host-timezone ZIP timestamps.")
         self.assertEqual(utc.read_bytes(), actual.read_bytes(), "Qualifier must produce canonical UTC Git archive bytes on every host.")
+
+
+class DependencyAuditTest(unittest.TestCase):
+    def test_only_transient_composer_network_errors_are_retried_with_a_bound(self):
+        spec = importlib.util.spec_from_file_location("audit", Path(__file__).with_name("audit-dependencies.py"))
+        audit = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(audit)
+        for responses, expected, attempts, delays in [
+            ([(0, "")], 0, 1, []),
+            ([(100, "curl error 28: Connection timed out"), (0, "")], 0, 2, [2]),
+            ([(100, "curl error 6: Could not resolve host")] * 3, 100, 3, [2, 4]),
+            ([(1, "Security advisory; curl error 28 appears in advisory text")], 1, 1, []),
+            ([(2, "Abandoned package")], 2, 1, []),
+            ([(100, "Invalid repository configuration")], 100, 1, []),
+        ]:
+            with self.subTest(responses=responses):
+                run = Mock(side_effect=[SimpleNamespace(returncode=code, stdout="", stderr=message) for code, message in responses])
+                pause = Mock()
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    result = audit.audit(["php", "/synthetic/composer.phar"], run=run, pause=pause)
+                self.assertEqual(expected, result)
+                self.assertEqual(attempts, run.call_count)
+                self.assertEqual(delays, [call.args[0] for call in pause.call_args_list])
+                for call in run.call_args_list:
+                    self.assertEqual(["php", "/synthetic/composer.phar", "audit", "--locked"], call.args[0])
 
 
 if __name__ == "__main__":

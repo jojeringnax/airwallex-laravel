@@ -11,7 +11,6 @@ use Illuminate\Database\Eloquent\Relations\Relation;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
-use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Exception\ApiException;
 use Jojeringnax\Airwallex\Exception\TransportException;
 use Jojeringnax\Airwallex\Exception\ValidationException;
@@ -339,9 +338,6 @@ class CustomerTest extends TestCase
 
     public function test_opt_in_numeric_object_proof_recovers_only_the_original_command_without_a_write(): void
     {
-        if (! in_array('preserveResponseObjects', array_map(fn ($parameter) => $parameter->getName(), (new \ReflectionMethod(Client::class, '__construct'))->getParameters()), true)) {
-            self::markTestSkipped('Optional object views require released SDK v0.1.2.');
-        }
         config(['airwallex.preserve_response_objects' => true]);
         $team = $this->team();
         $http = $this->http([

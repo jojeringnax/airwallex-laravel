@@ -8,7 +8,6 @@ use Jojeringnax\Airwallex\Client;
 use Jojeringnax\Airwallex\Webhook\WebhookEvent;
 use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use ReflectionClass;
-use ReflectionMethod;
 use SensitiveParameter;
 use stdClass;
 
@@ -19,28 +18,16 @@ final class SdkResponseShape
     public static function client(#[SensitiveParameter] array $arguments): Client
     {
         if (self::enabled()) {
-            self::requireSupported();
             $arguments['preserveResponseObjects'] = true;
         }
 
-        // Named reflection arguments keep the optional SDK v0.1.2 addition out of the v0.1.1 call surface.
         return (new ReflectionClass(Client::class))->newInstanceArgs($arguments);
     }
 
     /** @return array<array-key,mixed> */
     public static function webhook(#[SensitiveParameter] WebhookEvent $event): array
     {
-        if (self::enabled()) {
-            self::requireSupported();
-            $value = (new ReflectionMethod($event, 'toArray'))->invokeArgs($event, ['preserveObjects' => true]);
-        } else {
-            $value = $event->toArray();
-        }
-        if (! is_array($value)) {
-            throw new ConfigurationException('SDK webhook view must return an array envelope.');
-        }
-
-        return self::normalize($value);
+        return self::normalize($event->toArray(preserveObjects: self::enabled()));
     }
 
     /** @param array<array-key,mixed> $value @return array<array-key,mixed> */
@@ -76,15 +63,5 @@ final class SdkResponseShape
         }
 
         return $enabled;
-    }
-
-    private static function requireSupported(): void
-    {
-        foreach ([[Client::class, '__construct', 'preserveResponseObjects'], [WebhookEvent::class, 'toArray', 'preserveObjects']] as [$class, $method, $name]) {
-            $parameters = (new ReflectionMethod($class, $method))->getParameters();
-            if (! in_array($name, array_map(static fn ($parameter) => $parameter->getName(), $parameters), true)) {
-                throw new ConfigurationException('SDK response object preservation requires airwallex-php-sdk v0.1.2 or later; select and qualify that released dependency first.');
-            }
-        }
     }
 }

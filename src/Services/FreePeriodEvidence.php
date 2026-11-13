@@ -5,8 +5,9 @@ declare(strict_types=1);
 namespace Jojeringnax\AirwallexLaravel\Services;
 
 use Jojeringnax\Airwallex\Client;
+use Jojeringnax\Airwallex\Resource\Billing;
+use Jojeringnax\Airwallex\Resource\Billing\Coupons;
 use Jojeringnax\AirwallexLaravel\BillingContext;
-use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
@@ -123,14 +124,9 @@ class FreePeriodEvidence
         return $discounts;
     }
 
-    /** Resolve the optional public resource across the supported SDK baseline and selected extensions. */
-    protected function couponsResource(object $billing): object
+    protected function couponsResource(Billing $billing): Coupons
     {
-        if (! method_exists($billing, 'coupons')) {
-            throw new ConfigurationException('Free periods require an explicitly selected SDK with Billing Coupon retrieval.');
-        }
-
-        return call_user_func([$billing, 'coupons']);
+        return $billing->coupons();
     }
 
     private function hundred(mixed $value): bool

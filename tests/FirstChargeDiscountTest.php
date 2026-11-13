@@ -11,7 +11,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
-use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
@@ -52,24 +51,8 @@ class FirstChargeDiscountTest extends TestCase
         parent::tearDown();
     }
 
-    public function test_released_sdk_has_a_first_charge_coupon_prerequisite_without_a_mutation(): void
-    {
-        if ($this->available()) {
-            self::markTestSkipped('Released SDK profile only.');
-        }
-        $http = $this->http($this->observation($this->remote()));
-        try {
-            $this->apply();
-            self::fail('Unavailable Coupon support was accepted.');
-        } catch (ConfigurationException) {
-            self::assertSame(0, Operation::count());
-            self::assertSame([], $this->writes($http));
-        }
-    }
-
     public function test_fixed_once_discount_preserves_original_identity_and_verifies_the_paid_remainder_invoice(): void
     {
-        $this->extension();
         $http = $this->http($this->applyPlan());
         $this->apply();
         $operation = Operation::where('action_key', 'partial')->sole();
@@ -91,7 +74,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_explicit_removal_requires_the_original_still_observed_discount(): void
     {
-        $this->extension();
         $this->http($this->applyPlan());
         $this->apply();
         $removed = $this->remote([], '2026-11-10T12:02:00Z');
@@ -103,7 +85,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_unknown_original_discount_response_is_held_without_replay_even_after_renewal(): void
     {
-        $this->extension();
         $plan = $this->applyPlan();
         $plan[6] = new RuntimeException('Synthetic lost original response.');
         $http = $this->http($plan);
@@ -127,7 +108,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_attributed_invoice_recovers_saved_response_proof_after_current_discount_disappears_on_a_historical_generation(): void
     {
-        $this->extension();
         $operation = $this->ambiguousWithProof();
         $this->subscription->update(['status' => 'CANCELLED']);
         SubscriptionSlot::where('subscription_id', $this->subscription->id)->delete();
@@ -145,7 +125,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_invoice_cannot_substitute_for_missing_original_response_identity(): void
     {
-        $this->extension();
         $plan = $this->applyPlan();
         $plan[6] = new RuntimeException('Synthetic lost response.');
         $this->http($plan);
@@ -165,7 +144,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_expired_worker_does_not_complete_the_original_discount_from_invoice_reads(): void
     {
-        $this->extension();
         $operation = $this->ambiguousWithProof();
         $expired = false;
         $invoice = $this->invoice();
@@ -192,7 +170,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_offboarding_during_invoice_paging_retains_the_original_hold(): void
     {
-        $this->extension();
         $operation = $this->ambiguousWithProof();
         $invoice = $this->invoice();
         $http = new InterleavingHttpClient([FakeHttpClient::login(), self::response($invoice), self::response($invoice), function () use ($operation) {
@@ -215,7 +192,6 @@ class FirstChargeDiscountTest extends TestCase
     #[DataProvider('invalidCoupons')]
     public function test_unapproved_coupon_terms_never_reach_a_subscription_write(array $changes): void
     {
-        $this->extension();
         $http = $this->http([...$this->observation($this->remote()), self::response($this->coupon($changes))]);
         try {
             $this->apply();
@@ -239,7 +215,6 @@ class FirstChargeDiscountTest extends TestCase
     #[DataProvider('invalidInvoices')]
     public function test_missing_wrong_or_competing_invoice_attribution_is_never_a_remainder_proof(array $changes): void
     {
-        $this->extension();
         $this->http($this->applyPlan());
         $this->apply();
         $http = $this->http([self::response($this->invoice($changes))]);
@@ -264,7 +239,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_an_intervening_invoice_service_period_does_not_prove_the_intended_boundary(): void
     {
-        $this->extension();
         $this->http($this->applyPlan());
         $this->apply();
         $invoice = $this->invoice();
@@ -275,7 +249,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_a_changed_final_invoice_read_cannot_release_a_stale_amount_claim(): void
     {
-        $this->extension();
         $this->http($this->applyPlan());
         $this->apply();
         $invoice = $this->invoice();
@@ -286,7 +259,6 @@ class FirstChargeDiscountTest extends TestCase
 
     public function test_a_voided_final_invoice_read_cannot_confirm_a_chargeable_remainder(): void
     {
-        $this->extension();
         $this->http($this->applyPlan());
         $this->apply();
         $invoice = $this->invoice();
@@ -374,17 +346,5 @@ class FirstChargeDiscountTest extends TestCase
         $json = preg_replace('/("(?:amount_off|amount|amount_due|total_amount|total_tax_amount)":)"([0-9]+(?:\\.[0-9]+)?)"/', '$1$2', $json);
 
         return new Response(200, ['Content-Type' => 'application/json'], $json);
-    }
-
-    private function available(): bool
-    {
-        return method_exists(app(Client::class)->billing(), 'coupons');
-    }
-
-    private function extension(): void
-    {
-        if (! $this->available()) {
-            self::markTestSkipped('Pinned SDK Coupon extension profile required.');
-        }
     }
 }

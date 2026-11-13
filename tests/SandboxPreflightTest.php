@@ -20,7 +20,7 @@ class SandboxPreflightTest extends TestCase
         self::assertSame('not_verified', $result['provider_ownership_and_eligibility']);
         self::assertSame('unexecuted', $result['provider_observations']);
         self::assertFalse($result['financial_actions_run']);
-        self::assertSame(['sdk' => '0.1.1', 'api' => '2026-08-21', 'webhook' => '2026-08-21'], $result['contract_baseline']);
+        self::assertSame(['sdk' => '0.1.3', 'api' => '2026-08-21', 'webhook' => '2026-08-21'], $result['contract_baseline']);
         foreach (['AIRWALLEX_CLIENT_ID', 'AIRWALLEX_API_KEY', 'AIRWALLEX_ORGANIZATION_ID', 'AIRWALLEX_LEGAL_ENTITY_ID', 'AIRWALLEX_LINKED_PAYMENT_ACCOUNT_ID', 'AIRWALLEX_SANDBOX_PRICE_ID', 'AIRWALLEX_SANDBOX_BILLABLE_TYPE', 'AIRWALLEX_SANDBOX_BILLABLE_ID', 'AIRWALLEX_SANDBOX_RUN_ID'] as $key) {
             self::assertStringNotContainsString($this->inputs()[$key], $output);
         }

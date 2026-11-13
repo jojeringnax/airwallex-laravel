@@ -7,8 +7,9 @@ namespace Jojeringnax\AirwallexLaravel\Services;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Jojeringnax\Airwallex\Client;
+use Jojeringnax\Airwallex\Resource\Billing;
+use Jojeringnax\Airwallex\Resource\Billing\Transactions;
 use Jojeringnax\AirwallexLaravel\BillingContext;
-use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
@@ -126,14 +127,9 @@ class InvoiceManager
         return $transaction;
     }
 
-    /** Preserve baseline SDK compatibility while requiring the additive transaction API. */
-    private function transactionsResource(object $billing): object
+    private function transactionsResource(Billing $billing): Transactions
     {
-        if (! method_exists($billing, 'transactions')) {
-            throw new ConfigurationException('Invoice transactions require airwallex-php-sdk v0.1.2 or later; select and qualify that released dependency before enabling this API.');
-        }
-
-        return call_user_func([$billing, 'transactions']);
+        return $billing->transactions();
     }
 
     private function ownedTransaction(Invoice $invoice, array $remote, ?string $expectedId = null): InvoiceTransaction

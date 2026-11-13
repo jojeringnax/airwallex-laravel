@@ -27,7 +27,7 @@ $ready = ! in_array(false, $checks, true);
 echo json_encode([
     'status' => $ready ? 'ready_for_manual_steps' : 'blocked_missing_prerequisites',
     'checks' => $checks,
-    'contract_baseline' => ['sdk' => '0.1.1', 'api' => '2026-08-21', 'webhook' => '2026-08-21'],
+    'contract_baseline' => ['sdk' => '0.1.3', 'api' => '2026-08-21', 'webhook' => '2026-08-21'],
     'installed_versions' => 'manual_verification_required',
     'runtime_configuration' => 'not_loaded',
     'provider_ownership_and_eligibility' => 'not_verified',

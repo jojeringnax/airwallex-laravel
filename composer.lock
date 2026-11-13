@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "68ae6b59484544c6120f6d15f86a1032",
+    "content-hash": "28158163fa72afca17be8711342c8c10",
     "packages": [
         {
             "name": "brick/math",
@@ -1076,16 +1076,16 @@
         },
         {
             "name": "jojeringnax/airwallex-php-sdk",
-            "version": "v0.1.1",
+            "version": "v0.1.3",
             "source": {
                 "type": "git",
                 "url": "https://github.com/jojeringnax/airwallex-php-sdk.git",
-                "reference": "bd11abb67e2e5761b86a9ca9d4a1b7993900de6e"
+                "reference": "33881b46d696435dfbd370ec371e1fef5452ba44"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/jojeringnax/airwallex-php-sdk/zipball/bd11abb67e2e5761b86a9ca9d4a1b7993900de6e",
-                "reference": "bd11abb67e2e5761b86a9ca9d4a1b7993900de6e",
+                "url": "https://api.github.com/repos/jojeringnax/airwallex-php-sdk/zipball/33881b46d696435dfbd370ec371e1fef5452ba44",
+                "reference": "33881b46d696435dfbd370ec371e1fef5452ba44",
                 "shasum": ""
             },
             "require": {
@@ -1124,8 +1124,8 @@
                 "issues": "https://github.com/jojeringnax/airwallex-php-sdk/issues",
                 "source": "https://github.com/jojeringnax/airwallex-php-sdk"
             },
-            "time": "2026-11-10T08:43:13+00:00",
-            "published-time": "2026-11-10T13:17:58+00:00"
+            "time": "2026-11-12T19:16:18+00:00",
+            "published-time": "2026-11-12T23:06:58+00:00"
         },
         {
             "name": "laravel/framework",

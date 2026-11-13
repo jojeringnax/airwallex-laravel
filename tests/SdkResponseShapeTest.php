@@ -13,27 +13,19 @@ use Jojeringnax\AirwallexLaravel\Support\Pages;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Psr\Http\Client\ClientInterface;
-use ReflectionMethod;
 use SensitiveParameterValue;
 use stdClass;
 
 class SdkResponseShapeTest extends TestCase
 {
-    public function test_opt_in_requires_both_released_sdk_views_before_either_client_can_send(): void
+    public function test_opt_in_constructs_both_sdk_clients_without_sending_http(): void
     {
         config(['airwallex.preserve_response_objects' => true, 'airwallex.payments.account_id' => 'account-payments',
             'airwallex.payments.client_id' => 'client-synthetic', 'airwallex.payments.api_key' => 'key-synthetic']);
         $http = new FakeHttpClient;
         $this->app->instance(ClientInterface::class, $http);
         foreach ([Client::class, Payments\Client::class] as $class) {
-            try {
-                $client = app($class);
-                self::assertTrue($this->supportsObjects());
-                self::assertInstanceOf($class, $client);
-            } catch (ConfigurationException $exception) {
-                self::assertFalse($this->supportsObjects());
-                self::assertStringContainsString('v0.1.2', $exception->getMessage());
-            }
+            self::assertInstanceOf($class, app($class));
         }
         self::assertSame([], $http->requests);
     }
@@ -50,7 +42,7 @@ class SdkResponseShapeTest extends TestCase
         $original = ini_get('zend.exception_ignore_args');
         ini_set('zend.exception_ignore_args', '0');
         try {
-            foreach ($this->supportsObjects() ? ['invalid'] : ['invalid', true] as $setting) {
+            foreach (['invalid'] as $setting) {
                 config(['airwallex.preserve_response_objects' => $setting]);
                 $event = WebhookEvent::fromJson('{"id":"synthetic-event","profile":{"email":"private-synthetic@example.test"}}');
                 try {
@@ -108,14 +100,6 @@ class SdkResponseShapeTest extends TestCase
 
     private function enableObjects(): void
     {
-        if (! $this->supportsObjects()) {
-            self::markTestSkipped('Optional object views require released SDK v0.1.2.');
-        }
         config(['airwallex.preserve_response_objects' => true]);
-    }
-
-    private function supportsObjects(): bool
-    {
-        return in_array('preserveResponseObjects', array_map(fn ($parameter) => $parameter->getName(), (new ReflectionMethod(Client::class, '__construct'))->getParameters()), true);
     }
 }
