@@ -250,7 +250,6 @@ try {
     check($writes === $http->writes() && $lost->fresh()->remote_id === null
         && Observation::where('resource_id', $lost->id)->get()->contains(static fn ($row) => ($row->payload['status'] ?? null) === 'SUPERSEDED_CREATION_LOCATOR' && ($row->payload['remote_id'] ?? null) === 'int-2'),
         'Late original locator was lost, adopted or replayed.');
-    $report['checks'][] = 'new_key_creation_retry_retains_unknown_original_and_quarantines_late_locator';
     // Synthetic customer-present wallet methods exercise the public PHP seam, never real client availability.
     foreach (['applepay', 'googlepay'] as $wallet) {
         $http->methods['mtd-'.$wallet] = ['id' => 'mtd-'.$wallet, 'customer_id' => $customer->remote_id, 'status' => 'CREATED', 'type' => $wallet, 'updated_at' => $http->time()];
@@ -271,7 +270,7 @@ try {
             check(! str_contains((string) $stored, 'SYNTHETIC-PRIVATE'), 'A durable snapshot exposed browser secrets.');
         }
     }
-    $report['checks'] = ['cached_native_consumer', 'original_model_cashier_refund', 'prepared_configuration_repair', 'ephemeral_setup_and_intent_bootstrap', 'zero_no_charge', 'merchant_initiated_saved_card', 'customer_present_wallet_php_seams', 'refund_credit_note_review_handoff', 'synthetic_3ds_canonical_return', 'pending_capture_no_replay', 'partial_cumulative_capture_ledger', 'billing_hint_canonical_dedup', 'listener_redelivery', 'pending_partial_full_remaining_refund', 'accepted_settled_single_credit', 'signed_duplicate_reordered_receipt', 'ambiguous_create_read_only_recovery'];
+    $report['checks'] = ['cached_native_consumer', 'original_model_cashier_refund', 'prepared_configuration_repair', 'ephemeral_setup_and_intent_bootstrap', 'zero_no_charge', 'merchant_initiated_saved_card', 'customer_present_wallet_php_seams', 'refund_credit_note_review_handoff', 'synthetic_3ds_canonical_return', 'pending_capture_no_replay', 'partial_cumulative_capture_ledger', 'billing_hint_canonical_dedup', 'listener_redelivery', 'pending_partial_full_remaining_refund', 'accepted_settled_single_credit', 'signed_duplicate_reordered_receipt', 'new_key_creation_retry_retains_unknown_original_and_quarantines_late_locator'];
     $report['limitations'] = ['Synthetic transport only; no account, browser, wallet, 3DS, settlement, target deployment or accounting policy qualification.', 'Billing hint is synthetic; exact installed Billing transaction reads are qualified by the separate subscriptions track.', 'Application payable remains partially funded; canonical paid() is not an order-total assertion.'];
     file_put_contents($options['evidence'], json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
     echo json_encode(['status' => 'passed', 'recipes' => count($report['recipes']), 'checks' => count($report['checks'])])."\n";
