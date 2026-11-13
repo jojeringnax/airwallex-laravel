@@ -21,6 +21,8 @@ class SubscriptionBuilder
 
     private ?int $trialDays = null;
 
+    private ?string $trialEndsAt = null;
+
     private ?string $startsAt = null;
 
     public function __construct(private readonly Model $model, private readonly string $subscriptionName, string $priceId)
@@ -53,10 +55,25 @@ class SubscriptionBuilder
 
     public function trialDays(mixed $days): static
     {
+        if ($this->trialEndsAt !== null) {
+            throw new ConflictException('Choose trialDays or trialUntil for one subscription.');
+        }
         if (! is_int($days) || $days < 1) {
             throw new ConflictException('Provider trial days must be positive.');
         }
         $this->trialDays = $days;
+
+        return $this;
+    }
+
+    public function trialUntil(string|DateTimeInterface $endsAt): static
+    {
+        if ($this->trialDays !== null) {
+            throw new ConflictException('Choose trialDays or trialUntil for one subscription.');
+        }
+        $value = is_string($endsAt) ? $endsAt : $endsAt->format('Y-m-d\TH:i:s.uP');
+        Timestamp::compare($value, $value);
+        $this->trialEndsAt = $value;
 
         return $this;
     }
@@ -92,10 +109,10 @@ class SubscriptionBuilder
         return $this->subscriptionName;
     }
 
-    /** @internal @return array{items:list<array{price_id:string,quantity:mixed}>,trial_days:?int,starts_at:?string} */
+    /** @internal @return array{items:list<array{price_id:string,quantity:mixed}>,trial_days:?int,starts_at:?string,trial_ends_at?:string} */
     public function definition(): array
     {
-        return ['items' => $this->items, 'trial_days' => $this->trialDays, 'starts_at' => $this->startsAt];
+        return ['items' => $this->items, 'trial_days' => $this->trialDays, 'starts_at' => $this->startsAt, ...($this->trialEndsAt === null ? [] : ['trial_ends_at' => $this->trialEndsAt])];
     }
 
     /** @internal @return array<string,mixed> */
@@ -111,6 +128,12 @@ class SubscriptionBuilder
             preg_match('/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/D', $startsAt, $match);
             $date = (new DateTimeImmutable($match[1].$match[3]))->modify('+'.$this->trialDays.' days');
             $payload['trial_ends_at'] = $date->format('Y-m-d\TH:i:s').$match[2].$match[3];
+        }
+        if ($this->trialEndsAt !== null) {
+            if (Timestamp::compare($this->trialEndsAt, $this->startsAt ?? now()->format('Y-m-d\TH:i:s.uP')) <= 0) {
+                throw new ConflictException('An explicit trial end must follow the subscription start.');
+            }
+            $payload['trial_ends_at'] = $this->trialEndsAt;
         }
 
         return $payload;
