@@ -40,7 +40,7 @@ Accepted policies [#10](https://github.com/jojeringnax/airwallex-laravel/issues/
 
 The [provider reference](provider-contracts.md#evidence-gaps-and-verification-actions) records fresh raw-schema extraction restrictions, missing native-token provenance, optional routing availability and other account facts. [Sandbox evidence](sandbox.md#current-evidence) records the limited Customer/catalogue observations and unresolved original Subscription outcome; deterministic synthetic fixtures do not establish activation, actual deliveries, timing, dunning, settlement, link regeneration or remote cleanup. Under the accepted evidence policy, tested guards plus that exact gap record satisfy the optional Sandbox contribution without a passing provider claim.
 
-Validated implementation and reviewable PRs remain distinct from delivery to the default branch. A local `0.1.0-RC1` descriptor is an unpublished review artifact. The release tracker and project record merge and publication status; no tag, merge, production deployment or financial operation is implied by qualification.
+Validated implementation and reviewable PRs remain distinct from delivery to the default branch. A local `0.2.0-RC1` descriptor is an unpublished review artifact. The release tracker and project record merge and publication status; no tag, merge, production deployment or financial operation is implied by qualification.
 
 ## Full-provider adoption evidence
 
