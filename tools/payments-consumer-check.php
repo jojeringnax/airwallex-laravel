@@ -120,7 +120,9 @@ try {
     $http->methods['mtd-payments'] = ['id' => 'mtd-payments', 'customer_id' => $customer->remote_id, 'status' => 'CREATED', 'type' => 'card', 'updated_at' => $http->time()];
     $http->consents['cst-payments'] = [...$http->consents['cst-payments'], 'status' => 'VERIFIED', 'payment_method' => ['id' => 'mtd-payments', 'type' => 'card'], 'updated_at' => $http->time()];
     $collector = config('airwallex.linked_payment_account_id');
-    config(['airwallex.linked_payment_account_id' => $customer->account_id]);
+    config(['airwallex.environment' => 'sandbox', 'airwallex.organization_id' => 'org-synthetic-payments-billing',
+        'airwallex.client_id' => 'client-synthetic-billing', 'airwallex.api_key' => 'key-synthetic-billing',
+        'airwallex.linked_payment_account_id' => $customer->account_id]);
     $app->forgetInstance(\Jojeringnax\Airwallex\Client::class);
     $billingCustomer = ModelRegistry::make('customer', [...app(BillingContext::class)->attributes(),
         'billable_type' => $customer->getAttribute('billable_type'), 'billable_id' => $customer->getAttribute('billable_id'), 'remote_id' => 'billing-payments-owner']);
