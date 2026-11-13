@@ -15,7 +15,6 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\AirwallexBillable;
-use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
@@ -177,43 +176,30 @@ try {
     $http = $bind(Fixtures::observation($freeRemote, [$freeItem]));
     $free = $billing->importSubscription('earned-free', $freeRemote['id']);
     $http->assertConsumed();
-    if (! method_exists($app->make(Client::class)->billing(), 'coupons')) {
-        $before = Operation::count();
-        $http = $bind(Fixtures::observation($freeRemote, [$freeItem]));
-        try {
-            $freeRecipes['apply']($free, 'earned-free-command', 'coupon-synthetic');
-            throw new RuntimeException('The baseline silently accepted an unavailable Coupon dependency.');
-        } catch (ConfigurationException) {
-            adoptionCheck(Operation::count() === $before, 'Missing Coupon capability persisted a financial command.');
-        }
-        $http->assertConsumed();
-        $report['recipes']['free-period.php'] = ['executed' => true, 'path' => 'explicit unavailable-SDK prerequisite; no Coupon mutation', 'financial_effects' => 'unqualified'];
-    } else {
-        $coupon = ['id' => 'coupon-synthetic', 'active' => true, 'discount_model' => 'PERCENTAGE', 'percentage_off' => 100, 'duration_type' => 'CUSTOM', 'duration' => ['period' => 1, 'period_unit' => 'DAY']];
-        $discount = ['id' => 'discount-synthetic', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => $freeRemote['id'], 'billing_customer_id' => 'customer-adoption', 'source' => 'COUPON', 'source_id' => $coupon['id'], 'discount_model' => 'PERCENTAGE', 'percentage_off' => 100, 'duration_type' => 'CUSTOM', 'duration' => $coupon['duration'], 'created_at' => '2026-11-10T12:01:00Z', 'starts_at' => '2026-11-10T12:01:00Z', 'ends_at' => '2026-11-11T12:01:00Z'];
-        $discounted = [...$freeRemote, 'applied_discounts' => [$discount], 'updated_at' => $discount['created_at']];
-        $http = $bind([...Fixtures::observation($freeRemote, [$freeItem]), Fixtures::request('GET', 'billing/coupons/'.$coupon['id'], $coupon), Fixtures::request('GET', 'billing/coupons/'.$coupon['id'], $coupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $discounted), ...Fixtures::observation($discounted, [$freeItem])]);
-        $free = $freeRecipes['apply']($free, 'earned-free-command', $coupon['id']);
-        $http->assertConsumed();
-        $freeOperation = Operation::where('action_key', 'earned-free-command')->sole();
-        adoptionCheck($freeOperation->status === 'succeeded' && $freeOperation->observation['discount_proof']['ends_at'] === $discount['ends_at'], 'Original exact Discount/end was not confirmed.');
-        DB::table('candidate_membership_plans')->insert(['action_key' => 'after-earned-free', 'effective_at' => $discount['ends_at'], 'tier' => 'basic']);
-        Carbon::setTestNow('2026-11-10T12:02:00Z');
-        $lowerFreeItem = Fixtures::item('after-earned-free-item', $freeRemote['id'], '1', '2026-11-10T12:02:00Z');
-        $lowerFreeItem['price']['id'] = 'price-after-free';
-        $lowerFree = [...$discounted, 'updated_at' => '2026-11-10T12:02:00Z'];
-        $http = $bind([...Fixtures::observation($discounted, [$freeItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $lowerFree), ...Fixtures::observation($lowerFree, [$lowerFreeItem])]);
-        $free = (require $package.'/examples/next-cycle-change.php')($free, 'after-earned-free', [['id' => $freeItem['id'], 'deleted' => true], ['price_id' => 'price-after-free', 'quantity' => 1]], $discount['ends_at']);
-        $http->assertConsumed();
-        adoptionCheck($free->cancel_at_period_end === false && $free->snapshot['payment_source_id'] === $freeRemote['payment_source_id'] && $free->snapshot['applied_discounts'][0]['id'] === $discount['id'], 'Following tier changed auto-renew, source or free-period identity.');
-        adoptionCheck(DB::table('candidate_membership_plans')->where('action_key', 'after-earned-free')->sole()->effective_at === $discount['ends_at'], 'The application entitlement date was lost.');
-        $removed = [...$lowerFree, 'applied_discounts' => [], 'updated_at' => '2026-11-10T12:03:00Z'];
-        $http = $bind([...Fixtures::observation($lowerFree, [$lowerFreeItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $removed), ...Fixtures::observation($removed, [$lowerFreeItem])]);
-        $freeRecipes['remove']($free, 'remove-earned-free', 'earned-free-command');
-        $http->assertConsumed();
-        adoptionCheck(Operation::where('action_key', 'remove-earned-free')->sole()->status === 'succeeded', 'Explicit original-discount removal did not converge.');
-        $report['recipes']['free-period.php'] = ['executed' => true, 'path' => '100 percent CUSTOM Coupon, following next-cycle tier and explicit removal', 'financial_effects' => 'synthetic only; no invoice or cash proof'];
-    }
+    $coupon = ['id' => 'coupon-synthetic', 'active' => true, 'discount_model' => 'PERCENTAGE', 'percentage_off' => 100, 'duration_type' => 'CUSTOM', 'duration' => ['period' => 1, 'period_unit' => 'DAY']];
+    $discount = ['id' => 'discount-synthetic', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => $freeRemote['id'], 'billing_customer_id' => 'customer-adoption', 'source' => 'COUPON', 'source_id' => $coupon['id'], 'discount_model' => 'PERCENTAGE', 'percentage_off' => 100, 'duration_type' => 'CUSTOM', 'duration' => $coupon['duration'], 'created_at' => '2026-11-10T12:01:00Z', 'starts_at' => '2026-11-10T12:01:00Z', 'ends_at' => '2026-11-11T12:01:00Z'];
+    $discounted = [...$freeRemote, 'applied_discounts' => [$discount], 'updated_at' => $discount['created_at']];
+    $http = $bind([...Fixtures::observation($freeRemote, [$freeItem]), Fixtures::request('GET', 'billing/coupons/'.$coupon['id'], $coupon), Fixtures::request('GET', 'billing/coupons/'.$coupon['id'], $coupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $discounted), ...Fixtures::observation($discounted, [$freeItem])]);
+    $free = $freeRecipes['apply']($free, 'earned-free-command', $coupon['id']);
+    $http->assertConsumed();
+    $freeOperation = Operation::where('action_key', 'earned-free-command')->sole();
+    adoptionCheck($freeOperation->status === 'succeeded' && $freeOperation->observation['discount_proof']['ends_at'] === $discount['ends_at'], 'Original exact Discount/end was not confirmed.');
+    DB::table('candidate_membership_plans')->insert(['action_key' => 'after-earned-free', 'effective_at' => $discount['ends_at'], 'tier' => 'basic']);
+    Carbon::setTestNow('2026-11-10T12:02:00Z');
+    $lowerFreeItem = Fixtures::item('after-earned-free-item', $freeRemote['id'], '1', '2026-11-10T12:02:00Z');
+    $lowerFreeItem['price']['id'] = 'price-after-free';
+    $lowerFree = [...$discounted, 'updated_at' => '2026-11-10T12:02:00Z'];
+    $http = $bind([...Fixtures::observation($discounted, [$freeItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $lowerFree), ...Fixtures::observation($lowerFree, [$lowerFreeItem])]);
+    $free = (require $package.'/examples/next-cycle-change.php')($free, 'after-earned-free', [['id' => $freeItem['id'], 'deleted' => true], ['price_id' => 'price-after-free', 'quantity' => 1]], $discount['ends_at']);
+    $http->assertConsumed();
+    adoptionCheck($free->cancel_at_period_end === false && $free->snapshot['payment_source_id'] === $freeRemote['payment_source_id'] && $free->snapshot['applied_discounts'][0]['id'] === $discount['id'], 'Following tier changed auto-renew, source or free-period identity.');
+    adoptionCheck(DB::table('candidate_membership_plans')->where('action_key', 'after-earned-free')->sole()->effective_at === $discount['ends_at'], 'The application entitlement date was lost.');
+    $removed = [...$lowerFree, 'applied_discounts' => [], 'updated_at' => '2026-11-10T12:03:00Z'];
+    $http = $bind([...Fixtures::observation($lowerFree, [$lowerFreeItem]), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/'.$freeRemote['id'].'/update', $removed), ...Fixtures::observation($removed, [$lowerFreeItem])]);
+    $freeRecipes['remove']($free, 'remove-earned-free', 'earned-free-command');
+    $http->assertConsumed();
+    adoptionCheck(Operation::where('action_key', 'remove-earned-free')->sole()->status === 'succeeded', 'Explicit original-discount removal did not converge.');
+    $report['recipes']['free-period.php'] = ['executed' => true, 'path' => '100 percent CUSTOM Coupon, following next-cycle tier and explicit removal', 'financial_effects' => 'synthetic only; no invoice or cash proof'];
     Carbon::setTestNow('2026-11-10T12:00:00Z');
 
     $original = Fixtures::subscription('sub-finite', 'customer-adoption', ['collection_method' => 'OUT_OF_BAND', 'ends_at' => '2027-01-01T00:00:00Z', 'duration' => ['period' => 2, 'period_unit' => 'MONTH']]);
@@ -335,55 +321,32 @@ try {
     $creditBilling->linkAirwallexCustomer('customer-test');
     $creditInvoice = $creditBilling->findInvoice('invoice-test');
     $creditRecipes = (require $package.'/examples/free-period.php')();
-    if (! method_exists($app->make(Client::class)->billing(), 'creditNotes')) {
-        $before = [Operation::count(), count($creditHttp->requests)];
-        try {
-            $creditRecipes['create_credit']($creditInvoice, 'invoice-free/create', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
-            throw new RuntimeException('Released SDK silently accepted unavailable Credit Notes.');
-        } catch (ConfigurationException) {
-            adoptionCheck($before === [Operation::count(), count($creditHttp->requests)], 'Missing Credit Note capability reached I/O or persisted a financial intent.');
-        }
-        $report['recipes']['free-period.php']['invoice_credit_path'] = 'explicit unavailable SDK capability; no credit mutation';
-    } else {
-        $createdCredit = $creditRecipes['create_credit']($creditInvoice, 'invoice-free/create', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
-        $creditItems = $creditRecipes['add_credit_items']($creditInvoice, 'invoice-free/items', 'invoice-free/create', [['invoice_line_item_id' => 'original-line', 'amount' => '15.00']]);
-        $finalCredit = $creditRecipes['finalize_credit']($creditInvoice, 'invoice-free/finalize', 'invoice-free/create', '15.00');
-        adoptionCheck($createdCredit->status === 'succeeded' && $creditItems->status === 'succeeded' && $finalCredit->status === 'succeeded', 'Original Invoice credit stages did not confirm.');
-        adoptionCheck($creditBilling->findInvoice('invoice-test')->toArray()['amount_due'] === '15.00', 'Synthetic partial credit did not retain its paid remainder.');
-        $report['recipes']['free-period.php']['invoice_credit_path'] = 'original finalized unpaid Invoice, explicit partial line credit and authorized finalization';
-        $report['recipes']['free-period.php']['invoice_credit_evidence'] = 'synthetic only; original-resource account, tax and remainder collection remain unverified';
-    }
+    $createdCredit = $creditRecipes['create_credit']($creditInvoice, 'invoice-free/create', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
+    $creditItems = $creditRecipes['add_credit_items']($creditInvoice, 'invoice-free/items', 'invoice-free/create', [['invoice_line_item_id' => 'original-line', 'amount' => '15.00']]);
+    $finalCredit = $creditRecipes['finalize_credit']($creditInvoice, 'invoice-free/finalize', 'invoice-free/create', '15.00');
+    adoptionCheck($createdCredit->status === 'succeeded' && $creditItems->status === 'succeeded' && $finalCredit->status === 'succeeded', 'Original Invoice credit stages did not confirm.');
+    adoptionCheck($creditBilling->findInvoice('invoice-test')->toArray()['amount_due'] === '15.00', 'Synthetic partial credit did not retain its paid remainder.');
+    $report['recipes']['free-period.php']['invoice_credit_path'] = 'original finalized unpaid Invoice, explicit partial line credit and authorized finalization';
+    $report['recipes']['free-period.php']['invoice_credit_evidence'] = 'synthetic only; original-resource account, tax and remainder collection remain unverified';
     Carbon::setTestNow('2026-11-10T12:00:00Z');
     $fixedRemote = Fixtures::subscription('sub-first-charge', 'customer-adoption');
     $fixedItem = Fixtures::item('first-charge-item', 'sub-first-charge', '1');
     $http = $bind(Fixtures::observation($fixedRemote, [$fixedItem]));
     $fixedSubscription = $billing->importSubscription('first-charge', $fixedRemote['id']);
     $http->assertConsumed();
-    if (! method_exists($app->make(Client::class)->billing(), 'coupons')) {
-        $http = $bind(Fixtures::observation($fixedRemote, [$fixedItem]));
-        try {
-            $freeRecipes['apply_first_charge']($fixedSubscription, 'fixed-first-charge', 'coupon-fixed', '15.00', 'USD', $fixedRemote['current_period_ends_at']);
-            throw new RuntimeException('Released SDK silently accepted a first-charge Coupon.');
-        } catch (ConfigurationException) {
-            adoptionCheck(! Operation::where('action_key', 'fixed-first-charge')->exists(), 'Missing first-charge Coupon support created a financial intent.');
-        }
-        $http->assertConsumed();
-        $report['recipes']['free-period.php']['first_charge_path'] = 'explicit unavailable SDK capability';
-    } else {
-        $fixedCoupon = ['id' => 'coupon-fixed', 'active' => true, 'discount_model' => 'FLAT', 'amount_off' => '15.00', 'currency' => 'USD', 'duration_type' => 'ONCE'];
-        $fixedDiscount = ['id' => 'discount-fixed', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => $fixedRemote['id'], 'billing_customer_id' => 'customer-adoption', 'source' => 'COUPON', 'source_id' => 'coupon-fixed', 'discount_model' => 'FLAT', 'amount_off' => '15.00', 'currency' => 'USD', 'duration_type' => 'ONCE', 'created_at' => '2026-11-10T12:01:00Z', 'starts_at' => '2026-11-10T12:01:00Z'];
-        $fixedResult = [...$fixedRemote, 'applied_discounts' => [$fixedDiscount], 'updated_at' => '2026-11-10T12:01:00Z'];
-        $http = $bind([...Fixtures::observation($fixedRemote, [$fixedItem]), Fixtures::request('GET', 'billing/coupons/coupon-fixed', $fixedCoupon), Fixtures::request('GET', 'billing/coupons/coupon-fixed', $fixedCoupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/sub-first-charge/update', $fixedResult), ...Fixtures::observation($fixedResult, [$fixedItem])]);
-        $freeRecipes['apply_first_charge']($fixedSubscription, 'fixed-first-charge', 'coupon-fixed', '15.00', 'USD', $fixedRemote['current_period_ends_at']);
-        $http->assertConsumed();
-        $fixedInvoice = [...Fixtures::invoice('customer-adoption', $fixedRemote['id']), 'id' => 'invoice-fixed', 'total_amount' => '15.00', 'amount_due' => '15.00', 'total_tax_amount' => '0', 'applied_discounts' => [$fixedDiscount], 'total_discount_amounts' => [['applied_discount_id' => 'discount-fixed', 'amount' => '15.00']]];
-        $fixedLine = ['id' => 'invoice-fixed-line', 'invoice_id' => 'invoice-fixed', 'currency' => 'USD', 'amount' => '30.00', 'created_at' => $fixedRemote['current_period_ends_at'], 'updated_at' => $fixedRemote['current_period_ends_at'], 'applied_discounts' => [], 'discount_amounts' => [], 'period_starts_at' => $fixedRemote['current_period_ends_at'], 'period_ends_at' => '2027-01-01T00:00:00Z'];
-        $http = $bind([Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice), Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice), Fixtures::request('GET', 'billing/invoices/invoice-fixed/line_items', ['items' => [$fixedLine]]), Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice)]);
-        adoptionCheck($freeRecipes['first_charge_invoice']($fixedSubscription, 'fixed-first-charge', 'invoice-fixed', '15.00')->toArray()['total_amount'] === '15.00', 'Original first-charge Discount did not prove the synthetic paid remainder.');
-        $http->assertConsumed();
-        $report['recipes']['free-period.php']['first_charge_path'] = 'FLAT/ONCE original Discount and attributed finalized intended-period Invoice';
-        $report['recipes']['free-period.php']['first_charge_evidence'] = 'synthetic only; ACTIVE ONCE future-use eligibility/targeting, Invoice/tax and collection unverified';
-    }
+    $fixedCoupon = ['id' => 'coupon-fixed', 'active' => true, 'discount_model' => 'FLAT', 'amount_off' => '15.00', 'currency' => 'USD', 'duration_type' => 'ONCE'];
+    $fixedDiscount = ['id' => 'discount-fixed', 'applied_to' => 'SUBSCRIPTION', 'applied_to_id' => $fixedRemote['id'], 'billing_customer_id' => 'customer-adoption', 'source' => 'COUPON', 'source_id' => 'coupon-fixed', 'discount_model' => 'FLAT', 'amount_off' => '15.00', 'currency' => 'USD', 'duration_type' => 'ONCE', 'created_at' => '2026-11-10T12:01:00Z', 'starts_at' => '2026-11-10T12:01:00Z'];
+    $fixedResult = [...$fixedRemote, 'applied_discounts' => [$fixedDiscount], 'updated_at' => '2026-11-10T12:01:00Z'];
+    $http = $bind([...Fixtures::observation($fixedRemote, [$fixedItem]), Fixtures::request('GET', 'billing/coupons/coupon-fixed', $fixedCoupon), Fixtures::request('GET', 'billing/coupons/coupon-fixed', $fixedCoupon), Fixtures::request('GET', 'billing/payment_sources/source-synthetic', Fixtures::source('source-synthetic', 'customer-adoption')), Fixtures::request('POST', 'billing/subscriptions/sub-first-charge/update', $fixedResult), ...Fixtures::observation($fixedResult, [$fixedItem])]);
+    $freeRecipes['apply_first_charge']($fixedSubscription, 'fixed-first-charge', 'coupon-fixed', '15.00', 'USD', $fixedRemote['current_period_ends_at']);
+    $http->assertConsumed();
+    $fixedInvoice = [...Fixtures::invoice('customer-adoption', $fixedRemote['id']), 'id' => 'invoice-fixed', 'total_amount' => '15.00', 'amount_due' => '15.00', 'total_tax_amount' => '0', 'applied_discounts' => [$fixedDiscount], 'total_discount_amounts' => [['applied_discount_id' => 'discount-fixed', 'amount' => '15.00']]];
+    $fixedLine = ['id' => 'invoice-fixed-line', 'invoice_id' => 'invoice-fixed', 'currency' => 'USD', 'amount' => '30.00', 'created_at' => $fixedRemote['current_period_ends_at'], 'updated_at' => $fixedRemote['current_period_ends_at'], 'applied_discounts' => [], 'discount_amounts' => [], 'period_starts_at' => $fixedRemote['current_period_ends_at'], 'period_ends_at' => '2027-01-01T00:00:00Z'];
+    $http = $bind([Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice), Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice), Fixtures::request('GET', 'billing/invoices/invoice-fixed/line_items', ['items' => [$fixedLine]]), Fixtures::request('GET', 'billing/invoices/invoice-fixed', $fixedInvoice)]);
+    adoptionCheck($freeRecipes['first_charge_invoice']($fixedSubscription, 'fixed-first-charge', 'invoice-fixed', '15.00')->toArray()['total_amount'] === '15.00', 'Original first-charge Discount did not prove the synthetic paid remainder.');
+    $http->assertConsumed();
+    $report['recipes']['free-period.php']['first_charge_path'] = 'FLAT/ONCE original Discount and attributed finalized intended-period Invoice';
+    $report['recipes']['free-period.php']['first_charge_evidence'] = 'synthetic only; ACTIVE ONCE future-use eligibility/targeting, Invoice/tax and collection unverified';
     file_put_contents($options['evidence'], json_encode($report, JSON_PRETTY_PRINT | JSON_THROW_ON_ERROR).PHP_EOL);
     echo json_encode(['status' => 'passed', 'recipes_executed' => count($report['recipes'])], JSON_THROW_ON_ERROR).PHP_EOL;
 } catch (Throwable $error) {

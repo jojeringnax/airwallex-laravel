@@ -9,7 +9,6 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
-use Jojeringnax\Airwallex\Resource\Billing;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Models\DomainEvent;
@@ -28,9 +27,6 @@ class InvoiceTransactionsTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        if (! method_exists(Billing::class, 'transactions')) {
-            self::markTestSkipped('Invoice transaction tests require SDK v0.1.2 or later; the legacy v0.1.1 graph is qualified separately.');
-        }
         $this->artisan('migrate', ['--force' => true])->assertSuccessful();
         Schema::create('local_teams', fn (Blueprint $table) => $table->string('id')->primary());
         $this->team = Team::create(['id' => 'team']);

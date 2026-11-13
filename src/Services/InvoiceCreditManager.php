@@ -6,9 +6,9 @@ namespace Jojeringnax\AirwallexLaravel\Services;
 
 use Illuminate\Support\Facades\DB;
 use Jojeringnax\Airwallex\Client;
+use Jojeringnax\Airwallex\Resource\Billing\CreditNotes;
 use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
-use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
@@ -488,17 +488,8 @@ class InvoiceCreditManager
         return CanonicalJson::encode($left) === CanonicalJson::encode($right);
     }
 
-    private function resource(): object
+    private function resource(): CreditNotes
     {
-        return $this->creditNotes($this->client->billing());
-    }
-
-    private function creditNotes(object $billing): object
-    {
-        if (! method_exists($billing, 'creditNotes')) {
-            throw new ConfigurationException('Owned Invoice credits require an explicitly selected and qualified SDK Credit Notes extension.');
-        }
-
-        return call_user_func([$billing, 'creditNotes']);
+        return $this->client->billing()->creditNotes();
     }
 }

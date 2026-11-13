@@ -10,7 +10,6 @@ use Illuminate\Support\Facades\Schema;
 use Jojeringnax\Airwallex\Client;
 use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
-use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
@@ -46,23 +45,8 @@ class InvoiceCreditTest extends TestCase
         $this->invoice = new Invoice('invoice-test', 'customer-test', 'sub-historical', app(BillingContext::class), $customer->id, null, $this->http->invoice);
     }
 
-    public function test_released_sdk_refuses_the_extension_before_any_io(): void
-    {
-        if ($this->available()) {
-            self::markTestSkipped('Released-SDK capability-refusal profile only.');
-        }
-        try {
-            $this->create();
-            self::fail('Missing SDK Credit Notes capability was accepted.');
-        } catch (ConfigurationException) {
-            self::assertSame([], $this->http->requests);
-            self::assertSame(0, Operation::count());
-        }
-    }
-
     public function test_partial_original_invoice_credit_has_three_durable_stages_and_keeps_a_paid_remainder(): void
     {
-        $this->extension();
         $recipe = $this->recipes();
         $create = $recipe['create_credit']($this->invoice, 'free/create', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
         $items = $recipe['add_credit_items']($this->invoice, 'free/items', 'free/create', [['invoice_line_item_id' => 'original-line', 'amount' => '15.00']]);
@@ -91,7 +75,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_consumer_selects_after_payment_refund_allocation_without_inventing_refund_success(): void
     {
-        $this->extension();
         $this->http->invoice['payment_status'] = 'PAID';
         $this->http->invoice['amount_due'] = '0';
         $this->create('AFTER_PAYMENT');
@@ -105,7 +88,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_lost_create_response_requires_original_metadata_and_recovery_never_creates_a_replacement(): void
     {
-        $this->extension();
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic lost response.');
         };
@@ -133,7 +115,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_lost_line_response_recovers_by_direct_indexed_line_correlation_and_not_total(): void
     {
-        $this->extension();
         $this->create();
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic lost response.');
@@ -161,7 +142,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_uncertain_finalization_recovers_the_original_note_without_replaying_after_payment_state_changes(): void
     {
-        $this->extension();
         $this->create();
         $this->add();
         $this->http->afterWrite = static function (): void {
@@ -181,7 +161,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_external_or_changed_draft_lines_and_changed_action_keys_are_refused(): void
     {
-        $this->extension();
         $this->create();
         $this->add();
         $this->http->lines['credit-line-0']['amount'] = '14.00';
@@ -197,7 +176,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_uncertain_stage_holds_the_invoice_financial_mutex_against_a_new_action(): void
     {
-        $this->extension();
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic timeout.');
         };
@@ -217,7 +195,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_duplicate_noncanonical_line_indexes_cannot_prove_a_multi_line_action(): void
     {
-        $this->extension();
         $this->create();
         $this->http->afterWrite = static function ($request, CreditNoteHttpClient $http): void {
             $http->lines['credit-line-1']['metadata']['_laravel_credit_index'] = '00';
@@ -238,7 +215,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_concurrent_original_creation_association_cannot_replace_the_first_committed_identity(): void
     {
-        $this->extension();
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic lost response.');
         };
@@ -267,7 +243,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_expired_worker_fence_retains_unknown_id_and_the_original_hold(): void
     {
-        $this->extension();
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic lost response.');
         };
@@ -298,7 +273,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_offboarding_during_the_final_read_cannot_confirm_an_old_mapping(): void
     {
-        $this->extension();
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic lost response.');
         };
@@ -325,7 +299,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_offboarding_in_finalization_preflight_prevents_the_financial_write(): void
     {
-        $this->extension();
         $root = $this->create();
         $this->add();
         $this->http->beforeRequest = static function ($request, CreditNoteHttpClient $http) use ($root): void {
@@ -344,7 +317,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_public_credit_observation_rechecks_mapping_after_its_last_read(): void
     {
-        $this->extension();
         $root = $this->create();
         $this->http->beforeRequest = static function ($request, CreditNoteHttpClient $http) use ($root): void {
             if (str_ends_with($request->getUri()->getPath(), '/credit_notes/credit-test')) {
@@ -358,7 +330,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_exact_credit_amount_is_preserved_without_currency_scale_rounding(): void
     {
-        $this->extension();
         $this->create();
         $amount = '15.000000000000000001';
         $this->http->creditAmount = $amount;
@@ -370,7 +341,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_weak_callers_cannot_coerce_a_float_into_the_authorized_total(): void
     {
-        $this->extension();
         $this->create();
         $this->add();
         $recipe = $this->recipes();
@@ -384,7 +354,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_incomplete_line_pagination_cannot_publish_partial_proof(): void
     {
-        $this->extension();
         $this->create();
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic lost response.');
@@ -416,7 +385,6 @@ class InvoiceCreditTest extends TestCase
 
     public function test_prepared_restart_checks_a_changed_invoice_before_its_first_write(): void
     {
-        $this->extension();
         $this->app->instance(OperationManager::class, new class(app(BillingContext::class)) extends OperationManager
         {
             public function execute(Operation $operation, \Closure $write, \Closure $confirm): mixed
@@ -443,7 +411,6 @@ class InvoiceCreditTest extends TestCase
     #[DataProvider('processCommands')]
     public function test_real_processes_retain_one_original_invoice_write(array $commands): void
     {
-        $this->extension();
         $directory = sys_get_temp_dir().'/airwallex-credit-race-'.bin2hex(random_bytes(8));
         mkdir($directory, 0700);
         $database = $directory.'/database.sqlite';
@@ -507,7 +474,6 @@ class InvoiceCreditTest extends TestCase
     #[DataProvider('unsupportedItems')]
     public function test_unsupported_or_imprecise_credit_forms_never_reach_a_line_write(array $item): void
     {
-        $this->extension();
         $this->create();
         try {
             $this->invoice->addCreditNoteItems('free/items', 'free/create', [$item]);
@@ -545,17 +511,5 @@ class InvoiceCreditTest extends TestCase
     private function posts(): array
     {
         return array_values(array_filter($this->http->requests, static fn ($request) => $request->getMethod() === 'POST' && ! str_ends_with($request->getUri()->getPath(), '/login')));
-    }
-
-    private function available(): bool
-    {
-        return method_exists(app(Client::class)->billing(), 'creditNotes');
-    }
-
-    private function extension(): void
-    {
-        if (! $this->available()) {
-            self::markTestSkipped('Explicitly selected unreleased SDK Credit Notes profile required.');
-        }
     }
 }

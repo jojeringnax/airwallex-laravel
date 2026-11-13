@@ -12,7 +12,7 @@ python3 tools/test_qualify_candidate.py
 python3 tools/qualify-candidate.py \
   --candidate FULL_40_CHARACTER_COMMIT \
   --composer /absolute/path/composer-2.11.2.phar \
-  --sdk-version 0.1.2 --track all \
+  --sdk-version 0.1.3 --track all \
   --laravel 13 --database sqlite --dependencies latest \
   --workspace build/qualification \
   --output build/candidates
@@ -47,28 +47,26 @@ The final candidate's external evidence records its exact source/SDK revisions, 
 
 ## Adoption tracks and SDK selection
 
-Billing transaction inspection requires released SDK v0.1.2 or later. Qualify the published v0.1.2 source through Packagist without a sibling repository:
+All shipped features require released SDK v0.1.3 or later. Qualify the published v0.1.3 source through Packagist without a sibling repository:
 
 ```sh
 python3 tools/qualify-candidate.py \
   --candidate FULL_PACKAGE_COMMIT \
   --composer /absolute/path/composer-2.11.2.phar \
-  --sdk-version 0.1.2 \
+  --sdk-version 0.1.3 \
   --track all --laravel 13 --database sqlite --dependencies latest
 ```
 
-The optional `--sdk-version` accepts one exact stable version and adds it only to the isolated consumer's requirements. The package's distributed `^0.1.1` constraint is preserved. Composer must satisfy both requirements; the tool verifies the resolved version and matching GitHub source/dist commit and records the public distribution provenance. CI uses `--sdk-version 0.1.2` across its lowest/latest adoption consumers. Applications using transactions must select at least that version and qualify their own installed graph.
+The optional `--sdk-version` accepts one exact stable version and adds it only to the isolated consumer's requirements. The package's distributed `^0.1.3` constraint is preserved. Composer must satisfy both requirements; the tool verifies the resolved version and matching GitHub source/dist commit and records the public distribution provenance. CI uses `--sdk-version 0.1.3` across its lowest/latest adoption consumers. Applications must satisfy that baseline and qualify their own installed graph.
 
-For an unreleased SDK change, `--sdk-repo /absolute/read-only/sdk-repository --sdk-candidate FULL_REVIEWED_SDK_COMMIT` instead exports that exact Git commit into a ZIP with a visibly development `0.1.2-dev` descriptor. This mode records SDK hashes/manifests and compares installed SDK bytes; tagged-release qualification remains pending. It cannot be combined with `--sdk-version`.
+For an unreleased SDK change, `--sdk-repo /absolute/read-only/sdk-repository --sdk-candidate FULL_REVIEWED_SDK_COMMIT` instead exports that exact Git commit into a ZIP with a visibly development `0.1.4-dev` descriptor. This mode records SDK hashes/manifests and compares installed SDK bytes; tagged-release qualification remains pending. It cannot be combined with `--sdk-version`.
 
 `--track baseline` exercises the released recipe set. `subscriptions` adds the adoption subscription/accounting adapters and real optional Cashier fixture; `payments` adds its account-owned helper; `all` runs both against the same package/SDK/dependency graph. The driver requires the union of actually executed recipe names to match every shipped example. Current candidates ship both adoption tracks and require `--track all`. Partial tracks are valid only for an exact historical candidate whose complete shipped example set matches those tracks. An omitted or unsupported track cannot be reported as a passing complete candidate. Each helper is extracted from the same selected package commit; a local uncommitted helper cannot qualify another candidate. The optional Cashier/Testbench/PHPUnit dependencies exist only in that disposable development consumer.
 
 Archive, migrate/rollback/reapply, config-cache and installed recipes run without provider credentials. The SQLite/MySQL selection is an explicit synthetic qualification profile; each application selects and verifies its own supported deployment profile. Passing this tool does not qualify an application deployment, browser clients, an application ledger, provider eligibility or an account journey. Keep `subscriptions-recipes.json`, `payments-recipes.json` when selected, the real-Cashier log and any precise external blockers with the evidence bundle.
 
-## First Packagist registration and updates
+## Packagist release updates
 
-**[Publish for the first time →](https://packagist.org/packages/submit)**
-
-After the release tracker’s required checks pass and the release tag is published, sign in to Packagist, submit `https://github.com/jojeringnax/airwallex-laravel`, and confirm the package. Browser submission needs no Main API Token in GitHub. Verify that the resulting [package page](https://packagist.org/packages/jojeringnax/airwallex-laravel) lists the intended tag/source revision.
+The [package is registered](https://packagist.org/packages/jojeringnax/airwallex-laravel); first-time submission is complete. After the release gates pass, publish the authorized Git tag and GitHub release for the reviewed source. Verify that Packagist lists that exact tag/source revision, then install the tagged package in a fresh consumer. Do not move an existing release tag to a different source revision.
 
 The [Update Packagist action](https://github.com/jojeringnax/airwallex-laravel/actions/workflows/packagist.yml) runs on published GitHub releases and also offers **Run workflow** for a manual refresh after registration. It uses repository secrets `PACKAGIST_USERNAME` and the **Safe** `PACKAGIST_API_TOKEN`, sent in the recommended Authorization header. It only refreshes the fixed registered repository; it does not create a package, tag or release. [Packagist’s API contract](https://packagist.org/apidoc) permits Safe-token updates and requires Main only for API-based first registration.

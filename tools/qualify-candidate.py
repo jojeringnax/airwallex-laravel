@@ -48,7 +48,7 @@ def validate_sdk_selection(repo: Path | None, candidate: str | None, version: st
         if repo is not None or candidate is not None:
             raise ValueError("Select either a released SDK version or an exact development archive.")
         if re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version) is None:
-            raise ValueError("--sdk-version requires an exact stable version, for example 0.1.2.")
+            raise ValueError("--sdk-version requires an exact stable version, for example 0.1.3.")
 
 
 def inspect_archive(archive: Path, required: set[str], *, package_name: str = PACKAGE) -> tuple[dict, dict]:
@@ -199,9 +199,9 @@ class Qualification:
             sdk_tree = self.command("sdk-runtime-tree", ["git", "ls-tree", "-r", "--name-only", sdk_commit, "--", "src", "resources"], sdk_repo)
             sdk_required = {path for path in sdk_tree.splitlines() if not any(part.startswith(".") for part in PurePosixPath(path).parts)}
             sdk_manifest, sdk_metadata = inspect_archive(sdk_archive, {"composer.json", "LICENSE", "README.md"} | sdk_required, package_name=SDK)
-            sdk_repository = package_repository(sdk_metadata, sdk_archive, sdk_commit, version="0.1.2-dev")
+            sdk_repository = package_repository(sdk_metadata, sdk_archive, sdk_commit, version="0.1.4-dev")
             write_json(self.output / "sdk-archive-manifest.json", sdk_manifest)
-            self.evidence["development_sdk"] = {"commit": sdk_commit, "archive": str(sdk_archive), "sha256": digest(sdk_archive.read_bytes()), "tagged_release_qualification": "pending", "version_descriptor": "0.1.2-dev", "path_repository": False}
+            self.evidence["development_sdk"] = {"commit": sdk_commit, "archive": str(sdk_archive), "sha256": digest(sdk_archive.read_bytes()), "tagged_release_qualification": "pending", "version_descriptor": "0.1.4-dev", "path_repository": False}
         write_json(self.output / "package-repository.json", repository)
         self.evidence.update(archive={"path": str(archive), "sha256": digest(archive.read_bytes()), "files": len(manifest), "manifest_sha256": digest(manifest_path.read_bytes())}, sdk_constraint=metadata["require"][SDK])
         if self.args.archive_only:
@@ -253,7 +253,7 @@ class Qualification:
         consumer_metadata = {"name": "qualification/airwallex-consumer", "description": "Isolated deterministic archive consumer qualification.", "type": "project", "license": "MIT", "require": {"php": metadata["require"]["php"], "laravel/framework": framework, PACKAGE: VERSION}, "repositories": [repository], "minimum-stability": "stable", "prefer-stable": True, "config": {"allow-plugins": {}}}
         if sdk_repository is not None:
             consumer_metadata["repositories"].insert(0, sdk_repository)
-            consumer_metadata["require"][SDK] = "0.1.2-dev"
+            consumer_metadata["require"][SDK] = "0.1.4-dev"
         elif self.args.sdk_version is not None:
             consumer_metadata["require"][SDK] = self.args.sdk_version
             self.evidence["selected_sdk_version"] = self.args.sdk_version
@@ -359,8 +359,8 @@ def main() -> int:
     parser.add_argument("--output", type=Path, help="Optional evidence base; a new directory is created per run")
     parser.add_argument("--sdk-repo", type=Path, help="Read-only repository used to archive an unreleased exact SDK commit")
     parser.add_argument("--sdk-candidate", help="Exact SDK commit/ref; requires --sdk-repo and records tagged release qualification pending")
-    parser.add_argument("--sdk-version", help="Exact stable SDK version from Packagist, for example 0.1.2; leaves the package's distributed constraint unchanged")
-    parser.add_argument("--preserve-sdk-objects", action="store_true", help="Enable the optional SDK v0.1.2 object-preserving views in the isolated cached consumer configuration")
+    parser.add_argument("--sdk-version", help="Exact stable SDK version from Packagist, for example 0.1.3; leaves the package's distributed constraint unchanged")
+    parser.add_argument("--preserve-sdk-objects", action="store_true", help="Enable the optional SDK v0.1.3 object-preserving views in the isolated cached consumer configuration")
     parser.add_argument("--track", choices=("baseline", "subscriptions", "payments", "all"), default="baseline", help="Installed recipe tracks; all requires both tracks in the same candidate")
     parser.add_argument("--archive-only", action="store_true", help="Verify archive/descriptor only; never reports consumer qualification passed")
     args = parser.parse_args()

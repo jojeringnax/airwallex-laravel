@@ -5,14 +5,14 @@ Issue [#62](https://github.com/jojeringnax/airwallex-laravel/issues/62) owns thi
 ```sh
 python3 tools/qualify-candidate.py --candidate <reviewed-commit> \
   --composer /absolute/path/to/verified-composer-2.11.2.phar \
-  --laravel 13 --database sqlite --track all --sdk-version 0.1.2 \
+  --laravel 13 --database sqlite --track all --sdk-version 0.1.3 \
   --workspace /private/tmp/airwallex-payments-consumer \
   --output /private/tmp/airwallex-payments-evidence
 ```
 
 For MySQL, precreate an empty disposable `airwallex_test_<lowercase suffix>` schema and set `AIRWALLEX_QUALIFY_MYSQL_DATABASE`, `AIRWALLEX_TEST_MYSQL_HOST`, `AIRWALLEX_TEST_MYSQL_PORT`, `AIRWALLEX_TEST_MYSQL_USER` and `AIRWALLEX_TEST_MYSQL_PASSWORD`; select `--database mysql`. The runner never reads credentials from the consumer application being adopted. These test database credentials must identify the disposable local service. Lowest/latest dependencies and Laravel 12/13 are explicit runner choices; CI exercises the declared matrix.
 
-The current cumulative candidate ships both adoption tracks, so its complete recipe set requires `--track all` and an SDK version supporting Billing transactions, selected here with `--sdk-version 0.1.2` from Packagist. A Payments-only track is valid only for an exact historical candidate whose shipped example set matches it; it uses the declared released SDK constraint. Every recipe in that single archive must appear in the union of executed reports; a missing helper or skipped recipe fails qualification. Tests and helpers are extracted from that candidate's Git blobs into the disposable consumer. Installed tests use its real Composer autoloader and archive source, including subprocess workers, with no repository source override or path repository. Testbench, PHPUnit and real Cashier are optional dependencies of this disposable fixture, not runtime package requirements.
+The current cumulative candidate ships both adoption tracks, so its complete recipe set requires `--track all` and an SDK version supporting Billing transactions, selected here with `--sdk-version 0.1.3` from Packagist. A Payments-only track is valid only for an exact historical candidate whose shipped example set matches it; it uses the declared released SDK constraint. Every recipe in that single archive must appear in the union of executed reports; a missing helper or skipped recipe fails qualification. Tests and helpers are extracted from that candidate's Git blobs into the disposable consumer. Installed tests use its real Composer autoloader and archive source, including subprocess workers, with no repository source override or path repository. Testbench, PHPUnit and real Cashier are optional dependencies of this disposable fixture, not runtime package requirements.
 
 ## Executed application boundary
 

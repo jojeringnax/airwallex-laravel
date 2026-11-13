@@ -11,7 +11,8 @@ permissions:
 
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -66,7 +67,8 @@ jobs:
             composer update --prefer-dist --no-interaction
           fi
       - run: composer check
-      - run: composer check:dependencies
+      - name: Audit locked dependencies with bounded network recovery
+        run: python3 tools/audit-dependencies.py
       - run: python3 tools/test_qualify_candidate.py
       - name: Prepare isolated MySQL consumer schema
         if: matrix.database == 'mysql'
@@ -81,7 +83,7 @@ jobs:
           python3 tools/qualify-candidate.py \
             --candidate "$(git rev-parse HEAD)" \
             --composer "$RUNNER_TEMP/airwallex-composer.phar" \
-            --sdk-version 0.1.2 --preserve-sdk-objects \
+            --sdk-version 0.1.3 --preserve-sdk-objects \
             --track all \
             --laravel "$LARAVEL_MAJOR" --database "$DATABASE" \
             --dependencies "$DEPENDENCIES" \
@@ -101,74 +103,4 @@ jobs:
         with:
           name: consumer-php${{ matrix.php }}-laravel${{ matrix.laravel }}-${{ matrix.database }}-${{ matrix.dependencies }}
           path: ${{ runner.temp }}/airwallex-evidence/
-          if-no-files-found: warn
-
-  coupon-extension:
-    name: Coupon extension (${{ matrix.php }}, ${{ matrix.laravel }}, ${{ matrix.database }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        php: ['8.3', '8.4', '8.5']
-        laravel: ['12', '13']
-        database: [sqlite, mysql]
-    services:
-      mysql:
-        image: mysql:8.4.11
-        env:
-          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
-          MYSQL_DATABASE: airwallex_test
-        ports: ['3306:3306']
-        options: >-
-          --health-cmd="mysqladmin ping --silent"
-          --health-interval=5s
-          --health-timeout=5s
-          --health-retries=20
-    env:
-      AIRWALLEX_TEST_DATABASE: ${{ matrix.database }}
-      AIRWALLEX_TEST_MYSQL_PORT: '3306'
-      AIRWALLEX_QUALIFY_MYSQL_DATABASE: airwallex_test_consumer
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-      - name: Select exact optional SDK extension
-        uses: actions/checkout@v4
-        with:
-          repository: jojeringnax/airwallex-php-sdk
-          ref: 33881b46d696435dfbd370ec371e1fef5452ba44
-          path: .qualification/sdk
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ matrix.php }}
-          extensions: pdo_sqlite, pdo_mysql
-          coverage: none
-          tools: composer:2.11.2
-      - name: Prepare isolated MySQL consumer schema
-        if: matrix.database == 'mysql'
-        run: php -r '(new PDO("mysql:host=127.0.0.1;port=3306", "root", ""))->exec("CREATE DATABASE airwallex_test_consumer");'
-      - name: Qualify pinned Coupon extension in the installed all-track consumer
-        env:
-          LARAVEL_MAJOR: ${{ matrix.laravel }}
-          DATABASE: ${{ matrix.database }}
-        run: |
-          curl --fail --location --silent --show-error --retry 3 https://getcomposer.org/download/2.11.2/composer.phar --output "$RUNNER_TEMP/airwallex-composer.phar"
-          python3 tools/qualify-candidate.py \
-            --candidate "$(git rev-parse HEAD)" \
-            --composer "$RUNNER_TEMP/airwallex-composer.phar" \
-            --sdk-repo "$GITHUB_WORKSPACE/.qualification/sdk" \
-            --sdk-candidate 33881b46d696435dfbd370ec371e1fef5452ba44 \
-            --preserve-sdk-objects --track all \
-            --laravel "$LARAVEL_MAJOR" --database "$DATABASE" \
-            --dependencies latest \
-            --workspace "$RUNNER_TEMP/airwallex-coupon-workspace" \
-            --output "$RUNNER_TEMP/airwallex-coupon-evidence"
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: coupon-php${{ matrix.php }}-laravel${{ matrix.laravel }}-${{ matrix.database }}
-          path: ${{ runner.temp }}/airwallex-coupon-evidence/
           if-no-files-found: warn
