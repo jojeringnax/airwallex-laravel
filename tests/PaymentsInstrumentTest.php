@@ -503,7 +503,7 @@ class PaymentsInstrumentTest extends TestCase
                     throw new RuntimeException('Synthetic response loss after source creation');
                 }
 
-                return FakeHttpClient::json($wrongMethod ? [...$source, 'external_id' => 'another-method'] : $source);
+                return FakeHttpClient::json($wrongMethod ? [...$source, 'external_id' => 'another-method', 'private_profile' => 'SYNTHETIC-PRIVATE-SOURCE-CANARY'] : $source);
             }
 
             return FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent());
@@ -529,11 +529,16 @@ class PaymentsInstrumentTest extends TestCase
             return;
         }
         $wrongMethod = true;
+        $prior = ini_get('zend.exception_ignore_args');
+        ini_set('zend.exception_ignore_args', '0');
         try {
             app(RecoveryManager::class)->operation(BillingOperation::sole(), 'source-one');
             self::fail('A different Method was accepted as original source proof.');
-        } catch (OwnershipException) {
+        } catch (OwnershipException $error) {
             self::assertNull(BillingOperation::sole()->remote_id);
+            self::assertStringNotContainsString('SYNTHETIC-PRIVATE-SOURCE-CANARY', $error->getTraceAsString());
+        } finally {
+            ini_set('zend.exception_ignore_args', $prior);
         }
         $wrongMethod = false;
         self::assertSame('source-one', app(RecoveryManager::class)->operation(BillingOperation::sole(), 'source-one')->id);
