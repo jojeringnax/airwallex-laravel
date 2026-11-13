@@ -373,9 +373,25 @@ class SubscriptionRestorationTest extends TestCase
         }
     }
 
-    public function test_synchronous_listener_reconciliation_does_not_repeat_restoration_confirmation(): void
+    #[DataProvider('restorationCompletionModes')]
+    public function test_synchronous_listener_reconciliation_does_not_repeat_restoration_confirmation(bool $interruptCompletion): void
     {
         [$subscription, $scheduled, $original] = $this->indefiniteSchedule();
+        if ($interruptCompletion) {
+            $this->app->instance(OperationManager::class, new class(app(BillingContext::class)) extends OperationManager
+            {
+                private bool $interrupted = false;
+
+                public function succeed(Operation $operation): void
+                {
+                    if ($operation->action_key === 'on' && ! $this->interrupted) {
+                        $this->interrupted = true;
+                        throw new RuntimeException('Synthetic interruption after the confirmed cap clear.');
+                    }
+                    parent::succeed($operation);
+                }
+            });
+        }
         $restored = [...$original, 'updated_at' => '2026-11-10T12:02:00Z'];
         $http = $this->http([...$this->observation($scheduled), FakeHttpClient::json(Billing::source()), FakeHttpClient::json($restored), ...$this->observation($restored), ...$this->observation($restored)]);
         $observed = false;
@@ -385,11 +401,33 @@ class SubscriptionRestorationTest extends TestCase
                 $subscription->reconcile();
             }
         });
-        $subscription->restoreRenewal('on', 'off');
+        try {
+            $subscription->restoreRenewal('on', 'off');
+            self::assertFalse($interruptCompletion);
+        } catch (AmbiguousOperationException $error) {
+            if (! $interruptCompletion) {
+                throw $error;
+            }
+            $operation = Operation::where('action_key', 'on')->sole();
+            $identity = [$operation->request_id, $operation->intent_hash, $operation->intent];
+            self::assertSame('ambiguous', $operation->status);
+            self::assertNull($subscription->fresh()->ends_at);
+            self::assertNull($subscription->fresh()->scheduled_ends_at);
+            $retry = $this->http($this->observation($restored));
+            $subscription->restoreRenewal('on', 'off');
+            self::assertCount(4, $retry->requests);
+            self::assertSame($identity, [$operation->fresh()->request_id, $operation->fresh()->intent_hash, $operation->fresh()->intent]);
+        }
         self::assertTrue($observed);
         self::assertSame('succeeded', Operation::where('action_key', 'on')->first()->status);
         self::assertNull($subscription->fresh()->ends_at);
+        self::assertNull($subscription->fresh()->scheduled_ends_at);
         self::assertCount(12, $http->requests);
+    }
+
+    public static function restorationCompletionModes(): array
+    {
+        return [[false], [true]];
     }
 
     private function automatic(string $status, bool $indefinite): array
