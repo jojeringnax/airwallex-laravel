@@ -221,7 +221,7 @@ class Qualification:
         if self.args.track in ("subscriptions", "payments", "all"):
             track_files += ["tests/SdkResponseShapeTest.php"]
         if self.args.track in ("subscriptions", "all"):
-            track_files += ["tools/subscription-consumer-check.php", "phpunit.xml", "tests/TestCase.php", "tests/CashierCoexistenceTest.php", "tests/Support/FakeHttpClient.php", "tests/Support/TestDatabase.php", "tests/Fixtures/Billing.php", "tests/Fixtures/Team.php", "tests/Fixtures/InterleavingHttpClient.php", "tests/InvoiceTransactionsTest.php", "tests/SubscriptionFreePeriodTest.php", "tests/InvoiceCreditTest.php", "tests/Fixtures/CreditNoteHttpClient.php", "tests/Fixtures/credit-worker.php", "tests/Consumers/coexistence/bootstrap.php", "tests/Consumers/coexistence/Models.php"]
+            track_files += ["tools/subscription-consumer-check.php", "phpunit.xml", "tests/TestCase.php", "tests/CashierCoexistenceTest.php", "tests/Support/FakeHttpClient.php", "tests/Support/TestDatabase.php", "tests/Fixtures/Billing.php", "tests/Fixtures/Team.php", "tests/Fixtures/InterleavingHttpClient.php", "tests/InvoiceTransactionsTest.php", "tests/SubscriptionFreePeriodTest.php", "tests/FirstChargeDiscountTest.php", "tests/InvoiceCreditTest.php", "tests/Fixtures/CreditNoteHttpClient.php", "tests/Fixtures/credit-worker.php", "tests/Consumers/coexistence/bootstrap.php", "tests/Consumers/coexistence/Models.php"]
         if self.args.track in ("payments", "all"):
             track_files += ["tests/Consumers/coexistence/bootstrap.php", "tools/payments-consumer-check.php", "tools/payments-consumer-fixtures.php", "tests/TestCase.php", "tests/Support/FakeHttpClient.php", "tests/Support/TestDatabase.php", "tests/PaymentsContextTest.php", "tests/PaymentsInstrumentTest.php", "tests/PaymentsIntentTest.php", "tests/PaymentsRefundTest.php", "tests/PaymentsWebhookTest.php", "tests/Fixtures/payments-receipt-worker.php"]
         helper_manifest = extract_tooling(committed_tool, helper_dir, Path(__file__).read_bytes(), tuple(dict.fromkeys(track_files)))
@@ -300,7 +300,7 @@ class Qualification:
             self.env.update(fixture_environment)
             classes = ["SdkResponseShapeTest"]
             if self.args.track in ("subscriptions", "all"):
-                classes += ["CashierCoexistenceTest", "InvoiceTransactionsTest", "SubscriptionFreePeriodTest", "InvoiceCreditTest"]
+                classes += ["CashierCoexistenceTest", "InvoiceTransactionsTest", "SubscriptionFreePeriodTest", "FirstChargeDiscountTest", "InvoiceCreditTest"]
             if self.args.track in ("payments", "all"):
                 classes += ["PaymentsContextTest", "PaymentsInstrumentTest", "PaymentsIntentTest", "PaymentsRefundTest", "PaymentsWebhookTest"]
             self.command("consumer-installed-resource-tests", [php, str(consumer / "vendor/bin/phpunit"), "--no-configuration", "--bootstrap", str(consumer / "tests/Consumers/coexistence/bootstrap.php"), *[str(consumer / "tests" / (name + ".php")) for name in classes], "--fail-on-warning", "--fail-on-risky"], consumer)

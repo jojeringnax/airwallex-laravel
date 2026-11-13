@@ -18,7 +18,7 @@ use SensitiveParameter;
 /** Bounded native Coupon evidence; commercial eligibility and invoice accounting belong to the application. */
 class FreePeriodEvidence
 {
-    public function __construct(private readonly BillingContext $context) {}
+    public function __construct(protected readonly BillingContext $context) {}
 
     public function coupon(string $id): array
     {
@@ -108,7 +108,7 @@ class FreePeriodEvidence
         }
     }
 
-    private function discounts(#[SensitiveParameter] array $resource): array
+    protected function discounts(#[SensitiveParameter] array $resource): array
     {
         $discounts = $resource['applied_discounts'] ?? null;
         if (! is_array($discounts) || ! array_is_list($discounts)) {
@@ -124,7 +124,7 @@ class FreePeriodEvidence
     }
 
     /** Resolve the optional public resource across the supported SDK baseline and selected extensions. */
-    private function couponsResource(object $billing): object
+    protected function couponsResource(object $billing): object
     {
         if (! method_exists($billing, 'coupons')) {
             throw new ConfigurationException('Free periods require an explicitly selected SDK with Billing Coupon retrieval.');

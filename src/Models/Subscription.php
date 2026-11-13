@@ -12,6 +12,7 @@ use Jojeringnax\AirwallexLaravel\Contracts\SubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\DefaultSubscriptionAccessPolicy;
 use Jojeringnax\AirwallexLaravel\Invoice;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
+use Jojeringnax\AirwallexLaravel\Services\FirstChargeDiscountEvidence;
 use Jojeringnax\AirwallexLaravel\Services\InvoiceManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
@@ -113,6 +114,21 @@ class Subscription extends BillingModel
     public function removeFreePeriod(string $actionKey, string $originalActionKey): Subscription
     {
         return app(SubscriptionManager::class)->removeFreePeriod($this, $actionKey, $originalActionKey);
+    }
+
+    public function applyFirstChargeDiscount(string $actionKey, string $couponId, mixed $amountOff, string $currency, string $boundary): Subscription
+    {
+        return app(SubscriptionManager::class)->applyFirstChargeDiscount($this, $actionKey, $couponId, $amountOff, $currency, $boundary);
+    }
+
+    public function removeFirstChargeDiscount(string $actionKey, string $originalActionKey): Subscription
+    {
+        return app(SubscriptionManager::class)->removeFirstChargeDiscount($this, $actionKey, $originalActionKey);
+    }
+
+    public function firstChargeDiscountInvoice(string $originalActionKey, string $invoiceId, mixed $expectedTotal): Invoice
+    {
+        return app(FirstChargeDiscountEvidence::class)->invoice($this, $originalActionKey, $invoiceId, $expectedTotal);
     }
 
     public function cancelAtPeriodEnd(string $actionKey, ?array $renewalBounds = null): Subscription
