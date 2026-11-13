@@ -193,8 +193,9 @@ class SubscriptionManager
 
     private function assertTransitionDispatch(Subscription $current, string $expectedShape, string $expiresAt, ?string $effectiveAt = null, int $shapeVersion = 1): void
     {
+        $now = now()->format('Y-m-d\TH:i:s.uP');
         if ($current->status !== 'ACTIVE' || SubscriptionTransitionManager::shape($current, $shapeVersion) !== $expectedShape
-            || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $expiresAt) > 0) {
+            || Timestamp::compare($now, $expiresAt) > 0) {
             throw new EvidenceException('Transition window, source state or expected financial shape no longer matches.');
         }
         if ($effectiveAt !== null) {
@@ -202,7 +203,7 @@ class SubscriptionManager
             $end = $current->snapshot['current_period_ends_at'] ?? null;
             if (! is_string($start) || ! is_string($end)
                 || Timestamp::compare($effectiveAt, $start) < 0 || Timestamp::compare($effectiveAt, $end) >= 0
-                || Timestamp::compare(now()->format('Y-m-d\TH:i:s.uP'), $end) >= 0) {
+                || Timestamp::compare($now, $effectiveAt) < 0 || Timestamp::compare($now, $end) >= 0) {
                 throw new EvidenceException('The intended execution time does not belong to the confirmed current billing cycle.');
             }
         }

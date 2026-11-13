@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+// New plans retain billing anchor, cadence and tax controls; replan before any write if these change.
+
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionTransition;
 

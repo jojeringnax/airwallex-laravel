@@ -22,6 +22,7 @@ use Jojeringnax\AirwallexLaravel\Tests\Fixtures\InterleavingHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Jojeringnax\AirwallexLaravel\Timestamp;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
 use RuntimeException;
 
@@ -79,7 +80,7 @@ class SubscriptionTransitionTest extends TestCase
         $original = SubscriptionTransitionManager::shape($this->subscription);
         $this->http($this->observation());
         $plan = $this->plan();
-        self::assertSame(2, $plan->intent['shape_version']);
+        self::assertSame(3, $plan->intent['shape_version']);
         $remote = Billing::subscription(['applied_discounts' => [['id' => 'external-discount']], 'updated_at' => '2026-12-01T00:00:00Z']);
         Carbon::setTestNow('2026-12-01T00:00:01Z');
         $http = $this->http($this->observation($remote));
@@ -105,6 +106,65 @@ class SubscriptionTransitionTest extends TestCase
         self::assertSame(1, SubscriptionTransition::whereNotNull('active_key')->count());
         $this->expectException(ConflictException::class);
         $this->subscription->scheduleTransition('replacement', '2026-12-03T00:00:00Z', [['id' => 'item-test', 'quantity' => 3]], self::OPTIONS, '2026-12-03T00:10:00Z');
+    }
+
+    #[DataProvider('financialChanges')]
+    public function test_new_plan_blocks_changed_financial_controls_before_preparing_a_command(array $subscriptionChange, array $itemChange): void
+    {
+        $remote = Billing::subscription(['billing_cycle_anchor_at' => '2026-11-01T00:00:00Z', 'default_tax_percent' => '0']);
+        $item = Billing::item(['quantity' => '1', 'tax_percent' => '0']);
+        $this->http($this->observation($remote, $item));
+        $plan = $this->plan();
+        $legacy = [SubscriptionTransitionManager::shape($this->subscription->fresh(), 1), SubscriptionTransitionManager::shape($this->subscription->fresh(), 2)];
+        Carbon::setTestNow('2026-12-01T00:00:01Z');
+        $http = $this->http($this->observation([...$remote, ...$subscriptionChange, 'updated_at' => '2026-12-01T00:00:00Z'], [...$item, ...$itemChange]));
+        try {
+            $plan->run();
+            self::fail('A changed financial baseline reached the due mutation.');
+        } catch (EvidenceException) {
+            self::assertSame('blocked', $plan->fresh()->status);
+            self::assertNotNull($plan->fresh()->getAttribute('active_key'));
+            self::assertSame(0, Operation::count());
+            self::assertCount(4, $http->requests);
+            self::assertSame($legacy, [SubscriptionTransitionManager::shape($this->subscription->fresh(), 1), SubscriptionTransitionManager::shape($this->subscription->fresh(), 2)]);
+        }
+    }
+
+    public static function financialChanges(): iterable
+    {
+        yield 'anchor reset' => [['billing_cycle_anchor_at' => '2026-11-15T00:00:00Z'], []];
+        yield 'cadence' => [['recurring' => ['period' => 2, 'period_unit' => 'MONTH']], []];
+        yield 'currency' => [['currency' => 'EUR'], []];
+        yield 'total duration' => [['duration' => ['period' => 12, 'period_unit' => 'MONTH']], []];
+        yield 'due days' => [['days_until_due' => 1], []];
+        yield 'default tax' => [['default_tax_percent' => '10.125'], []];
+        yield 'automatic tax' => [['enable_automatic_tax' => true], []];
+        yield 'item tax' => [[], ['tax_percent' => '5.25']];
+        yield 'cleared anchor' => [['billing_cycle_anchor_at' => null], []];
+    }
+
+    public function test_source_preflight_clock_correction_back_before_due_time_blocks_the_first_write(): void
+    {
+        $remote = Billing::subscription(['collection_method' => 'AUTO_CHARGE', 'payment_source_id' => 'source-test', 'updated_at' => '2026-11-10T12:01:00Z']);
+        $this->http($this->observation($remote));
+        $plan = $this->plan();
+        Carbon::setTestNow('2026-12-01T00:00:01Z');
+        $http = new InterleavingHttpClient([FakeHttpClient::login(), ...$this->observation($remote), function () {
+            Carbon::setTestNow('2026-11-30T23:59:59Z');
+
+            return FakeHttpClient::json(Billing::source());
+        }]);
+        app('cache')->flush();
+        $this->app->bind(ClientInterface::class, fn () => $http);
+        $this->app->forgetInstance(Client::class);
+        try {
+            $plan->run();
+            self::fail('A clock correction allowed an early financial action.');
+        } catch (EvidenceException) {
+            self::assertSame('failed', Operation::firstOrFail()->status);
+            self::assertSame('blocked', $plan->fresh()->status);
+            self::assertCount(5, $http->requests);
+        }
     }
 
     public function test_changed_source_or_missed_window_blocks_before_any_financial_operation(): void
