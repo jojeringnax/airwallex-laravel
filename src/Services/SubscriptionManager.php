@@ -688,15 +688,7 @@ class SubscriptionManager
                 || Timestamp::compare($subscription->snapshot['ends_at'], $end) !== 0) {
                 throw new EvidenceException('The dated Subscription end is not yet canonically confirmed.');
             }
-            DB::transaction(function () use ($subscription, $end): void {
-                app(CommitGuard::class)->assertMayCommit();
-                $changed = ModelRegistry::query('subscription')->whereKey($subscription->id)->where('revision', $subscription->revision)
-                    ->update(['scheduled_ends_at' => $end]);
-                if ($changed !== 1) {
-                    throw new ConflictException('Subscription changed during dated-end confirmation.');
-                }
-                $subscription->scheduled_ends_at = $end;
-            });
+            $this->confirmScheduleProjection($subscription, ['scheduled_ends_at' => $end]);
         }
         if ($operation->kind === 'subscription.restore_renewal') {
             $snapshot = $subscription->snapshot;
@@ -711,16 +703,7 @@ class SubscriptionManager
                 || ($snapshot['cancel_at_period_end'] ?? null) !== false || ! $boundsConfirmed) {
                 throw new EvidenceException('The original renewal intent is not yet canonically restored.');
             }
-            DB::transaction(function () use ($subscription, $indefinite): void {
-                app(CommitGuard::class)->assertMayCommit();
-                $attributes = ['scheduled_ends_at' => null, ...($indefinite ? ['ends_at' => null] : [])];
-                $changed = ModelRegistry::query('subscription')->whereKey($subscription->id)->where('revision', $subscription->revision)
-                    ->update($attributes);
-                if ($changed !== 1) {
-                    throw new ConflictException('Subscription changed during restoration confirmation.');
-                }
-                $subscription->forceFill($attributes);
-            });
+            $this->confirmScheduleProjection($subscription, ['scheduled_ends_at' => null, ...($indefinite ? ['ends_at' => null] : [])]);
         }
         if (! $controlsConfirmed && $operation->kind === 'subscription.cancel' && $subscription->status !== 'CANCELLED') {
             throw new EvidenceException('Immediate cancellation is not yet confirmed by the provider state.');
@@ -754,6 +737,30 @@ class SubscriptionManager
         }
 
         return true;
+    }
+
+    /** @param array<string,?string> $attributes */
+    private function confirmScheduleProjection(Subscription $subscription, array $attributes): void
+    {
+        DB::transaction(function () use ($subscription, $attributes): void {
+            app(CommitGuard::class)->assertMayCommit();
+            $query = ModelRegistry::query('subscription')->whereKey($subscription->id)->where('revision', $subscription->revision);
+            $query->lockForUpdate();
+            $current = (clone $query)->first();
+            if ($current === null) {
+                throw new ConflictException('Subscription changed during scheduled-end confirmation.');
+            }
+            $unchanged = true;
+            foreach ($attributes as $key => $value) {
+                $unchanged = $unchanged && $current->getAttribute($key) === $value;
+            }
+            // MySQL counts changed rows: an already-projected cap or repeated null
+            // clear is successful only after the locked revision has been verified.
+            if (! $unchanged && $query->update($attributes) !== 1) {
+                throw new ConflictException('Subscription changed during scheduled-end confirmation.');
+            }
+            $subscription->forceFill($attributes);
+        });
     }
 
     private function assertRestorationDispatch(Subscription $current, Operation $operation): void
