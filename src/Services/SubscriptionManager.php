@@ -266,9 +266,9 @@ class SubscriptionManager
         $this->context->assertModel($current);
         // A repeated attempted action must retain read-only recovery after its date passes.
         if (! ModelRegistry::query('operation')->where([...$this->context->attributes(), 'action_key' => $actionKey])->exists()) {
-            $this->assertDatedEnding($current, $end);
+            $this->assertDatedEnding($current, $end, $renewalBounds);
         }
-        $guard = fn (Subscription $current) => $this->assertDatedEnding($current, $end);
+        $guard = fn (Subscription $current) => $this->assertDatedEnding($current, $end, $renewalBounds);
 
         return $this->change($subscription, $actionKey, 'subscription.schedule_ending_at', $specification,
             function (Subscription $current) use ($guard, $end, $options): array {
@@ -278,10 +278,12 @@ class SubscriptionManager
             }, $guard);
     }
 
-    private function assertDatedEnding(Subscription $subscription, string $end): void
+    private function assertDatedEnding(Subscription $subscription, string $end, ?array $renewalBounds = null): void
     {
         $this->context->assertModel($subscription);
-        if (! in_array($subscription->status, ['PENDING', 'IN_TRIAL', 'ACTIVE'], true)
+        $bounds = $this->renewalBounds($subscription, $renewalBounds);
+        if (! is_array($bounds) || ! $this->supportedRestoration($subscription->snapshot, $bounds)
+            || ! in_array($subscription->status, ['PENDING', 'IN_TRIAL', 'ACTIVE'], true)
             || ! in_array($subscription->snapshot['collection_method'] ?? null, ['AUTO_CHARGE', 'CHARGE_ON_CHECKOUT', 'OUT_OF_BAND'], true)
             || $subscription->cancel_at_period_end !== false || $subscription->scheduled_ends_at !== null
             || Timestamp::compare($end, now()->format('Y-m-d\TH:i:s.uP')) <= 0
