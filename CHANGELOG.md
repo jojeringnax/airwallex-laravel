@@ -1,8 +1,12 @@
 # Release notes
 
-## Unreleased
+## 0.3.0 — 2026-11-16
 
-- Changes creation retry behavior: a different action key no longer automatically supersedes an unknown-ID creation or releases its reservation. Competing Billing and Payments commands fail before a second creation request, with the holding operation ID when available. Same-key calls retain the original intent/request ID and never replay an attempted write. Consumers must explicitly authorize `CreationRetries::allowRetry()` to accept duplicate risk; repeated release cannot displace a replacement. Existing superseded history remains quarantined. This public-behavior change requires the next minor release and the [upgrade steps](UPGRADING.md#unreleased-creation-idempotency).
+This minor release changes creation retry behavior to prevent a new action key from silently authorizing a duplicate provider resource. Follow the [v0.2.0 upgrade steps](UPGRADING.md#upgrading-from-020).
+
+- A different action key no longer automatically supersedes an unknown-ID creation or releases its reservation. Competing Billing and Payments commands fail before a second creation request, with the holding operation ID when available. Same-key calls retain the original intent/request ID and never replay an attempted write. Consumers must explicitly authorize `CreationRetries::allowRetry()` to accept duplicate risk; repeated release cannot displace a replacement. Existing superseded history remains quarantined. Rejecting a competing key leaves the original response eligible for canonical adoption.
+
+No schema migration or SDK upgrade is required from v0.2.0. PHP, Laravel, database and SDK `^0.1.3` support remain unchanged. Account-specific Sandbox journeys remain supplemental; this release makes no new provider financial or settlement claim.
 
 ## 0.2.0 — 2026-11-13
 
