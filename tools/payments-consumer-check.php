@@ -23,6 +23,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\ObservationDispatcher;
 use Jojeringnax\AirwallexLaravel\Payments\Receipts;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Laravel\Cashier\Cashier;
 use Psr\Http\Client\ClientInterface;
 use RuntimeException;
@@ -251,11 +252,19 @@ try {
     } catch (AmbiguousOperationException) {
     }
     check($writes === $http->writes(), 'The original uncertain creation was replayed.');
+    try {
+        $intentRecipe($owner, 'replace-lost', 'payable-lost', '123', 'USD');
+        throw new RuntimeException('A different key released the original uncertain creation.');
+    } catch (ConflictException) {
+    }
+    check($writes === $http->writes() && $lost->fresh()->status === 'ambiguous'
+        && $lost->lock_key !== null && $lost->retry_release === null, 'A rejected new key changed the original reservation.');
+    app(CreationRetries::class)->allowRetry($lost, 'consumer', 'explicit replacement');
     $replacement = $intentRecipe($owner, 'replace-lost', 'payable-lost', '123', 'USD');
     $lost->refresh();
     check($lost->status === 'superseded' && $lost->retry_release['outcome'] === 'unknown' && $lost->remote_id === null
         && $originalIdentity === [$lost->request_id, $lost->intent_hash, $lost->intent]
-        && $replacement->remote_id !== null && $writes + 1 === $http->writes(), 'A new command blocked the customer or changed the original uncertain identity.');
+        && $replacement->remote_id !== null && $writes + 1 === $http->writes(), 'Explicit retry changed the original uncertain identity or failed to permit the replacement.');
     $writes = $http->writes();
     try {
         $recipe('payments-recovery.php')($owner, 'intent', $lost->id, 'int-2');
@@ -285,7 +294,7 @@ try {
             check(! str_contains((string) $stored, 'SYNTHETIC-PRIVATE'), 'A durable snapshot exposed browser secrets.');
         }
     }
-    $report['checks'] = ['cached_native_consumer', 'original_model_cashier_refund', 'prepared_configuration_repair', 'ephemeral_setup_and_intent_bootstrap', 'zero_no_charge', 'merchant_initiated_saved_card', 'customer_present_wallet_php_seams', 'refund_credit_note_review_handoff', 'synthetic_3ds_canonical_return', 'pending_capture_no_replay', 'partial_cumulative_capture_ledger', 'billing_hint_canonical_dedup', 'listener_redelivery', 'pending_partial_full_remaining_refund', 'accepted_settled_single_credit', 'signed_duplicate_reordered_receipt', 'new_key_creation_retry_retains_unknown_original_and_quarantines_late_locator'];
+    $report['checks'] = ['cached_native_consumer', 'original_model_cashier_refund', 'prepared_configuration_repair', 'ephemeral_setup_and_intent_bootstrap', 'zero_no_charge', 'merchant_initiated_saved_card', 'customer_present_wallet_php_seams', 'refund_credit_note_review_handoff', 'synthetic_3ds_canonical_return', 'pending_capture_no_replay', 'partial_cumulative_capture_ledger', 'billing_hint_canonical_dedup', 'listener_redelivery', 'pending_partial_full_remaining_refund', 'accepted_settled_single_credit', 'signed_duplicate_reordered_receipt', 'blocked_new_key_and_explicit_creation_retry_preserve_original_identity'];
     $report['limitations'] = ['Synthetic transport only; no account, browser, wallet, 3DS, settlement, target deployment or accounting policy qualification.', 'Billing hint is synthetic; exact installed Billing transaction reads are qualified by the separate subscriptions track.', 'Application payable remains partially funded; canonical paid() is not an order-total assertion.'];
     file_put_contents($options['evidence'], json_encode($report, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)."\n");
     echo json_encode(['status' => 'passed', 'recipes' => count($report['recipes']), 'checks' => count($report['checks'])])."\n";

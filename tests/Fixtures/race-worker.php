@@ -88,7 +88,7 @@ try {
         fwrite(STDOUT, json_encode(['customer' => $customer->id, 'subscription' => $subscription->id], JSON_THROW_ON_ERROR));
         exit;
     }
-    $operation = $manager->prepare($customer, $command, 'create', ['price' => 'price'], [], name: 'default');
+    $operation = $manager->prepare($customer, $command, 'subscription.create', ['price' => 'price'], [], name: 'default');
     if (in_array($argv[4] ?? '', ['execute', 'execute-unconfirmed'], true)) {
         // Finish both preparation transactions before racing the same durable claim.
         fwrite(STDOUT, "PREPARED\n");

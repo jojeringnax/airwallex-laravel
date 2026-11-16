@@ -18,6 +18,7 @@ use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Support\TestDatabase;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
 use Symfony\Component\Process\Process;
 
@@ -51,6 +52,17 @@ class ConcurrencyTest extends TestCase
     public function test_competing_claims_retain_one_ambiguous_write_when_confirmation_fails(): void
     {
         $this->race(false, sameCommand: true, execute: true, failConfirmation: true);
+    }
+
+    #[DataProvider('unresolvedCreationStates')]
+    public function test_separate_processes_cannot_replace_an_unresolved_creation(string $state): void
+    {
+        $this->race(false, heldState: $state);
+    }
+
+    public static function unresolvedCreationStates(): array
+    {
+        return [['in_flight'], ['ambiguous']];
     }
 
     public function test_stale_process_cannot_restore_old_access_or_displace_a_replacement_generation(): void
@@ -103,7 +115,7 @@ class ConcurrencyTest extends TestCase
         }
     }
 
-    private function race(bool $import, bool $delayCreate = false, bool $sameCommand = false, bool $execute = false, bool $failConfirmation = false): void
+    private function race(bool $import, bool $delayCreate = false, bool $sameCommand = false, bool $execute = false, bool $failConfirmation = false, ?string $heldState = null): void
     {
         $directory = sys_get_temp_dir().'/airwallex-race-'.bin2hex(random_bytes(8));
         mkdir($directory, 0700);
@@ -124,10 +136,13 @@ class ConcurrencyTest extends TestCase
             if ($import) {
                 app(OperationManager::class)->reserveCustomer($team)->update(['remote_id' => 'customer-test']);
             }
-            if ($execute) {
+            if ($execute || $heldState !== null) {
                 $customer = app(OperationManager::class)->reserveCustomer($team);
-                $originalOperation = app(OperationManager::class)->prepare($customer, 'command-a', 'create', ['price' => 'price'], [], name: 'default');
+                $originalOperation = app(OperationManager::class)->prepare($customer, 'command-a', 'subscription.create', ['price' => 'price'], [], name: 'default');
                 $originalSlot = SubscriptionSlot::sole();
+                if ($heldState !== null) {
+                    $originalOperation->update(['status' => $heldState]);
+                }
             }
             foreach (['command-a', $sameCommand ? 'command-a' : 'command-b'] as $index => $command) {
                 $process = new Process([PHP_BINARY, '-d', 'display_errors=stderr', __DIR__.'/Fixtures/race-worker.php', $database, $barrier, $command, $execute ? ($failConfirmation ? 'execute-unconfirmed' : 'execute') : (($import && $index === 1) ? 'import' : ($delayCreate ? 'delayed-create' : 'create'))], dirname(__DIR__));
@@ -173,13 +188,23 @@ class ConcurrencyTest extends TestCase
             self::assertSame(1, Customer::count());
             self::assertSame(1, Operation::count() + Subscription::count());
             self::assertSame(1, SubscriptionSlot::count());
+            if ($heldState !== null) {
+                self::assertNotNull($originalOperation);
+                self::assertNotNull($operation);
+                self::assertSame($originalOperation->id, $operation->id);
+                self::assertSame($heldState, $operation->status);
+                self::assertSame($originalOperation->request_id, $operation->request_id);
+                self::assertSame($originalOperation->intent_hash, $operation->intent_hash);
+                self::assertSame($originalOperation->lock_key, $operation->lock_key);
+                self::assertNull($operation->getAttribute('retry_release'));
+            }
             $successes = array_filter($results, fn (array $result) => isset($result['operation']) || isset($result['subscription']));
             if (! $execute) {
                 self::assertGreaterThanOrEqual(1, count($successes), $diagnostics);
             }
             if ($sameCommand && ! $execute) {
                 $customer = Customer::first();
-                $recovered = app(OperationManager::class)->prepare($customer, 'command-a', 'create', ['price' => 'price'], [], name: 'default');
+                $recovered = app(OperationManager::class)->prepare($customer, 'command-a', 'subscription.create', ['price' => 'price'], [], name: 'default');
                 self::assertSame(Operation::first()->id, $recovered->id);
                 self::assertCount(1, array_unique(array_column($successes, 'operation')));
             } elseif (! $execute) {

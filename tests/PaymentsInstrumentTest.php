@@ -22,6 +22,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Services\RecoveryManager;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
@@ -516,6 +517,13 @@ class PaymentsInstrumentTest extends TestCase
         }
         if ($retry) {
             $original = BillingOperation::sole();
+            try {
+                app(Instruments::class)->createBillingSource($this->customer, 'cst-one', $billing, 'source-new-key');
+                self::fail('A different key released an unknown Billing Source.');
+            } catch (ConflictException) {
+                self::assertSame('ambiguous', $original->fresh()->status);
+            }
+            app(CreationRetries::class)->allowRetry($original, 'consumer', 'explicit replacement');
             try {
                 app(Instruments::class)->createBillingSource($this->customer, 'cst-one', $billing, 'source-new-key');
                 self::fail('The synthetic second lost response must remain unknown.');

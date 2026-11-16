@@ -22,6 +22,7 @@ use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use Psr\Http\Client\ClientInterface;
@@ -481,13 +482,14 @@ class CustomerTest extends TestCase
         self::assertSame(1, Customer::count());
     }
 
-    public function test_new_creation_key_permits_duplicate_and_quarantines_the_late_original_response(): void
+    public function test_explicit_retry_release_permits_duplicate_and_quarantines_the_late_original_response(): void
     {
         $team = $this->team();
         $retried = false;
         $http = $this->http([FakeHttpClient::login(), self::remote('Customer-B'), self::remote('Customer-A')], function (RequestInterface $request) use ($team, &$retried): void {
             if (str_ends_with($request->getUri()->getPath(), '/create') && ! $retried) {
                 $retried = true;
+                app(CreationRetries::class)->allowRetry(Operation::sole(), 'consumer', 'explicit replacement');
                 self::assertSame('Customer-B', $team->createOrGetAirwallexCustomer('competing-create')->remote_id);
             }
         });

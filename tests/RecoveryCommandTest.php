@@ -108,8 +108,13 @@ class RecoveryCommandTest extends TestCase
         self::assertStringNotContainsString('ticket-108', Artisan::output());
         self::assertSame(0, SubscriptionSlot::count());
         self::assertCount(0, $http->requests);
+        $audit = $operation->fresh()->getAttribute('retry_release');
+        $replacement = app(OperationManager::class)->prepare($this->customer, 'replacement', 'subscription.create', [], [], name: 'default');
         self::assertSame(0, Artisan::call('airwallex:allow-creation-retry', ['id' => $operation->id, '--actor' => 'operator-2', '--reason' => 'repeat']));
         self::assertSame('operator-1', $operation->fresh()->getAttribute('retry_release')['actor']);
+        self::assertSame($audit, $operation->fresh()->getAttribute('retry_release'));
+        self::assertSame($replacement->id, SubscriptionSlot::sole()->operation_id);
+        self::assertNotNull($replacement->fresh()->lock_key);
         $originalSetting = ini_set('zend.exception_ignore_args', '0');
         $privateReason = str_repeat('private-retry-reason', 200);
         try {

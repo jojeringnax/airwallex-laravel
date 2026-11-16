@@ -15,6 +15,7 @@ use Jojeringnax\AirwallexLaravel\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Models\DomainEvent;
 use Jojeringnax\AirwallexLaravel\Models\Subscription;
 use Jojeringnax\AirwallexLaravel\Models\SubscriptionSlot;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Services\RecoveryManager;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -94,6 +95,15 @@ class OperationTest extends TestCase
         self::assertSame('ambiguous', $operation->fresh()->status);
         self::assertNotNull($operation->fresh()->lock_key);
         self::assertSame(1, SubscriptionSlot::count());
+        try {
+            $this->manager->prepare($this->customer, 'new-command', 'subscription.create', [], [], name: 'default');
+            self::fail('A different key released an unknown creation.');
+        } catch (ConflictException) {
+            self::assertSame('ambiguous', $operation->fresh()->status);
+            self::assertNull($operation->getAttribute('retry_release'));
+            self::assertSame($operation->id, SubscriptionSlot::sole()->operation_id);
+        }
+        app(CreationRetries::class)->allowRetry($operation, 'consumer', 'explicit replacement');
         $replacement = $this->manager->prepare($this->customer, 'new-command', 'subscription.create', [], [], name: 'default');
         self::assertSame('superseded', $operation->fresh()->status);
         self::assertNull($operation->fresh()->lock_key);
@@ -138,8 +148,9 @@ class OperationTest extends TestCase
         $replacement = null;
         $confirmed = false;
         try {
-            $this->manager->execute($operation, function () use ($supersede, &$replacement): array {
+            $this->manager->execute($operation, function () use ($operation, $supersede, &$replacement): array {
                 if ($supersede) {
+                    app(CreationRetries::class)->allowRetry($operation, 'consumer', 'explicit in-flight replacement');
                     $replacement = $this->manager->prepare($this->customer, 'replacement', 'subscription.create', [], [], name: 'default');
                 }
 

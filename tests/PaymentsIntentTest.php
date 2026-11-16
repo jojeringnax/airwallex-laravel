@@ -21,6 +21,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Psr\Http\Client\ClientInterface;
@@ -231,6 +232,15 @@ class PaymentsIntentTest extends TestCase
         $this->afterWrite = null;
         $writes = $this->writes();
         if ($retry) {
+            try {
+                $this->payments->createIntent('replacement', 'order', '10', 'USD');
+                self::fail('A different key released an unknown Intent/order reservation.');
+            } catch (ConflictException) {
+                self::assertSame($writes, $this->writes());
+                self::assertSame('ambiguous', $operation->fresh()->status);
+                self::assertSame('order', Intent::sole()->order_reservation);
+            }
+            app(CreationRetries::class)->allowRetry($operation, 'consumer', 'explicit replacement');
             $replacement = $this->payments->createIntent('replacement', 'order', '10', 'USD');
             self::assertSame($writes + 1, $this->writes());
             self::assertSame('superseded', $operation->fresh()->status);

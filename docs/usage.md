@@ -71,7 +71,7 @@ Creating first reserves the local mapping and records the write identity. Gettin
 
 ## Named subscriptions and checkout
 
-Persist an application command key before invoking a financial action. Reuse that key and exact intent for retries; each distinct authorized action gets a different key. A changed intent under the same key conflicts. Never replace an uncertain command with a new key merely to retry it; use [read recovery](operations.md#uncertain-actions).
+Persist an application command key before invoking a financial action. Reuse that key and exact intent across requests and workers for the same business action; generate a new key only for a distinct authorized action. A changed intent under the same key conflicts. A different key cannot release an uncertain command's reservation and raises `ConflictException`, whose nullable `operationId` identifies the holding operation when available. Use [read recovery](operations.md#uncertain-actions); deliberately permitting another creation requires the separate [explicit retry release](operations.md#retrying-an-unknown-creation).
 
 ```php
 $subscription = $team->newSubscription('default', $priceId)

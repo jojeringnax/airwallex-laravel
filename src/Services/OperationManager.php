@@ -68,7 +68,10 @@ class OperationManager
                     return $existing;
                 }
                 $lockKey ??= $subscription ? 'subscription/'.$subscription->id : 'customer/'.$customer->id;
-                app(CreationRetries::class)->release($customer, $lockKey, $identity['action_key'], $kind);
+                $holder = ModelRegistry::query('operation')->where([...$this->context->attributes(), 'lock_key' => $lockKey])->first();
+                if ($holder !== null) {
+                    throw new ConflictException('An existing billing operation holds this reservation.', $holder->id);
+                }
                 /** @var Operation $operation */
                 $operation = ModelRegistry::make('operation', [...$identity, 'customer_id' => $customer->id, 'subscription_id' => $subscription?->id, 'kind' => $kind, 'intent_hash' => $hash, 'intent' => $intent, 'request_id' => (string) Str::uuid(), 'status' => 'prepared', 'lock_key' => $lockKey]);
                 $operation->save();

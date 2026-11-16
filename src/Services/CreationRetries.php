@@ -5,41 +5,22 @@ declare(strict_types=1);
 namespace Jojeringnax\AirwallexLaravel\Services;
 
 use Closure;
-use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
 use Jojeringnax\AirwallexLaravel\BillingContext;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\ModelRegistry;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Context;
-use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation as PaymentOperation;
 use Jojeringnax\AirwallexLaravel\Payments\Observations;
 use SensitiveParameter;
 
-/** A new consumer command may risk a duplicate; it never proves noncreation. */
+/** Explicit consumer release of an unknown creation; never proof of noncreation. */
 class CreationRetries
 {
     public static function creation(string $kind): bool
     {
         return str_ends_with($kind, '.create') || in_array($kind, ['checkout.subscription', 'checkout.setup'], true);
-    }
-
-    /** @internal Called with the owning customer locked, before reserving a new command. */
-    public function release(Model $customer, string $lock, string $newKey, string $kind): void
-    {
-        if (! self::creation($kind)) {
-            return;
-        }
-        $payments = $customer instanceof Customer;
-        $query = $payments ? PaymentOperation::query() : ModelRegistry::query('operation');
-        $query->where('customer_id', $customer->getKey())->where('lock_key', $lock)->whereIn('status', ['in_flight', 'ambiguous'])->whereNull('remote_id');
-        $query->lockForUpdate();
-        $old = $query->first();
-        if ($old === null || ! self::creation($old->getAttribute('kind'))) {
-            return;
-        }
-        $this->supersede($old, 'consumer_new_action', 'new_creation_requested', $newKey);
     }
 
     /** Explicit consumer/operator choice, also usable after a crashed in-flight worker. */
@@ -116,7 +97,7 @@ class CreationRetries
     public function assertCurrent(Operation|PaymentOperation $operation, ?string $candidate = null): void
     {
         if ($this->quarantined($operation, $candidate)) {
-            throw new ConflictException('This unknown creation was superseded by a new consumer command; reconcile its locator manually without adopting it.', $operation->id);
+            throw new ConflictException('This unknown creation was superseded; reconcile its locator manually without adopting it.', $operation->id);
         }
     }
 }

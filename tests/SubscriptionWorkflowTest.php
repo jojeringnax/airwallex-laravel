@@ -22,6 +22,7 @@ use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionManager;
 use Jojeringnax\AirwallexLaravel\SubscriptionBuilder;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Billing;
+use Jojeringnax\AirwallexLaravel\Tests\Fixtures\InterleavingHttpClient;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\Team;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -180,6 +181,58 @@ class SubscriptionWorkflowTest extends TestCase
         self::assertCount(2, $http->requests);
         self::assertSame(1, Operation::count());
         self::assertNotNull(SubscriptionSlot::first()->operation_id);
+        try {
+            $this->team->newSubscription('default', 'price-test')->create('another-key', ['collection_method' => 'OUT_OF_BAND']);
+            self::fail('A different key released an uncertain creation.');
+        } catch (ConflictException) {
+            self::assertSame('ambiguous', Operation::sole()->status);
+            self::assertNull(Operation::sole()->getAttribute('retry_release'));
+            self::assertCount(2, $http->requests);
+        }
+    }
+
+    #[DataProvider('overlappingCreations')]
+    public function test_overlapping_subscription_commands_send_one_create_and_adopt_the_original(bool $hosted, bool $sameKey, bool $otherMode): void
+    {
+        $method = $hosted ? 'checkout' : 'create';
+        $options = $hosted ? ['success_url' => 'https://app.example.test/success', 'back_url' => 'https://app.example.test/back'] : ['collection_method' => 'OUT_OF_BAND'];
+        $remote = $hosted ? Billing::checkout() : Billing::subscription();
+        $http = new InterleavingHttpClient([FakeHttpClient::login(), function () use ($hosted, $sameKey, $otherMode, $method, $options, $remote) {
+            $original = Operation::sole();
+            $identity = [$original->id, $original->request_id, $original->intent_hash, $original->lock_key];
+            self::assertSame('in_flight', $original->status);
+            $competingMethod = $otherMode ? ($hosted ? 'create' : 'checkout') : $method;
+            $competingOptions = $otherMode ? ($hosted ? ['collection_method' => 'OUT_OF_BAND'] : ['success_url' => 'https://app.example.test/success', 'back_url' => 'https://app.example.test/back']) : $options;
+            try {
+                $this->team->newSubscription('default', 'price-test')->{$competingMethod}($sameKey ? 'original' : 'competing', $competingOptions);
+                self::fail('An overlapping call created a second resource.');
+            } catch (AmbiguousOperationException|ConflictException $exception) {
+                self::assertInstanceOf($sameKey ? AmbiguousOperationException::class : ConflictException::class, $exception);
+                self::assertSame($original->id, $exception->operationId);
+            }
+            $original->refresh();
+            self::assertSame($identity, [$original->id, $original->request_id, $original->intent_hash, $original->lock_key]);
+            self::assertSame('in_flight', $original->status);
+            self::assertNull($original->getAttribute('retry_release'));
+            self::assertSame(1, Operation::count());
+
+            return FakeHttpClient::json($remote);
+        }, ...($hosted ? [FakeHttpClient::json($remote)] : $this->observation($remote))]);
+        $this->app->bind(ClientInterface::class, fn () => $http);
+        $this->app->forgetInstance(Client::class);
+        $result = $this->team->newSubscription('default', 'price-test')->{$method}('original', $options);
+        self::assertSame($remote['id'], $result->remote_id);
+        self::assertSame('succeeded', Operation::sole()->status);
+        self::assertSame($hosted ? 0 : 1, Subscription::count());
+        self::assertCount(1, array_filter($http->requests, fn ($request) => str_ends_with($request->getUri()->getPath(), '/create')));
+        $count = count($http->requests);
+        self::assertSame($result->id, $this->team->newSubscription('default', 'price-test')->{$method}('original', $options)->id);
+        self::assertCount($count, $http->requests);
+    }
+
+    public static function overlappingCreations(): array
+    {
+        return [[false, true, false], [false, false, false], [false, false, true], [true, true, false], [true, false, false], [true, false, true]];
     }
 
     public function test_recorded_create_response_can_recover_after_canonical_read_failure(): void
