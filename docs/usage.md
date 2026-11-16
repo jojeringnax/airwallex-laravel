@@ -10,7 +10,7 @@ Start here when installing the package or writing application billing code. [Sco
 
 ## Install and configure
 
-This guide describes v0.2.0. Use the [exact review candidate archive](release.md) before publication; once v0.2.0 is listed on [Packagist](https://packagist.org/packages/jojeringnax/airwallex-laravel), install it with `composer require jojeringnax/airwallex-laravel:^0.2`. The required released SDK is `jojeringnax/airwallex-php-sdk:^0.1.3`, with no sibling/path repository. Review [upgrade guidance](../UPGRADING.md) for existing v0.1.0 applications and [compatibility](compatibility.md) for supported runtime/backends.
+This guide describes v0.3.0. Install the published package with `composer require jojeringnax/airwallex-laravel:^0.3`; verify its version and source on [Packagist](https://packagist.org/packages/jojeringnax/airwallex-laravel). Use the [exact review candidate archive](release.md) for pre-publication qualification. The required released SDK is `jojeringnax/airwallex-php-sdk:^0.1.3`, with no sibling/path repository. Review [upgrade guidance](../UPGRADING.md) for existing v0.1.0/v0.2.0 applications and [compatibility](compatibility.md) for supported runtime/backends.
 
 Laravel discovers the provider automatically. Publish configuration, configure external credentials, and migrate:
 
