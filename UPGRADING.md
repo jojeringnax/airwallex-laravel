@@ -1,6 +1,16 @@
 # Installation and upgrades
 
-This guide covers upgrading from v0.1.0 to v0.2.0. Verify version availability and exact source on [Packagist](https://packagist.org/packages/jojeringnax/airwallex-laravel). Before publication, install the exact reviewed archive using the local `0.2.0-RC1` descriptor in [candidate installation](docs/release.md); that descriptor is not a published tag.
+## Unreleased creation idempotency
+
+Ordinary Billing and Payments creation calls no longer release earlier uncertain creations automatically. A different key now raises `ConflictException` while the reservation remains active; its nullable `operationId` identifies the holding operation when available. Reuse one persisted application command key across requests, queue attempts and recovery for the same business action; changing the key does not resolve a lost response. Same-key calls retain the original provider request ID and never send an attempted creation again. Resolve an unknown outcome through the existing read-only recovery APIs or commands.
+
+Applications that intentionally permit another creation despite possible duplicates must explicitly authorize the original operation and call `Services\CreationRetries::allowRetry($operation, $actor, $reason)` before issuing a new command. The [retry runbook](docs/operations.md#retrying-an-unknown-creation) explains the audit and retained obligations. The override does not cancel an active worker, provider resource or request and does not prove noncreation. Repeating the override cannot release a replacement operation.
+
+This replaces v0.2.0's automatic new-key policy and requires a new minor release under the [compatibility policy](docs/compatibility.md). No schema change is needed. Existing `superseded` rows, original request identities, retry audits and late-resource quarantine remain intact; the fix does not revive them or cancel any existing provider duplicates. Inspect and service historical obligations separately.
+
+## Released v0.2.0
+
+The following sections record the v0.1.0 to v0.2.0 upgrade. The unreleased creation-idempotency section above supersedes their automatic retry behavior. Verify version availability and exact source on [Packagist](https://packagist.org/packages/jojeringnax/airwallex-laravel). Before publication, install the exact reviewed archive using the local `0.2.0-RC1` descriptor in [candidate installation](docs/release.md); that descriptor is not a published tag.
 
 ## Upgrading from 0.1.0
 
@@ -10,9 +20,9 @@ Apply all pending package migrations before deploying the new code. They include
 
 ### Creation retries and retained obligations
 
-A new creation action key may now supersede an unknown-ID `in_flight` or `ambiguous` creation and release its local reservation automatically. This deliberately accepts possible provider duplicates; it does not prove the original failed. Reusing an attempted original key never resends it. Original intents/request identities remain history. Known remote resources and other mutation coordination keep their existing rules. Correcting local SDK configuration can resume an unattempted prepared original under its same key.
+In v0.2.0, a new creation action key could supersede an unknown-ID `in_flight` or `ambiguous` creation and release its local reservation automatically. This deliberately accepts possible provider duplicates; it does not prove the original failed. Reusing an attempted original key never resends it. Original intents/request identities remain history. Known remote resources and other mutation coordination keep their existing rules. Correcting local SDK configuration can resume an unattempted prepared original under its same key.
 
-Implement listeners for [retry and late-locator observations](docs/operations.md#retrying-an-unknown-creation) when the application needs duplicate servicing. Billing uses `CreationRetryObserved`; Payments uses `PaymentObserved` classifications. Late locators stay quarantined until explicitly inspected and serviced by the consumer. An optional context-scoped `airwallex:allow-creation-retry` command records an actor/reason privately; ordinary new-key customer retry needs no operator action.
+Implement listeners for [retry and late-locator observations](docs/operations.md#retrying-an-unknown-creation) when the application needs duplicate servicing. Billing uses `CreationRetryObserved`; Payments uses `PaymentObserved` classifications. Late locators stay quarantined until explicitly inspected and serviced by the consumer. The context-scoped `airwallex:allow-creation-retry` command records an actor/reason privately. v0.2.0 also released reservations automatically for ordinary new-key calls; unreleased source now requires the explicit action.
 
 The migration backfills current `order_reservation` values from immutable `merchant_order_id`. Superseded Intent generations release their own current reservation while retaining order history. Rollback to the old unique-order schema refuses once duplicate-order history exists. Do not delete or rename financial records to force rollback. Canonically observed remote refunds still consume refundable capacity after an unseen local reservation is released.
 

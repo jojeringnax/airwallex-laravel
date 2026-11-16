@@ -52,7 +52,10 @@ class Operations
                 }
 
                 $lock ??= 'customer/'.$customer->id;
-                app(CreationRetries::class)->release($current, $lock, $key, $kind);
+                $holder = Operation::query()->where([...$this->context->attributes(), 'lock_key' => $lock])->first();
+                if ($holder !== null) {
+                    throw new ConflictException('An existing Payments operation holds this reservation.', $holder->id);
+                }
 
                 return Operation::query()->create([
                     ...$this->context->attributes(), 'customer_id' => $customer->id, 'action_key' => $key,

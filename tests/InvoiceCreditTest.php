@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Invoice;
 use Jojeringnax\AirwallexLaravel\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
+use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\OperationManager;
 use Jojeringnax\AirwallexLaravel\Services\RecoveryManager;
 use Jojeringnax\AirwallexLaravel\Tests\Fixtures\CreditNoteHttpClient;
@@ -174,7 +175,7 @@ class InvoiceCreditTest extends TestCase
         $this->invoice->createCreditNote('free/create', 'AFTER_PAYMENT', 'GOODWILL_GESTURE');
     }
 
-    public function test_new_creation_key_releases_unknown_credit_note_without_asserting_noncreation(): void
+    public function test_unknown_credit_note_requires_explicit_retry_release(): void
     {
         $this->http->afterWrite = static function (): void {
             throw new RuntimeException('Synthetic timeout.');
@@ -184,6 +185,15 @@ class InvoiceCreditTest extends TestCase
         } catch (AmbiguousOperationException) {
         }
         $this->http->afterWrite = null;
+        $original = Operation::where('action_key', 'free/create')->sole();
+        try {
+            $this->invoice->createCreditNote('replacement', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
+            self::fail('A different key released the original Invoice reservation.');
+        } catch (ConflictException) {
+            self::assertCount(1, $this->posts());
+            self::assertSame('ambiguous', $original->fresh()->status);
+        }
+        app(CreationRetries::class)->allowRetry($original, 'consumer', 'explicit replacement');
         $replacement = $this->invoice->createCreditNote('replacement', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');
         self::assertCount(2, $this->posts());
         self::assertSame(2, Operation::count());

@@ -1,5 +1,9 @@
 # Release notes
 
+## Unreleased
+
+- Changes creation retry behavior: a different action key no longer automatically supersedes an unknown-ID creation or releases its reservation. Competing Billing and Payments commands fail before a second creation request, with the holding operation ID when available. Same-key calls retain the original intent/request ID and never replay an attempted write. Consumers must explicitly authorize `CreationRetries::allowRetry()` to accept duplicate risk; repeated release cannot displace a replacement. Existing superseded history remains quarantined. This public-behavior change requires the next minor release and the [upgrade steps](UPGRADING.md#unreleased-creation-idempotency).
+
 ## 0.2.0 — 2026-11-13
 
 This minor release changes dependency support and creation retry behavior. Publication and the exact tagged source are verified separately on [Packagist](https://packagist.org/packages/jojeringnax/airwallex-laravel). Follow [upgrade guidance](UPGRADING.md#upgrading-from-010) before deployment.
