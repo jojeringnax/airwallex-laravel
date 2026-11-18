@@ -115,6 +115,8 @@ class PaymentsIntentTest extends TestCase
         $imported = $instruments->adoptVerifiedCard($customer, 'consent-owned', 'method-owned');
 
         self::assertSame($customer->id, $imported->customer_id);
+        self::assertSame('merchant', $imported->next_triggered_by);
+        self::assertSame('unscheduled', $imported->merchant_trigger_reason);
         self::assertSame($imported->id, $instruments->adoptVerifiedCard($customer, 'consent-owned', 'method-owned')->id);
         self::assertSame(1, Instrument::count());
         self::assertSame(1, Observation::count());
@@ -135,7 +137,6 @@ class PaymentsIntentTest extends TestCase
 
         $this->afterWrite = function (Operation $operation, array &$state): void {
             if ($operation->kind === 'intent.confirm') {
-                self::assertSame('merchant', $operation->intent['body']['triggered_by']);
                 self::assertSame('consent-owned', $operation->intent['body']['payment_consent_id']);
                 $state['status'] = 'SUCCEEDED';
                 $state['captured_amount'] = '1.25';
