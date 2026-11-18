@@ -12,7 +12,7 @@ python3 tools/test_qualify_candidate.py
 python3 tools/qualify-candidate.py \
   --candidate FULL_40_CHARACTER_COMMIT \
   --composer /absolute/path/composer-2.11.2.phar \
-  --sdk-version 0.1.3 --track all \
+  --sdk-version 0.2.0 --track all \
   --laravel 13 --database sqlite --dependencies latest \
   --workspace build/qualification \
   --output build/candidates
@@ -47,17 +47,17 @@ The final candidate's external evidence records its exact source/SDK revisions, 
 
 ## Adoption tracks and SDK selection
 
-All shipped features require released SDK v0.1.3 or later. Qualify the published v0.1.3 source through Packagist without a sibling repository:
+All shipped features require the released SDK v0.2 minor line. Qualify the published v0.2.0 source through Packagist without a sibling repository:
 
 ```sh
 python3 tools/qualify-candidate.py \
   --candidate FULL_PACKAGE_COMMIT \
   --composer /absolute/path/composer-2.11.2.phar \
-  --sdk-version 0.1.3 \
+  --sdk-version 0.2.0 \
   --track all --laravel 13 --database sqlite --dependencies latest
 ```
 
-The optional `--sdk-version` accepts one exact stable version and adds it only to the isolated consumer's requirements. The package's distributed `^0.1.3` constraint is preserved. Composer must satisfy both requirements; the tool verifies the resolved version and matching GitHub source/dist commit and records the public distribution provenance. CI uses `--sdk-version 0.1.3` across its lowest/latest adoption consumers. Applications must satisfy that baseline and qualify their own installed graph.
+The optional `--sdk-version` accepts one exact stable version and adds it only to the isolated consumer's requirements. The package's distributed `^0.2.0` constraint is preserved. Composer must satisfy both requirements; the tool verifies the resolved version and matching GitHub source/dist commit and records the public distribution provenance. CI uses `--sdk-version 0.2.0` across its lowest/latest adoption consumers. Applications must satisfy that baseline and qualify their own installed graph.
 
 For an unreleased SDK change, `--sdk-repo /absolute/read-only/sdk-repository --sdk-candidate FULL_REVIEWED_SDK_COMMIT` instead exports that exact Git commit into a ZIP with a visibly development `0.1.4-dev` descriptor. This mode records SDK hashes/manifests and compares installed SDK bytes; tagged-release qualification remains pending. It cannot be combined with `--sdk-version`.
 
