@@ -159,7 +159,7 @@ class PaymentsAccountObservationsTest extends TestCase
         self::assertSame('PENDING', Deposit::firstOrFail()->status);
 
         $this->http->responses[] = FakeHttpClient::json([...$settled, 'amount' => '10.0100']);
-        $body = $this->signal('evt-settled', 'deposit.settled', ['id' => 'dep-one', 'status' => 'PENDING']);
+        $body = $this->signal('evt-settled', 'deposit.settled', ['id' => 'dep-one', 'status' => 'PENDING'], direct: true);
         self::assertSame('processed', $this->deliver($body)->status);
         self::assertSame('processed', $this->deliver($body)->status);
         $deposit = Deposit::firstOrFail();
@@ -186,6 +186,23 @@ class PaymentsAccountObservationsTest extends TestCase
         self::assertFalse($deposit->fresh()->settled());
         self::assertSame(['PENDING', 'SETTLED', 'REVERSED'], $this->statuses('airwallex_global_account_deposits'));
         self::assertSame(1, Deposit::count());
+    }
+
+    public function test_direct_deposit_delivery_cannot_bypass_wrapper_or_merchant_proof(): void
+    {
+        $wrapped = $this->deliver($this->signal('evt-malformed-wrapper', 'deposit.settled', [
+            'id' => 'dep-one', 'object' => null,
+        ], direct: true));
+        self::assertSame('quarantined', $wrapped->status);
+        self::assertSame('malformed_resource', $wrapped->last_error);
+
+        $foreign = $this->deliver($this->signal('evt-foreign-direct', 'deposit.settled', [
+            'id' => 'dep-one',
+        ], account: 'acct-foreign', direct: true));
+        self::assertSame('quarantined', $foreign->status);
+        self::assertSame('foreign_context', $foreign->last_error);
+        self::assertSame([], $this->http->requests);
+        self::assertSame(0, Deposit::count());
     }
 
     public function test_deposit_recovery_reuses_pages_filters_global_account_and_checks_merchant_context(): void
@@ -235,9 +252,9 @@ class PaymentsAccountObservationsTest extends TestCase
         return ['id' => $id, 'global_account_id' => 'ga-owned', 'type' => 'BANK_TRANSFER', 'status' => 'PENDING', 'amount' => '10.01', 'currency' => 'AUD', 'created_at' => self::START];
     }
 
-    private function signal(string $id, string $name, array $locator, string $account = 'acct-owner'): string
+    private function signal(string $id, string $name, array $locator, string $account = 'acct-owner', bool $direct = false): string
     {
-        return json_encode(['id' => $id, 'name' => $name, 'account_id' => $account, 'version' => '2026-08-21', 'created_at' => self::END, 'data' => ['object' => $locator]], JSON_THROW_ON_ERROR);
+        return json_encode(['id' => $id, 'name' => $name, 'account_id' => $account, 'version' => '2026-08-21', 'created_at' => self::END, 'data' => $direct ? $locator : ['object' => $locator]], JSON_THROW_ON_ERROR);
     }
 
     private function deliver(string $body): Receipt

@@ -9,7 +9,7 @@ use Jojeringnax\AirwallexLaravel\Support\CanonicalJson;
 use Jojeringnax\AirwallexLaravel\Timestamp;
 use Throwable;
 
-/** Selected-version generic Payments envelope; aliases/direct-data samples are unverified. */
+/** Selected-version Payments envelopes, including the observed direct deposit form. */
 final class WebhookEnvelope
 {
     private const EVENTS = [
@@ -54,7 +54,10 @@ final class WebhookEnvelope
             return [...$result, 'status' => 'ignored', 'reason' => 'unsupported_event'];
         }
         $data = $envelope['data'] ?? null;
-        $resource = is_array($data) && array_key_exists('object', $data) ? $data['object'] : null;
+        $resource = $family === 'deposit' ? $data : null;
+        if (is_array($data) && array_key_exists('object', $data)) {
+            $resource = $data['object'];
+        }
         if (! is_array($resource) || array_is_list($resource) || Proof::identifier($resource['id'] ?? null) === null) {
             return [...$result, 'family' => $family, 'reason' => 'malformed_resource'];
         }
