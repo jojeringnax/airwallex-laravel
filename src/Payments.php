@@ -85,6 +85,16 @@ final readonly class Payments
         return app(Payments\Intents::class)->bootstrap($this->requiredCustomer(), $intent);
     }
 
+    public function paymentAttempt(Intent $intent, ?string $attemptId = null): ?Payments\PaymentAttempt
+    {
+        return app(Payments\Intents::class)->paymentAttempt($this->requiredCustomer(), $intent, $attemptId);
+    }
+
+    public function savedCardChallenge(Intent $intent, string $consentId): Payments\BrowserChallenge
+    {
+        return app(Payments\Intents::class)->savedCardChallenge($this->requiredCustomer(), $intent, $consentId);
+    }
+
     public function confirmIntent(Intent $intent, string $actionKey, string $consentId, array $options = []): Intent
     {
         return app(Payments\Intents::class)->confirmWithConsent($this->requiredCustomer(), $intent, $actionKey, $consentId, $options);

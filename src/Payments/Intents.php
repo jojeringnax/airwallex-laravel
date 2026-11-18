@@ -87,6 +87,105 @@ class Intents
         return new BrowserIntent($intent, $remote['client_secret'], $remote['next_action'] ?? null);
     }
 
+    public function paymentAttempt(Customer $customer, Intent $intent, ?string $attemptId = null): ?PaymentAttempt
+    {
+        $intent = $this->reconcile($customer, $intent);
+
+        return $this->readAttempt($intent, $attemptId);
+    }
+
+    public function savedCardChallenge(Customer $customer, Intent $intent, string $consentId): BrowserChallenge
+    {
+        $customer = $this->confirmedCustomer($customer);
+        $intent = $this->owned($customer, $intent);
+        if ($intent->remote_id === null) {
+            throw new ConflictException('A confirmed Payments intent is required for a saved-card challenge.');
+        }
+        $instrument = app(Instruments::class)->verified($customer, $consentId);
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentIntents()->retrieve($intent->remote_id));
+        $intent = $this->observe($customer, $intent, $remote, $intent->remote_id);
+        if ($intent->status !== 'REQUIRES_CUSTOMER_ACTION') {
+            throw new ConflictException('This Payments intent has no outstanding customer action.');
+        }
+        $requestId = $remote['request_id'] ?? null;
+        $operation = is_string($requestId) ? Operation::query()->where([
+            ...$this->context->attributes(), 'customer_id' => $customer->id, 'kind' => 'intent.confirm',
+            'target_id' => $intent->remote_id, 'request_id' => $requestId,
+        ])->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'succeeded'])->first() : null;
+        if ($operation === null || ($operation->intent['body']['payment_consent_id'] ?? null) !== $consentId
+            || ($operation->intent['body']['triggered_by'] ?? null) !== 'merchant') {
+            throw new OwnershipException('The outstanding customer action does not match the original saved-card confirmation.');
+        }
+        $attempt = $this->readAttempt($intent);
+        if ($attempt === null || $attempt->status !== 'AUTHENTICATION_REDIRECTED') {
+            throw new EvidenceException('A canonical attempt awaiting authentication is required.');
+        }
+        if (($attempt->consentId === null && $attempt->methodId === null)
+            || ($attempt->consentId !== null && $attempt->consentId !== $consentId)
+            || ($attempt->methodId !== null && $attempt->methodId !== $instrument->method_id)) {
+            throw new OwnershipException('The challenge attempt does not link to the original saved card.');
+        }
+        $action = $remote['next_action'] ?? null;
+        $url = is_array($action) ? ($action['url'] ?? null) : null;
+        if (! is_array($action) || ($action['type'] ?? null) !== 'redirect_iframe' || ($action['method'] ?? null) !== 'GET'
+            || ! is_string($url) || filter_var($url, FILTER_VALIDATE_URL) === false
+            || parse_url($url, PHP_URL_SCHEME) !== 'https' || parse_url($url, PHP_URL_USER) !== null) {
+            throw new EvidenceException('Provider did not return a supported HTTPS saved-card challenge.');
+        }
+        $current = $this->owned($customer, $intent);
+        if ($current->status !== $intent->status || ($current->snapshot['updated_at'] ?? null) !== $remote['updated_at']
+            || $this->latestAttemptId($current) !== $attempt->id) {
+            throw new ConflictException('The Payments intent changed during its challenge read.');
+        }
+        app(Instruments::class)->assertUsableReservation($customer, $consentId);
+
+        return new BrowserChallenge($attempt->paymentIntentId, $attempt->id, $url);
+    }
+
+    private function readAttempt(Intent $intent, ?string $attemptId = null): ?PaymentAttempt
+    {
+        $attemptId ??= $this->latestAttemptId($intent);
+        if ($attemptId === null) {
+            return null;
+        }
+        if ($attemptId === '') {
+            throw new EvidenceException('Payments attempt identity is missing.');
+        }
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentAttempts()->retrieve($attemptId));
+        Proof::identity($remote, $attemptId, $this->context);
+        if ($intent->remote_id === null || ($remote['payment_intent_id'] ?? null) !== $intent->remote_id
+            || (isset($remote['currency']) && $remote['currency'] !== $intent->currency)) {
+            throw new OwnershipException('Payments attempt does not belong to this intent and currency.');
+        }
+        if (! is_string($remote['status'] ?? null) || $remote['status'] === '') {
+            throw new EvidenceException('Payments attempt has no canonical status.');
+        }
+        $failure = is_array($remote['failure_details'] ?? null) ? $remote['failure_details'] : [];
+        $method = is_array($remote['payment_method'] ?? null) ? $remote['payment_method'] : [];
+        $card = is_array($method['card'] ?? null) ? $method['card'] : [];
+        $optional = static fn (mixed $value): ?string => is_string($value) && $value !== '' ? $value : null;
+
+        return new PaymentAttempt(
+            $attemptId, $intent->remote_id, $remote['status'], $optional($remote['failure_code'] ?? null),
+            $optional($failure['code'] ?? null), $optional($failure['message'] ?? null) ?? $optional($remote['provider_original_response_description'] ?? null),
+            $optional($remote['provider_original_response_code'] ?? null), $optional($card['brand'] ?? null),
+            $optional($remote['payment_consent_id'] ?? null), $optional($method['id'] ?? null),
+        );
+    }
+
+    private function latestAttemptId(Intent $intent): ?string
+    {
+        $attempt = $intent->snapshot['latest_payment_attempt'] ?? null;
+        if ($attempt === null) {
+            return null;
+        }
+        if (! is_array($attempt) || ! is_string($attempt['id'] ?? null) || $attempt['id'] === '') {
+            throw new EvidenceException('Latest Payments attempt has no canonical identity.');
+        }
+
+        return $attempt['id'];
+    }
+
     /** Merchant-initiated saved-instrument charge; no raw card credentials accepted. */
     public function confirmWithConsent(Customer $customer, Intent $intent, string $key, string $consentId, array $options = []): Intent
     {
@@ -195,6 +294,17 @@ class Intents
             $this->operations->rejectPrepared($operation);
             throw new ConflictException('Canonical intent is not eligible for this financial action.', $operation->id);
         }
+        if ($action === 'confirm') {
+            try {
+                $attempt = $this->readAttempt($canonical);
+                if ($attempt !== null && ! in_array($attempt->status, ['FAILED', 'EXPIRED', 'CANCELLED'], true)) {
+                    throw new ConflictException('An earlier attempt has no confirmed unsuccessful outcome.', $operation->id);
+                }
+            } catch (Throwable $exception) {
+                $this->operations->rejectPrepared($operation);
+                throw $exception;
+            }
+        }
         if ($action === 'capture') {
             $requested = Amount::units($body['amount'], $canonical->currency);
             if ($requested === '0' || $canonical->captured_amount === null
@@ -209,7 +319,10 @@ class Intents
             return $this->operations->execute($operation,
                 fn () => app(Client::class)->sdk->payments()->paymentIntents()->{$action}($canonical->remote_id, [...$body, 'request_id' => $operation->request_id]),
                 fn () => $this->confirm($customer, $canonical, $operation, $canonical->remote_id),
-                ($consentId === null && $methodId === null) ? null : function () use ($customer, $consentId, $methodId): void {
+                function () use ($customer, $canonical, $consentId, $methodId, $operation): void {
+                    if ($this->owned($customer, $canonical)->revision !== $canonical->revision) {
+                        throw new ConflictException('Canonical intent changed before the financial action was claimed.', $operation->id);
+                    }
                     if ($consentId !== null) {
                         app(Instruments::class)->assertUsableReservation($customer, $consentId);
                     }
@@ -241,6 +354,8 @@ class Intents
             'intent.capture' => $result->captured_amount !== null
                 && Amount::compare(Amount::units($result->captured_amount, $result->currency), Amount::add(Amount::units($operation->intent['before_captured'] ?? '0', $result->currency), Amount::units($operation->intent['body']['amount'], $result->currency))) >= 0,
             'intent.cancel' => $result->status === 'CANCELLED',
+            'intent.confirm' => $result->status !== 'REQUIRES_PAYMENT_METHOD'
+                || in_array($this->readAttempt($result)?->status, ['FAILED', 'EXPIRED', 'CANCELLED'], true),
             default => true,
         };
         if (! $fulfilled) {
@@ -293,7 +408,12 @@ class Intents
             if ($changed !== 1) {
                 throw new ConflictException('Concurrent intent observation must be refreshed.');
             }
-            $current->forceFill(['remote_id' => $id, 'status' => $remote['status'], 'captured_amount' => $captured, 'snapshot' => SubscriptionSynchronizer::sanitize($remote)])->save();
+            $snapshot = SubscriptionSynchronizer::sanitize($remote);
+            unset($snapshot['next_action'], $snapshot['authentication_data']);
+            if (is_array($snapshot['latest_payment_attempt'] ?? null)) {
+                unset($snapshot['latest_payment_attempt']['next_action'], $snapshot['latest_payment_attempt']['authentication_data']);
+            }
+            $current->forceFill(['remote_id' => $id, 'status' => $remote['status'], 'captured_amount' => $captured, 'snapshot' => $snapshot])->save();
             $this->observations->record($current, ['remote_id' => $id, 'status' => $current->status, 'amount' => $current->amount, 'currency' => $current->currency, 'captured_amount' => $captured, 'financial_identity' => 'payment_intent/'.$id]);
 
             return $current->refresh();

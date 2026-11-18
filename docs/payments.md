@@ -60,3 +60,41 @@ Capture/cancellation request acceptance alone leaves an acknowledged operation a
 The required released SDK **v0.1.3** (`33881b46d696435dfbd370ec371e1fef5452ba44`) owns HTTP, API request validation, signatures and exact number encoding. Official [Customers](https://www.airwallex.com/docs/api/payments/customers), [Consents](https://www.airwallex.com/docs/api/payments/payment_consents), [Methods](https://www.airwallex.com/docs/api/payments/payment_methods), [Intents](https://www.airwallex.com/docs/api/payments/payment_intents), [Attempts](https://www.airwallex.com/docs/api/payments/payment_attempts) and [Refunds](https://www.airwallex.com/docs/api/payments/refunds) page metadata was rechecked on 2026-11-11 with `currentVersion=2026-08-21`. Customer create/update require `request_id`; responses expose merchant/customer and request identities. The [API-key guide](https://www.airwallex.com/docs/developer-tools/api/manage-api-keys) distinguishes account Payments from organization Billing. Synthetic tests establish package behavior, never activation, instrument availability, actual charges or provider delivery. Separately scoped [Payments sandbox qualification](https://github.com/jojeringnax/airwallex-laravel/issues/64) remains required.
 
 Installed application recipes, cumulative cash/refund accounting and exact archive evidence are described in [Payments qualification](payments-qualification.md).
+
+
+## Payment attempts and saved-card authentication
+
+```php
+$attempt = $payments->paymentAttempt($ownedIntent); // The latest canonical attempt, or null.
+$historical = $payments->paymentAttempt($ownedIntent, $knownAttemptId);
+```
+
+`paymentAttempt(Intent $intent, ?string $attemptId = null): ?PaymentAttempt` verifies the latest Intent under its original Customer and configured merchant account. It reads the attempt separately and verifies its original Intent ID and any returned currency/context. A missing latest attempt reference returns null. A supplied attempt ID requires that same canonical ownership proof, including for historical attempts. In `REQUIRES_PAYMENT_METHOD`, null indicates the provider supplied no latest attempt. A returned `FAILED` attempt identifies a prior failure even though the Intent is ready for a new payment method.
+
+The readonly result exposes `id`, `paymentIntentId`, provider `status`, general `failureCode`, specific `declineCode`, `issuerCode` and `reason` when available. It also exposes optional `cardBrand`, `consentId` and `methodId`. Failure descriptions are provider text for an authorized operator. Display an application-selected message to the shopper. Make retry decisions using the original Intent state, command state and error codes.
+
+| Attempt evidence | `outcome()` |
+| --- | --- |
+| `RECEIVED` or `PENDING_AUTHORIZATION` | `pending` |
+| `AUTHENTICATION_REDIRECTED` | `customer_action_required` |
+| `AUTHORIZED`; `CAPTURE_REQUESTED`; `SETTLED` or `PAID` | `authorized`, `capture_requested`, or `captured`, respectively |
+| FAILED, provider/system unavailable or Visa/Mastercard issuer code 51 | `temporary_decline` |
+| FAILED, unsupported card brand or Visa/Mastercard issuer code 14 or 54 | `unusable_card` |
+| Other FAILED, expired/cancelled or unfamiliar status | `failed`, `ended`, or `unrecognized`, respectively |
+
+A package confirm that still reads `REQUIRES_PAYMENT_METHOD` without a positively unsuccessful canonical attempt keeps its existing reservation while recovery reads for an outcome. A fresh confirm also refuses an unresolved previous attempt. The attempt classification informs the application and never starts a retry or marks an order paid. Compare the original Intent's canonical `paid()` and captured amount with the application payable before posting money.
+
+For a merchant saved-card confirm that returns `REQUIRES_CUSTOMER_ACTION`, present the original challenge to the authorized cardholder:
+
+```php
+$intent = $payments->confirmIntent($ownedIntent, $persistedConfirmKey, $verifiedConsentId, [
+    'return_url' => $registeredApplicationReturnUrl,
+]);
+// In the authorized customer-present endpoint for this original intent:
+$challenge = $payments->savedCardChallenge($intent, $verifiedConsentId);
+return response()->json($challenge->expose())->header('Cache-Control', 'no-store');
+```
+
+The package verifies the original merchant confirm request, an eligible Consent and Method, and the current attempt's link to that same saved card. It exposes the provider's HTTPS `redirect_iframe` GET action and the original Intent and Attempt IDs. Use the action URL as the iframe source for that shopper session. Keep it out of logs, analytics, browser history where possible, and persisted application state. The URL is available only through `expose()`, and ordinary serialization/debug output excludes it. Configure the return endpoint to avoid query logging. If using `postMessage` to trigger a refresh, check the sender origin and iframe window.
+
+On return, authorize the original local payment and call `continueIntent($ownedIntent)`. Treat every browser value as untrusted. The package reads the existing Intent, and the application can read its canonical attempt again. Overlapping or duplicate returns trigger reads of the same Intent. Retry a transient read failure without restarting the browser challenge or confirming another charge. Use `recoverIntent($originalOperationId)` for a retained ambiguous or acknowledged operation. A terminal decline with no outstanding challenge requires a separate, explicit business decision. [Provider contract and evidence](provider-contracts.md#payment-attempts-and-saved-card-authentication)
