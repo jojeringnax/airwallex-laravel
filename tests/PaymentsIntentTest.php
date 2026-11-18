@@ -21,6 +21,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Payments\Operations;
 use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -37,9 +38,13 @@ class PaymentsIntentTest extends TestCase
 
     private array $state = [];
 
+    private array $attempts = [];
+
     private array $requests = [];
 
     private ?Closure $afterWrite = null;
+
+    private ?Closure $writeAcknowledgement = null;
 
     private ?Closure $beforeRead = null;
 
@@ -69,6 +74,9 @@ class PaymentsIntentTest extends TestCase
             if ($request->getMethod() === 'GET' && $this->beforeRead !== null) {
                 ($this->beforeRead)();
             }
+            if (str_contains($path, '/payment_attempts/')) {
+                return FakeHttpClient::json($this->attempts[basename($path)]);
+            }
             if ($request->getMethod() === 'POST') {
                 $operation = Operation::where('status', 'in_flight')->firstOrFail();
                 if ($operation->kind === 'intent.create') {
@@ -81,7 +89,10 @@ class PaymentsIntentTest extends TestCase
                 $this->advance([]);
             }
 
-            return FakeHttpClient::json([...$this->state, 'client_secret' => 'private-bootstrap-secret']);
+            $response = $request->getMethod() === 'POST' && $this->writeAcknowledgement !== null
+                ? ($this->writeAcknowledgement)($this->state) : $this->state;
+
+            return FakeHttpClient::json([...$response, 'client_secret' => 'private-bootstrap-secret']);
         };
         $this->app->instance(ClientInterface::class, new class($reply) implements ClientInterface
         {
@@ -334,26 +345,85 @@ class PaymentsIntentTest extends TestCase
         }
     }
 
-    public function test_saved_card_customer_action_requires_canonical_capture_after_browser_completion(): void
+    #[DataProvider('intentRequestEchoes')]
+    public function test_saved_card_customer_action_requires_canonical_capture_after_browser_completion(bool $createEcho): void
     {
         $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        $createRequest = $this->state['request_id'];
         Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
             'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
             'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
-        $this->afterWrite = function (Operation $operation, array &$state): void {
-            self::assertSame('merchant', $operation->intent['body']['triggered_by']);
+        $this->afterWrite = function (Operation $operation, array &$state) use ($createEcho, $createRequest): void {
+            self::assertArrayNotHasKey('triggered_by', $operation->intent['body']);
+            if ($createEcho) {
+                $state['request_id'] = $createRequest;
+            }
             self::assertSame('consent-owned', $operation->intent['body']['payment_consent_id']);
             $state['status'] = 'REQUIRES_CUSTOMER_ACTION';
-            $state['next_action'] = ['type' => 'redirect', 'url' => 'https://example.test/synthetic-3ds'];
+            $state['next_action'] = ['type' => 'redirect_iframe', 'method' => 'GET', 'url' => 'https://example.test/synthetic-3ds?private=challenge'];
+            $state['latest_payment_attempt'] = ['id' => 'attempt-original', 'authentication_data' => ['proof' => 'private-acs-proof']];
+            $this->attempts['attempt-original'] = ['id' => 'attempt-original', 'payment_intent_id' => 'intent-owned', 'currency' => 'USD',
+                'status' => 'AUTHENTICATION_REDIRECTED', 'payment_consent_id' => 'consent-owned', 'payment_method' => ['id' => 'method-owned']];
         };
         $actionRequired = $this->payments->confirmIntent($intent, 'saved-charge', 'consent-owned');
         self::assertFalse($actionRequired->paid());
-        self::assertSame('redirect', $this->payments->intentBootstrap($actionRequired)->expose()['next_action']['type']);
-        self::assertFalse($this->payments->continueIntent($actionRequired)->paid());
+        self::assertSame('customer_action_required', $this->payments->paymentAttempt($actionRequired)?->outcome());
         $writes = $this->writes();
+
+        $this->beforeRead = function () use ($actionRequired): void {
+            $this->beforeRead = null;
+            self::assertFalse($this->payments->continueIntent($actionRequired)->paid());
+        };
+        try {
+            $this->payments->savedCardChallenge($actionRequired, 'consent-owned');
+        } catch (ConflictException) {
+            // The first read was overtaken. Retry against fresh canonical evidence.
+        }
+        $challenge = $this->payments->savedCardChallenge($actionRequired, 'consent-owned');
+        self::assertSame('intent-owned', $challenge->expose()['payment_intent_id']);
+        self::assertSame('attempt-original', $challenge->expose()['payment_attempt_id']);
+        self::assertSame('redirect_iframe', $challenge->expose()['type']);
+        self::assertSame('https://example.test/synthetic-3ds?private=challenge', $challenge->expose()['url']);
+        self::assertStringNotContainsString('example.test', json_encode($challenge, JSON_THROW_ON_ERROR));
+        self::assertStringNotContainsString('example.test', var_export($challenge->__debugInfo(), true));
+        self::assertArrayNotHasKey('next_action', $actionRequired->fresh()->snapshot);
+        self::assertArrayNotHasKey('authentication_data', $actionRequired->fresh()->snapshot['latest_payment_attempt']);
+        self::assertStringNotContainsString('private=', json_encode(Observation::all()->pluck('payload'), JSON_THROW_ON_ERROR));
+        try {
+            serialize($challenge);
+            self::fail('Challenge URL must be unavailable through PHP serialization.');
+        } catch (\LogicException) {
+            self::assertSame($writes, $this->writes());
+        }
+        $embedded = $this->state['latest_payment_attempt'];
+        unset($this->state['latest_payment_attempt']);
+        try {
+            $this->payments->savedCardChallenge($actionRequired, 'consent-owned');
+            self::fail('A retained previous attempt cannot prove a fresh challenge.');
+        } catch (EvidenceException) {
+            self::assertSame('attempt-original', $this->payments->paymentAttempt($actionRequired)?->id);
+        }
+        $this->state['latest_payment_attempt'] = $embedded;
+        $this->attempts['attempt-original']['payment_method']['id'] = 'different-method';
+        try {
+            $this->payments->savedCardChallenge($actionRequired, 'consent-owned');
+            self::fail('Different card passed challenge proof.');
+        } catch (OwnershipException) {
+            self::assertSame($writes, $this->writes());
+        }
+
+        // Simulate the issuer's completion of the original browser challenge.
+        $this->attempts['attempt-original']['payment_method']['id'] = 'method-owned';
+        $this->attempts['attempt-original']['status'] = 'PAID';
         $this->advance(['status' => 'SUCCEEDED', 'captured_amount' => '10.00']);
         $complete = $this->payments->continueIntent($actionRequired);
         self::assertTrue($complete->paid());
+        self::assertTrue($this->payments->continueIntent($actionRequired)->paid());
+        self::assertSame('captured', $this->payments->paymentAttempt($complete)?->outcome());
+        self::assertSame($actionRequired->id, $complete->id);
+        self::assertSame('10.00', $complete->captured_amount);
+        self::assertSame(1, Observation::where('resource_type', 'airwallex_payment_intents')->get()
+            ->filter(fn (Observation $observation) => $observation->payload['status'] === 'SUCCEEDED')->count());
         self::assertSame($writes, $this->writes());
         Instrument::query()->where('remote_id', 'consent-owned')->update(['revoked_at' => now()]);
         MethodObservation::query()->where('remote_id', 'method-owned')->update(['status' => 'DISABLED', 'provider_updated_at' => '2026-11-11T12:01:00Z']);
@@ -369,6 +439,113 @@ class PaymentsIntentTest extends TestCase
         } catch (EvidenceException) {
             self::assertSame($writes, $this->writes());
         }
+    }
+
+    public static function intentRequestEchoes(): array
+    {
+        return ['action request' => [false], 'create request' => [true]];
+    }
+
+    #[DataProvider('unprovenConfirmations')]
+    public function test_create_request_echo_cannot_recover_an_uncorrelated_saved_card_confirmation(string $scenario): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
+            'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
+        $createRequest = $this->state['request_id'];
+        $this->attempts['attempt-new'] = ['id' => 'attempt-new', 'payment_intent_id' => 'intent-owned',
+            'status' => match ($scenario) {
+                'failed_attempt' => 'FAILED',
+                'challenged_attempt' => 'AUTHENTICATION_REDIRECTED',
+                'contradictory_capture' => 'CAPTURE_REQUESTED',
+                default => 'AUTHORIZED',
+            },
+            'captured_amount' => $scenario === 'contradictory_capture' ? '5.00' : '0.00',
+            'payment_consent_id' => 'consent-owned', 'payment_method' => ['id' => $scenario === 'foreign_method' ? 'other-method' : 'method-owned']];
+        $this->afterWrite = function (Operation $operation, array &$state) use ($createRequest, $scenario): void {
+            $state['request_id'] = $scenario === 'contradictory_request' ? 'different-request' : $createRequest;
+            $state['status'] = $scenario === 'contradictory_capture' ? 'SUCCEEDED' : 'REQUIRES_CAPTURE';
+            $state['captured_amount'] = $scenario === 'contradictory_capture' ? '10.00' : '0.00';
+            $state['latest_payment_attempt'] = ['id' => 'attempt-new'];
+            if ($scenario === 'lost_response') {
+                $this->advance([]);
+                throw new RuntimeException('Synthetic lost confirmation after remote authorization.');
+            }
+        };
+        $this->writeAcknowledgement = static function (array $ack) use ($scenario): array {
+            if ($scenario === 'missing_attempt') {
+                unset($ack['latest_payment_attempt']);
+            } elseif ($scenario === 'another_attempt') {
+                $ack['latest_payment_attempt'] = ['id' => 'attempt-unrelated'];
+            }
+
+            return $ack;
+        };
+        try {
+            $this->payments->confirmIntent($intent, 'saved-confirm', 'consent-owned');
+            self::fail('Prior Create identity falsely confirmed a saved-card write.');
+        } catch (AmbiguousOperationException $exception) {
+            $operation = Operation::findOrFail($exception->operationId);
+        }
+        self::assertSame('ambiguous', $operation->status);
+        self::assertSame('REQUIRES_PAYMENT_METHOD', $intent->fresh()->status);
+        self::assertSame($scenario === 'lost_response' ? null : $intent->remote_id, $operation->remote_id);
+        self::assertSame($scenario === 'another_attempt' ? 'attempt-unrelated'
+            : (in_array($scenario, ['missing_attempt', 'lost_response'], true) ? null : 'attempt-new'), $operation->confirmation_attempt_id);
+        $writes = $this->writes();
+        try {
+            $this->payments->recoverIntent($operation->id);
+            self::fail('Ambiguous original write was falsely associated on recovery.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame($writes, $this->writes());
+            self::assertNotNull($operation->fresh()->lock_key);
+        }
+    }
+
+    public static function unprovenConfirmations(): array
+    {
+        return [['missing_attempt'], ['foreign_method'], ['another_attempt'], ['lost_response'], ['contradictory_request'],
+            ['failed_attempt'], ['challenged_attempt'], ['contradictory_capture']];
+    }
+
+    #[DataProvider('compatibleConfirmations')]
+    public function test_create_request_echo_and_distinct_ack_attempt_verify_owned_canonical_outcome(
+        string $intentStatus,
+        string $attemptStatus,
+        string $captured,
+        bool $paid,
+    ): void {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
+            'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
+        $createRequest = $this->state['request_id'];
+        $this->attempts['attempt-new'] = ['id' => 'attempt-new', 'payment_intent_id' => 'intent-owned', 'status' => $attemptStatus,
+            'captured_amount' => $captured, 'payment_consent_id' => 'consent-owned', 'payment_method' => ['id' => 'method-owned']];
+        $this->afterWrite = function (Operation $operation, array &$state) use ($createRequest, $intentStatus, $captured): void {
+            $state['request_id'] = $createRequest;
+            $state['status'] = $intentStatus;
+            $state['captured_amount'] = $captured;
+            $state['latest_payment_attempt'] = ['id' => 'attempt-new'];
+        };
+        $result = $this->payments->confirmIntent($intent, 'saved-confirm', 'consent-owned');
+        $operation = Operation::query()->where('action_key', 'saved-confirm')->sole();
+        self::assertSame('attempt-new', $operation->confirmation_attempt_id);
+        self::assertSame('succeeded', $operation->status);
+        self::assertNull($operation->lock_key);
+        self::assertSame($intentStatus, $result->status);
+        self::assertSame($paid, $result->paid());
+        self::assertSame($captured, $this->payments->paymentAttempt($intent)?->capturedAmount);
+        self::assertSame(2, $this->writes());
+    }
+
+    public static function compatibleConfirmations(): array
+    {
+        return [
+            'manual authorization' => ['REQUIRES_CAPTURE', 'AUTHORIZED', '0.00', false],
+            'automatic capture before settlement' => ['SUCCEEDED', 'CAPTURE_REQUESTED', '10.00', true],
+        ];
     }
 
     public function test_stale_created_method_cannot_bypass_retained_disable_for_customer_present_payment(): void
@@ -405,6 +582,131 @@ class PaymentsIntentTest extends TestCase
             self::assertSame('failed', $operation->status);
             self::assertNull($operation->lock_key);
         }
+    }
+
+    #[DataProvider('attemptOutcomes')]
+    public function test_canonical_latest_and_explicit_attempt_distinguish_prior_failure_from_no_attempt(array $details, string $outcome): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        self::assertNull($this->payments->paymentAttempt($intent));
+        $this->attempts['attempt-one'] = ['id' => 'attempt-one', 'payment_intent_id' => 'intent-owned', 'currency' => 'USD',
+            'payment_method' => ['card' => ['brand' => 'visa']], ...$details];
+        $this->advance(['latest_payment_attempt' => ['id' => 'attempt-one', 'status' => 'FAKE_EMBEDDED_STATUS']]);
+        $attempt = $this->payments->paymentAttempt($intent);
+        self::assertNotNull($attempt);
+        self::assertSame('attempt-one', $attempt->id);
+        self::assertSame('intent-owned', $attempt->paymentIntentId);
+        self::assertSame($details['status'], $attempt->status);
+        self::assertSame($outcome, $attempt->outcome());
+        self::assertSame($details['failure_details']['code'] ?? null, $attempt->declineCode);
+        self::assertSame($details['failure_details']['message'] ?? null, $attempt->reason);
+        self::assertEquals($attempt, $this->payments->paymentAttempt($intent, 'attempt-one'));
+        self::assertSame('REQUIRES_PAYMENT_METHOD', $intent->fresh()->status);
+        $this->attempts['attempt-one']['payment_intent_id'] = 'foreign-intent';
+        $this->expectException(OwnershipException::class);
+        $this->payments->paymentAttempt($intent, 'attempt-one');
+    }
+
+    public static function attemptOutcomes(): array
+    {
+        return [
+            'temporary decline' => [['status' => 'FAILED', 'failure_code' => 'provider_unavailable', 'failure_details' => ['code' => 'provider_unavailable', 'message' => 'Issuer unavailable']], 'temporary_decline'],
+            'unusable card' => [['status' => 'FAILED', 'failure_code' => 'authorization_failed', 'provider_original_response_code' => '54'], 'unusable_card'],
+            'unresolved' => [['status' => 'PENDING_AUTHORIZATION'], 'pending'],
+            'new decline' => [['status' => 'FAILED', 'failure_details' => ['code' => 'new_issuer_code', 'message' => 'Unfamiliar failure']], 'failed'],
+            'new state' => [['status' => 'NEW_STATE'], 'unrecognized'],
+        ];
+    }
+
+    public function test_timeout_and_unresolved_attempt_keep_the_original_confirmation_without_a_second_charge(): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        $this->afterWrite = function (Operation $operation, array &$state): never {
+            self::assertSame('intent.confirm', $operation->kind);
+            $state['latest_payment_attempt'] = ['id' => 'attempt-original'];
+            $this->attempts['attempt-original'] = ['id' => 'attempt-original', 'payment_intent_id' => 'intent-owned', 'currency' => 'USD', 'status' => 'RECEIVED'];
+            $this->advance([]);
+            throw new RuntimeException('Synthetic lost confirmation response.');
+        };
+        try {
+            $this->payments->confirmIntentWithMethod($intent, 'original', 'method-owned');
+            self::fail('The synthetic lost response should retain the original action.');
+        } catch (AmbiguousOperationException $error) {
+            $operation = Operation::findOrFail($error->operationId);
+        }
+        $this->afterWrite = null;
+        $writes = $this->writes();
+        self::assertSame($intent->id, $this->payments->recoverIntent($operation->id)->id);
+        self::assertSame('acknowledged', $operation->fresh()->status);
+        self::assertSame('pending', $this->payments->paymentAttempt($intent)?->outcome());
+        try {
+            $this->payments->confirmIntentWithMethod($intent, 'replacement', 'method-owned');
+            self::fail('An unresolved payment was charged again.');
+        } catch (ConflictException) {
+            self::assertSame($writes, $this->writes());
+        }
+        $this->attempts['attempt-original']['status'] = 'FAILED';
+        self::assertSame($intent->id, $this->payments->recoverIntent($operation->id)->id);
+        self::assertSame('succeeded', $operation->fresh()->status);
+        self::assertSame($writes, $this->writes());
+    }
+
+    public function test_previous_failed_attempt_cannot_release_new_confirmation_hold_until_distinct_attempt_is_visible(): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        $this->attempts['attempt-old'] = ['id' => 'attempt-old', 'payment_intent_id' => 'intent-owned', 'status' => 'FAILED'];
+        $this->advance(['latest_payment_attempt' => ['id' => 'attempt-old']]);
+        $this->payments->confirmIntentWithMethod($intent, 'confirmation', 'method-owned');
+        $operation = Operation::where('action_key', 'confirmation')->sole();
+        self::assertSame(['attempt_id' => 'attempt-old', 'consent_method_id' => null], $operation->confirmation_baseline);
+        self::assertSame('acknowledged', $operation->status);
+        $writes = $this->writes();
+        try {
+            $this->payments->confirmIntentWithMethod($intent, 'competing-confirmation', 'method-owned');
+            self::fail('A previous failed attempt released the new confirmation hold.');
+        } catch (ConflictException) {
+            self::assertSame($writes, $this->writes());
+        }
+
+        $this->attempts['attempt-new'] = ['id' => 'attempt-new', 'payment_intent_id' => 'intent-owned', 'status' => 'FAILED'];
+        $this->state['latest_payment_attempt'] = ['id' => 'attempt-new'];
+        try {
+            $this->payments->paymentAttempt($intent);
+            self::fail('Different attempt identity at the same version was accepted.');
+        } catch (EvidenceException) {
+            self::assertSame('attempt-old', $intent->fresh()->snapshot['latest_payment_attempt']['id']);
+        }
+        $this->advance([]);
+        self::assertSame($intent->id, $this->payments->recoverIntent($operation->id)->id);
+        self::assertSame('succeeded', $operation->fresh()->status);
+        self::assertSame('attempt-new', $this->payments->paymentAttempt($intent)?->id);
+        self::assertSame($writes, $this->writes());
+    }
+
+    public function test_legacy_prepared_consent_command_keeps_its_identity_with_corrected_provider_body(): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
+            'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
+        $oldBody = ['payment_consent_id' => 'consent-owned', 'triggered_by' => 'merchant'];
+        $legacy = app(Operations::class)->prepare($this->customer, 'legacy', 'intent.confirm',
+            ['body' => $oldBody, 'before_captured' => '0.00'], $intent->remote_id, 'customer/'.$this->customer->id, $oldBody);
+        $this->afterWrite = function (Operation $operation, array &$state) use ($legacy): void {
+            self::assertSame($legacy->id, $operation->id);
+            self::assertSame($legacy->request_id, $operation->request_id);
+            self::assertSame('method-owned', $operation->confirmation_baseline['consent_method_id']);
+            $state['status'] = 'REQUIRES_CAPTURE';
+        };
+        $confirmed = $this->payments->confirmIntent($intent, 'legacy', 'consent-owned');
+        self::assertSame('REQUIRES_CAPTURE', $confirmed->status);
+        $request = collect($this->requests)->first(fn (RequestInterface $request) => str_ends_with($request->getUri()->getPath(), '/confirm'));
+        $wire = json_decode((string) $request->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        self::assertSame(['payment_consent_id' => 'consent-owned', 'request_id' => $legacy->request_id], $wire);
+        self::assertSame($oldBody, $legacy->fresh()->intent['body']);
+        $writes = $this->writes();
+        self::assertSame($intent->id, $this->payments->confirmIntent($intent, 'legacy', 'consent-owned')->id);
+        self::assertSame($writes, $this->writes());
     }
 
     private function writes(): int

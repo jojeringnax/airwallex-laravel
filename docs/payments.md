@@ -45,7 +45,7 @@ $intent = $payments->cancelIntent($intent, $cancelCommand);
 $intent = $payments->recoverIntent($localOperationId, $optionalOperatorKnownIntentId);
 ```
 
-These are alternative paths selected from canonical state, not a sequence to execute unconditionally. Merchant consent must be canonically verified for this customer/account and allow merchant-unscheduled charges. Customer-present card/Apple Pay/Google Pay methods use the same retained owner/version/status proof as saved instruments; an older CREATED response cannot overwrite a known Method disable. The common customer lock rechecks Method eligibility before reservation and the mutation claim. Local Consent revocation alone does not detach its Method or prohibit a new explicit customer-present action. Customer-present methods must be owned and usable; raw PAN/CVC/PIN data is outside these APIs. Airwallex.js/eligible mobile clients own tokenization, wallet availability and 3DS next actions. `continueIntent` consumes no callback result or server-side PIN/microdeposit payload; it only reads the known intent. The SDK's `confirmContinue` endpoint is not a generic 3DS return handler.
+These are alternative paths selected from canonical state, not a sequence to execute unconditionally. Merchant consent must be canonically verified for this customer/account and allow merchant-unscheduled charges. The provider request uses that Consent ID and follows its stored terms. An existing command retains its original request identity and same-key recovery behavior. Customer-present card/Apple Pay/Google Pay methods use the same retained owner/version/status proof as saved instruments; an older CREATED response cannot overwrite a known Method disable. The common customer lock rechecks Method eligibility before reservation and the mutation claim. Local Consent revocation alone does not detach its Method or prohibit a new explicit customer-present action. Customer-present methods must be owned and usable; raw PAN/CVC/PIN data is outside these APIs. Airwallex.js/eligible mobile clients own tokenization, wallet availability and 3DS next actions. `continueIntent` consumes no callback result or server-side PIN/microdeposit payload; it only reads the known intent. The SDK's `confirmContinue` endpoint is not a generic 3DS return handler.
 
 Persist every command key. The current merchant-order reservation is unique across customers within environment/account. An explicit consumer/operator release may free its own customer's unknown-ID Intent reservation; a different creation key alone cannot. The historical order identity remains unchanged. Confirmed or foreign-customer order reservations cannot be displaced. Choose an application namespace for order IDs when several order domains share an account. Immutable intent amount/currency/customer/order and canonical request correlation protect each action. An unresolved operation retains its original customer mutex until resolution or an explicit consumer/operator release of an attempted unknown-ID creation; other instrument/financial mutations serialize on that same customer. The actual mutation claim rechecks local offboarding/revocation under the customer lock. Already claimed work retains its original obligation when a later revoke arrives. Repeating the same original confirm command validates its stored customer/target/body and recovers read-only even after later instrument revocation; a fresh or never-attempted command still requires current eligibility.
 
@@ -60,3 +60,41 @@ Capture/cancellation request acceptance alone leaves an acknowledged operation a
 The required released SDK **v0.1.3** (`33881b46d696435dfbd370ec371e1fef5452ba44`) owns HTTP, API request validation, signatures and exact number encoding. Official [Customers](https://www.airwallex.com/docs/api/payments/customers), [Consents](https://www.airwallex.com/docs/api/payments/payment_consents), [Methods](https://www.airwallex.com/docs/api/payments/payment_methods), [Intents](https://www.airwallex.com/docs/api/payments/payment_intents), [Attempts](https://www.airwallex.com/docs/api/payments/payment_attempts) and [Refunds](https://www.airwallex.com/docs/api/payments/refunds) page metadata was rechecked on 2026-11-11 with `currentVersion=2026-08-21`. Customer create/update require `request_id`; responses expose merchant/customer and request identities. The [API-key guide](https://www.airwallex.com/docs/developer-tools/api/manage-api-keys) distinguishes account Payments from organization Billing. Synthetic tests establish package behavior, never activation, instrument availability, actual charges or provider delivery. Separately scoped [Payments sandbox qualification](https://github.com/jojeringnax/airwallex-laravel/issues/64) remains required.
 
 Installed application recipes, cumulative cash/refund accounting and exact archive evidence are described in [Payments qualification](payments-qualification.md).
+
+
+## Payment attempts and saved-card authentication
+
+```php
+$attempt = $payments->paymentAttempt($ownedIntent); // The latest canonical attempt, or null.
+$historical = $payments->paymentAttempt($ownedIntent, $knownAttemptId);
+```
+
+`paymentAttempt(Intent $intent, ?string $attemptId = null): ?PaymentAttempt` verifies the latest Intent under its original Customer and configured merchant account. It reads the attempt separately and verifies its original Intent ID and any returned currency/context. An omitted attempt reference retains the last confirmed ID if available and returns null otherwise. A supplied attempt ID requires that same canonical ownership proof, including for historical attempts. In `REQUIRES_PAYMENT_METHOD`, null indicates the provider supplied no latest attempt. A returned `FAILED` attempt identifies a prior failure even though the Intent is ready for a new payment method.
+
+The readonly result exposes `id`, `paymentIntentId`, provider `status`, general `failureCode`, specific `declineCode`, `issuerCode` and `reason` when available. It also exposes optional `cardBrand`, `consentId`, `methodId` and exact `capturedAmount` in the original Intent currency. Failure descriptions are provider text for an authorized operator. Display an application-selected message to the shopper. Make retry decisions using the original Intent state, command state and error codes.
+
+| Attempt evidence | `outcome()` |
+| --- | --- |
+| `RECEIVED` or `PENDING_AUTHORIZATION` | `pending` |
+| `AUTHENTICATION_REDIRECTED` | `customer_action_required` |
+| `AUTHORIZED`; `CAPTURE_REQUESTED`; `SETTLED` or `PAID` | `authorized`, `capture_requested`, or `captured`, respectively |
+| FAILED, provider/system unavailable or Visa/Mastercard issuer code 51 | `temporary_decline` |
+| FAILED, unsupported card brand or Visa/Mastercard issuer code 14 or 54 | `unusable_card` |
+| Other FAILED, expired/cancelled or unfamiliar status | `failed`, `ended`, or `unrecognized`, respectively |
+
+Before sending a confirmation, the package records the previously observed attempt ID in the same transaction that claims the write. A confirmation still reading `REQUIRES_PAYMENT_METHOD` retains its reservation until an unsuccessful canonical attempt with a new ID is visible. An outstanding pre-upgrade confirmation without saved prior-attempt proof stays reserved in that status. If Retrieve retains the original Create request ID after a saved-card confirmation, recovery also requires the distinct Attempt ID durably recorded from the same-target Confirm response and canonical proof that it used the original saved card. The Attempt and Intent must agree on authorization, customer action, failure or capture. A successful capture requires the same positive exact captured amount on both reads. A missing response, pending outcome or contradictory Attempt leaves the original operation unresolved. A fresh confirm also refuses an unresolved previous attempt. The attempt classification informs the application and never starts a retry or marks an order paid. Compare the original Intent's canonical `paid()` and captured amount with the application payable before posting money.
+
+For a merchant saved-card confirm that returns `REQUIRES_CUSTOMER_ACTION`, present the original challenge to the authorized cardholder:
+
+```php
+$intent = $payments->confirmIntent($ownedIntent, $persistedConfirmKey, $verifiedConsentId, [
+    'return_url' => $registeredApplicationReturnUrl,
+]);
+// In the authorized customer-present endpoint for this original intent:
+$challenge = $payments->savedCardChallenge($intent, $verifiedConsentId);
+return response()->json($challenge->expose())->header('Cache-Control', 'no-store');
+```
+
+The package verifies the original merchant confirm request, an eligible Consent and Method, and the current attempt's link to that same saved card. It exposes the provider's HTTPS `redirect_iframe` GET action and the original Intent and Attempt IDs. Use the action URL as the iframe source for that shopper session. Keep it out of logs, analytics, browser history where possible, and persisted application state. The URL is available only through `expose()`. Projection snapshots and consumer events omit challenge action data, and ordinary serialization and debug output exclude it. Raw signed receipt bytes retain separate encrypted replay controls. Configure the return endpoint to avoid query logging. If using `postMessage` to trigger a refresh, check the sender origin and iframe window.
+
+On return, authorize the original local payment and call `continueIntent($ownedIntent)`. Treat every browser value as untrusted. The package reads the existing Intent, and the application can read its canonical attempt again. Overlapping or duplicate returns trigger reads of the same Intent. Retry a transient read failure without restarting the browser challenge or confirming another charge. Use `recoverIntent($originalOperationId)` for a retained ambiguous or acknowledged operation. A terminal decline with no outstanding challenge requires a separate, explicit business decision. [Provider contract and evidence](provider-contracts.md#payment-attempts-and-saved-card-authentication)

@@ -18,6 +18,26 @@ The original application action, request ID and any returned refund ID are durab
 
 `Refund::completed()` is true only for canonical ACCEPTED/SETTLED. RECEIVED means pending; FAILED is failure; unknown statuses remain inspectable and reserve capacity. SETTLED is separately visible and is not proof that the shopper's bank credited its account. Safe stable observation payloads retain `financial_identity=refund/{canonicalId}` across different delivery IDs and ACCEPTED/SETTLED observations; application credit-note/ledger listeners deduplicate their refund-completion effect using that identity plus provider/environment/account. The package creates no application credit note, Billing Credit Note or accounting row.
 
+## Refunds created outside the package
+
+The [Payments receiver](payments-webhooks.md) can discover a previously unknown Refund from a signed event. The event supplies its ID. The package retrieves Refund, original Intent and any linked Attempt under the original merchant account. It verifies a mapped owned capture, matching currency and positive exact refund amount within captured funds. A linked Attempt must belong to that Intent and show sufficient captured amount. Unknown local payments produce no refund projection. An event cannot supply an owner, status, reason or amount for the projection.
+
+If the canonical ID or request ID matches an existing package command, the package recovers that command and its original Refund row. An unknown Refund without a request ID stays retryable while a matching package command for the same Intent and amount has an unresolved resource identity. A genuinely external refund has a nullable `operation_id` and `Refund::origin()` returns `provider_created`. Package-initiated rows return `package_initiated`. Provider-created denotes a refund first seen externally, including a staff dashboard action or another client. The API does not attest which client initiated it. Refund IDs remain unique in the configured account/environment. `Refund::reason()` and `Refund::paymentAttemptId()` return the optional canonical fields. `intent_id` links to the owned local Intent, whose `remote_id` is the provider payment reference.
+
+Schedule a bounded application job over authorized captured Intent IDs in stable local ID order. After a missed webhook or any processing outage, resume that cursor and call:
+
+```php
+foreach ($payments->reconcileRefunds($ownedIntent) as $refund) {
+    // Inspect the current projection. Handle accounting through the stable observation identity.
+}
+```
+
+`reconcileRefunds(Intent $intent): array` reads all pages of the original Intent's Refund List (100 per page, zero-based, until `has_more` is false) and validates all list evidence before projecting canonical Get results. It returns a list of owned `Refund` models, including failed and pending records. It can commit earlier canonical reads if a later Get fails. Retry the same Intent after the outage or conflict. Advance the application cursor after success. Known Refunds also converge using `reconcileRefund` and the package's existing Refund recovery family. A known provider-created Refund missing from one List result retains its last confirmed reservation until new canonical evidence.
+
+Refund observations use the same `PaymentObserved` resource type `airwallex_payment_refunds`. For discovered provider-created refunds the safe payload includes `origin=provider_created` in addition to refund ID, original Intent ID, amount, currency, provider status and financial identity. Use the owned projection when you need the optional reason. The status and delivery ID converge on replay and out-of-order notifications by reading the current provider resource. Deduplicate credit-note effects by the refund financial identity, including when ACCEPTED later becomes SETTLED. FAILED remains an observation with no credit.
+
+Deploy the nullable operation-link migration before enabling discovery in an existing installation. Rolling back that migration requires preserving externally observed history outside the older schema.
+
 ## Contract evidence and qualification
 
 The required SDK is released v0.1.3, source `33881b46d696435dfbd370ec371e1fef5452ba44`, API `2026-08-21`. Official [Refund API](https://www.airwallex.com/docs/api/payments/refunds) and [refund guide](https://www.airwallex.com/docs/payments/payment-operations/manage-payments/refunds) were rechecked on 2026-11-11. Fresh page metadata selected that API date, `airwallex-openapi-2026-08-21.yaml`, advertised MD5 `6caa23f3759634e64859ff6aa8c37336`; the category matches the retained selected research. Refunds support create/retrieve/list at account level with API-key-supported `payment_acceptance:write` / `payment_acceptance:read`. Provider OBO support does not enable delegation in this package's explicit merchant-login context. Request creation takes an Intent or Attempt ID, optional amount/reason/metadata and required request ID. This package always sends an explicit amount against the owned Intent. SDK owns the endpoint/request validation, precision, authentication and HTTP.
