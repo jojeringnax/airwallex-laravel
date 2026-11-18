@@ -140,6 +140,12 @@ final readonly class Payments
         return app(Payments\Refunds::class)->reconcile($this->requiredCustomer(), $refund);
     }
 
+    /** @return list<Refund> */
+    public function reconcileRefunds(Intent $intent): array
+    {
+        return app(Payments\Refunds::class)->reconcileAll($this->requiredCustomer(), $intent);
+    }
+
     public function recoverRefund(string $operationId, ?string $operatorKnownId = null): Refund
     {
         return app(Payments\Refunds::class)->recover($this->requiredCustomer(), Operation::query()->findOrFail($operationId), $operatorKnownId);

@@ -20,8 +20,10 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Observation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Receipt;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 use Jojeringnax\AirwallexLaravel\Payments\Operations;
+use Jojeringnax\AirwallexLaravel\Payments\Receipts;
 use Jojeringnax\AirwallexLaravel\Payments\Recovery;
 use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Tests\Support\FakeHttpClient;
@@ -43,6 +45,8 @@ class PaymentsRefundTest extends TestCase
 
     private array $refunds = [];
 
+    private array $attempts = [];
+
     private array $requests = [];
 
     private string $nextStatus = 'RECEIVED';
@@ -53,6 +57,8 @@ class PaymentsRefundTest extends TestCase
 
     private ?Closure $onWrite = null;
 
+    private ?Closure $afterWrite = null;
+
     private ?Closure $pages = null;
 
     private int $version = 0;
@@ -60,7 +66,8 @@ class PaymentsRefundTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-        config(['airwallex.payments.account_id' => 'account-payments', 'airwallex.payments.client_id' => 'payments-client', 'airwallex.payments.api_key' => 'payments-key']);
+        config(['airwallex.payments.account_id' => 'account-payments', 'airwallex.payments.client_id' => 'payments-client', 'airwallex.payments.api_key' => 'payments-key',
+            'airwallex.payments.webhook.secret' => 'synthetic-refund-webhook-secret']);
         $this->artisan('migrate', ['--force' => true])->assertSuccessful();
         Schema::create('refund_owners', fn (Blueprint $table) => $table->string('id')->primary());
         $owner = RefundOwner::create(['id' => 'owner']);
@@ -84,7 +91,7 @@ class PaymentsRefundTest extends TestCase
                 return FakeHttpClient::json($this->payment);
             }
             if (str_contains($path, '/payment_attempts/')) {
-                return FakeHttpClient::json(['id' => 'attempt-foreign', 'payment_intent_id' => 'foreign-intent', 'currency' => 'USD']);
+                return FakeHttpClient::json($this->attempts[basename($path)] ?? ['id' => 'attempt-foreign', 'payment_intent_id' => 'foreign-intent', 'currency' => 'USD']);
             }
             if ($request->getMethod() === 'POST') {
                 $operation = Operation::where('kind', 'refund.create')->where('status', 'in_flight')->firstOrFail();
@@ -94,6 +101,7 @@ class PaymentsRefundTest extends TestCase
                 $remote = ['id' => $id, ...$operation->intent, 'request_id' => $operation->request_id,
                     'currency' => 'USD', 'status' => $this->nextStatus, 'updated_at' => $this->time(), 'client_secret' => 'SYNTHETIC-PRIVATE'];
                 $this->refunds[$id] = $remote;
+                $this->afterWrite?->__invoke($id);
                 if ($this->timeoutWrite) {
                     throw new RuntimeException('Synthetic timeout after unknown provider write.');
                 }
@@ -323,6 +331,113 @@ class PaymentsRefundTest extends TestCase
         self::assertSame('0', Amount::subtract('123', '123'));
         $this->expectException(EvidenceException::class);
         Amount::subtract('1', '2');
+    }
+
+    public function test_signed_external_partial_refund_has_one_projection_and_canonical_transitions(): void
+    {
+        $this->externalRefund('dashboard-partial', '25.01', 'RECEIVED', ['reason' => 'Returned item']);
+        $receipt = $this->signedRefund('event-first', 'dashboard-partial', 'refund.accepted');
+        self::assertSame('processed', $receipt->status);
+        $refund = Refund::sole();
+        self::assertNull($refund->operation_id);
+        self::assertSame('provider_created', $refund->origin());
+        self::assertSame($this->intent->id, $refund->intent_id);
+        self::assertSame('25.01', $refund->amount);
+        self::assertSame('Returned item', $refund->reason());
+        self::assertSame('RECEIVED', $refund->status);
+        self::assertFalse($refund->completed());
+        self::assertSame('74.99', $this->payments->refundableAmount($this->intent));
+        $this->externalRefund('dashboard-partial', '25.01', 'ACCEPTED', ['reason' => 'Returned item']);
+        self::assertSame('processed', $this->signedRefund('event-late', 'dashboard-partial', 'refund.received')->status);
+        self::assertTrue($refund->fresh()->completed());
+        $this->signedRefund('event-late', 'dashboard-partial', 'refund.received');
+        $replay = app(Receipts::class)->requestReplay($receipt);
+        self::assertSame('processed', app(Receipts::class)->process($replay->id)->status);
+        $this->externalRefund('dashboard-partial', '25.01', 'SETTLED');
+        self::assertSame('SETTLED', $this->payments->reconcileRefund($refund)->status);
+        $observations = Observation::where('resource_type', 'airwallex_payment_refunds')->orderBy('id')->get();
+        self::assertSame(['RECEIVED', 'ACCEPTED', 'SETTLED'], $observations->pluck('payload.status')->all());
+        self::assertSame(['refund/dashboard-partial'], $observations->pluck('payload.financial_identity')->unique()->values()->all());
+        self::assertSame(['provider_created'], $observations->pluck('payload.origin')->unique()->values()->all());
+        self::assertSame(1, Refund::count());
+        self::assertSame(0, $this->writes());
+    }
+
+    public function test_missed_full_refund_and_failed_refund_recover_across_all_pages_using_canonical_reads(): void
+    {
+        $this->externalRefund('dashboard-full', '100', 'ACCEPTED', ['payment_intent_id' => null, 'payment_attempt_id' => 'attempt-owned']);
+        $this->attempts['attempt-owned'] = ['id' => 'attempt-owned', 'payment_intent_id' => 'intent-owned', 'currency' => 'USD', 'captured_amount' => '100.00'];
+        $this->externalRefund('dashboard-failed', '15.75', 'FAILED');
+        $this->pages = fn (array $query) => (int) $query['page_num'] === 0
+            ? ['items' => [$this->refunds['dashboard-full']], 'has_more' => true]
+            : ['items' => [$this->refunds['dashboard-failed']], 'has_more' => false];
+        [$full, $failed] = $this->payments->reconcileRefunds($this->intent);
+        self::assertTrue($full->completed());
+        self::assertSame('attempt-owned', $full->paymentAttemptId());
+        self::assertSame('100.00', $full->amount);
+        self::assertFalse($failed->completed());
+        self::assertSame('FAILED', $failed->status);
+        $this->payments->reconcileRefunds($this->intent);
+        self::assertSame(2, Refund::count());
+        self::assertSame(2, Observation::where('resource_type', 'airwallex_payment_refunds')->count());
+        self::assertSame('0.00', $this->payments->refundableAmount($this->intent));
+        self::assertSame(0, $this->writes());
+    }
+
+    public function test_external_receipt_cannot_adopt_foreign_wrong_currency_or_uncaptured_refund(): void
+    {
+        $cases = [
+            [['payment_intent_id' => 'unmapped'], 'ignored'],
+            [['account_id' => 'wrong-account'], 'quarantined'],
+            [['currency' => 'EUR'], 'quarantined'],
+            [['payment_attempt_id' => 'attempt-foreign'], 'quarantined'],
+            [['amount' => '100.01'], 'failed'],
+            [['amount' => '0.00'], 'failed'],
+        ];
+        foreach ($cases as $index => [$overrides, $receiptStatus]) {
+            $this->externalRefund('bad-owner', '5.00', 'ACCEPTED', $overrides);
+            self::assertSame($receiptStatus, $this->signedRefund('invalid-'.$index, 'bad-owner', 'refund.accepted')->status);
+            self::assertSame(0, Refund::count());
+        }
+        $this->payment = [...$this->payment, 'status' => 'REQUIRES_CAPTURE', 'captured_amount' => '0.00', 'updated_at' => '2026-11-11T12:01:00Z'];
+        $this->externalRefund('no-capture', '5.00', 'ACCEPTED');
+        self::assertSame('failed', $this->signedRefund('uncaptured', 'no-capture', 'refund.accepted')->status);
+        self::assertSame(0, Observation::where('resource_type', 'airwallex_payment_refunds')->count());
+        self::assertSame(0, $this->writes());
+    }
+
+    public function test_signed_refund_arriving_during_package_write_recovers_original_without_second_record(): void
+    {
+        $this->nextStatus = 'ACCEPTED';
+        $this->afterWrite = function (string $id): void {
+            // The signed locator deliberately omits request_id. Only canonical GET can correlate it.
+            $receipt = $this->signedRefund('during-original-write', $id, 'refund.accepted');
+            self::assertSame('processed', $receipt->status);
+            self::assertSame('package_initiated', Refund::sole()->origin());
+            self::assertSame('succeeded', Operation::where('kind', 'refund.create')->sole()->status);
+        };
+        $result = $this->payments->refundIntent($this->intent, 'original-package-refund', '30');
+        self::assertSame(Refund::sole()->id, $result->id);
+        self::assertSame(1, $this->writes());
+        self::assertSame(1, Observation::where('resource_type', 'airwallex_payment_refunds')->count());
+        self::assertSame($result->id, $this->payments->reconcileRefunds($this->intent)[0]->id);
+    }
+
+    private function externalRefund(string $id, string $amount, string $status, array $overrides = []): void
+    {
+        $this->refunds[$id] = ['id' => $id, 'amount' => $amount, 'status' => $status, 'payment_intent_id' => 'intent-owned',
+            'currency' => 'USD', 'updated_at' => $this->time(), ...$overrides];
+    }
+
+    private function signedRefund(string $eventId, string $refundId, string $name): Receipt
+    {
+        $body = json_encode(['id' => $eventId, 'name' => $name, 'account_id' => 'account-payments', 'version' => '2026-08-21',
+            'created_at' => '2026-11-11T12:00:00Z', 'data' => ['object' => ['id' => $refundId]]], JSON_THROW_ON_ERROR);
+        $timestamp = (string) now()->getTimestampMs();
+        $receipts = app(Receipts::class);
+        $receipt = $receipts->accept($body, $timestamp, hash_hmac('sha256', $timestamp.$body, 'synthetic-refund-webhook-secret'));
+
+        return $receipts->process($receipt->id);
     }
 
     private function writes(): int

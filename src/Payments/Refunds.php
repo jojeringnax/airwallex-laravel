@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Jojeringnax\AirwallexLaravel\Payments;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
@@ -107,9 +108,50 @@ class Refunds
             throw new ConflictException('Recover the original refund operation before reconciliation.', $refund->operation_id);
         }
         $intent = $this->intents->reconcile($customer, $intent);
-        $operation = Operation::query()->findOrFail($refund->operation_id);
+        $operation = $refund->operation_id === null ? null : Operation::query()->findOrFail($refund->operation_id);
 
         return $this->observe($customer, $refund, $intent, $operation, $refund->remote_id);
+    }
+
+    /** @return list<Refund> */
+    public function reconcileAll(Customer $customer, Intent $intent): array
+    {
+        $intent = $this->intents->reconcile($customer, $intent);
+        if (! $intent->paid()) {
+            throw new EvidenceException('Refund discovery requires fresh positive captured evidence.');
+        }
+
+        $result = [];
+        foreach ($this->allRemote($intent) as $row) {
+            $remote = $this->retrieve($row['id']);
+            $refund = $this->adopt($customer, $intent, $remote);
+            if ($refund !== null) {
+                $result[] = $refund;
+                $intent = $this->intents->owned($customer, $intent);
+            }
+        }
+
+        return $result;
+    }
+
+    /** Signed locator path. Ownership is established entirely from canonical records. */
+    public function observeById(string $id): ?Refund
+    {
+        $remote = $this->retrieve($id);
+        $attempt = $this->readLinkedAttempt($remote);
+        $intentId = $remote['payment_intent_id'] ?? $attempt['payment_intent_id'] ?? null;
+        if (! is_string($intentId) || $intentId === '') {
+            throw new EvidenceException('Refund has no provable original payment linkage.');
+        }
+        $intent = Intent::query()->where([...$this->context->attributes(), 'remote_id' => $intentId])->first();
+        if ($intent === null) {
+            return null;
+        }
+
+        $customer = Customer::query()->where($this->context->attributes())->findOrFail($intent->customer_id);
+        $intent = $this->intents->reconcile($customer, $intent);
+
+        return $this->adopt($customer, $intent, $remote, $attempt);
     }
 
     public function recover(Customer $customer, Operation $operation, ?string $knownId = null): Refund
@@ -160,12 +202,11 @@ class Refunds
         return $this->observe($customer, $refund, $intent, $operation, $id);
     }
 
-    private function observe(Customer $customer, Refund $refund, Intent $intent, Operation $operation, string $id): Refund
+    private function observe(Customer $customer, Refund $refund, Intent $intent, ?Operation $operation, string $id): Refund
     {
-        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->refunds()->retrieve($id));
-        Proof::identity($remote, $id, $this->context);
-        $this->proof($remote, $intent);
-        if (($remote['request_id'] ?? null) !== $operation->request_id
+        $remote = $this->retrieve($id);
+        $this->proof($remote, $intent, external: $operation === null);
+        if (($operation !== null && ($remote['request_id'] ?? null) !== $operation->request_id)
             || Amount::units($remote['amount'], $intent->currency) !== Amount::units($refund->amount, $intent->currency)) {
             throw new EvidenceException('Canonical refund does not correlate to the original request and exact reserved amount.');
         }
@@ -177,19 +218,93 @@ class Refunds
                 || ($current->remote_id !== null && $current->remote_id !== $id)) {
                 throw new ConflictException('Refund or its original payment changed during canonical observation.');
             }
-            $previous = $current->snapshot['updated_at'] ?? null;
-            if (is_string($previous)) {
-                $order = Timestamp::compare($remote['updated_at'], $previous);
-                if ($order < 0 || ($order === 0 && $current->status !== $remote['status'])) {
-                    throw new EvidenceException('A stale or contradictory refund observation cannot replace retained evidence.');
-                }
-            }
-            $current->forceFill(['remote_id' => $id, 'status' => $remote['status'], 'snapshot' => SubscriptionSynchronizer::sanitize($remote), 'revision' => $current->revision + 1])->save();
-            $this->observations->record($current, ['remote_id' => $id, 'status' => $current->status, 'amount' => $current->amount, 'currency' => $current->currency,
-                'payment_intent_id' => $currentIntent->remote_id, 'financial_identity' => 'refund/'.$id]);
 
-            return $current->refresh();
+            return $this->project($current, $currentIntent, $remote);
         });
+    }
+
+    private function adopt(Customer $customer, Intent $intent, array $remote, ?array $attempt = null): ?Refund
+    {
+        $attempt = $this->proof($remote, $intent, $attempt);
+        $operation = $this->operationFor($remote);
+        if ($operation !== null) {
+            if (app(CreationRetries::class)->quarantined($operation, $remote['id'])) {
+                return null;
+            }
+
+            return $this->recover($customer, $operation, $remote['id']);
+        }
+
+        $this->assertCapture($remote, $intent, $attempt);
+        $amount = Amount::canonical($remote['amount'], $intent->currency);
+        $id = $remote['id'];
+
+        return DB::transaction(function () use ($customer, $intent, $remote, $id, $amount): Refund {
+            $this->lockCustomer($customer);
+            $currentIntent = $this->intents->owned($customer, $intent);
+            if ($currentIntent->revision !== $intent->revision || $this->operationFor($remote) !== null) {
+                throw new ConflictException('Refund or its original payment changed during discovery.');
+            }
+            $current = Refund::query()->firstOrCreate([...$this->context->attributes(), 'remote_id' => $id], [
+                'customer_id' => $customer->id, 'intent_id' => $intent->id, 'amount' => $amount, 'currency' => $intent->currency,
+            ]);
+            if ($current->operation_id !== null || $current->customer_id !== $customer->id || $current->intent_id !== $intent->id
+                || $current->amount !== $amount || $current->currency !== $intent->currency) {
+                throw new OwnershipException('Refund identity conflicts with the original local payment or amount.');
+            }
+
+            return $this->project($current, $currentIntent, $remote);
+        });
+    }
+
+    private function operationFor(array $remote): ?Operation
+    {
+        $requestId = $remote['request_id'] ?? null;
+        $operations = Operation::query();
+        $operations->where([...$this->context->attributes(), 'kind' => 'refund.create'])
+            ->where(function (Builder $query) use ($requestId, $remote): void {
+                $query->where('remote_id', $remote['id']);
+                if (is_string($requestId) && $requestId !== '') {
+                    $query->orWhere('request_id', $requestId);
+                }
+            });
+        $matches = $operations->limit(2)->get();
+        if ($matches->count() > 1) {
+            throw new EvidenceException('Refund identity and request reference contradict local commands.');
+        }
+
+        return $matches->first();
+    }
+
+    private function project(Refund $current, Intent $intent, array $remote): Refund
+    {
+        $previous = $current->snapshot['updated_at'] ?? null;
+        if (is_string($previous)) {
+            $order = Timestamp::compare($remote['updated_at'], $previous);
+            if ($order < 0 || ($order === 0 && $current->status !== $remote['status'])) {
+                throw new EvidenceException('A stale or contradictory refund observation cannot replace retained evidence.');
+            }
+        }
+        $current->forceFill([
+            'remote_id' => $remote['id'], 'status' => $remote['status'],
+            'snapshot' => SubscriptionSynchronizer::sanitize($remote), 'revision' => $current->revision + 1,
+        ])->save();
+        $providerCreated = $current->operation_id === null;
+        $this->observations->record($current, [
+            'remote_id' => $current->remote_id, 'status' => $current->status, 'amount' => $current->amount, 'currency' => $current->currency,
+            'payment_intent_id' => $intent->remote_id, 'financial_identity' => 'refund/'.$current->remote_id,
+            ...($providerCreated ? ['origin' => $current->origin()] : []),
+        ]);
+
+        return $current->refresh();
+    }
+
+    private function retrieve(string $id): array
+    {
+        $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->refunds()->retrieve($id));
+        Proof::identity($remote, $id, $this->context);
+
+        return $remote;
     }
 
     /** @return array{Customer,Refund,Intent} */
@@ -233,22 +348,17 @@ class Refunds
         throw new EvidenceException('Refund pagination exceeded the bounded verification budget.');
     }
 
-    private function proof(array $remote, Intent $intent): void
+    private function proof(array $remote, Intent $intent, ?array $attempt = null, bool $external = false): ?array
     {
         Proof::identity($remote, $remote['id'] ?? '', $this->context);
         $intentId = $remote['payment_intent_id'] ?? null;
-        if (array_key_exists('payment_intent_id', $remote) && $intentId !== $intent->remote_id) {
+        if ($intentId !== null && ($intent->remote_id === null || $intentId !== $intent->remote_id)) {
             throw new OwnershipException('Refund does not belong to its original Payments intent.');
         }
-        $attemptId = $remote['payment_attempt_id'] ?? null;
-        if (array_key_exists('payment_attempt_id', $remote)) {
-            if (! is_string($attemptId) || $attemptId === '') {
-                throw new EvidenceException('Refund attempt linkage is malformed.');
-            }
-            $attempt = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentAttempts()->retrieve($attemptId));
-            Proof::identity($attempt, $attemptId, $this->context);
+        $attempt ??= $this->readLinkedAttempt($remote);
+        if ($attempt !== null) {
             if (($attempt['payment_intent_id'] ?? null) !== $intent->remote_id
-                || (array_key_exists('currency', $attempt) && $attempt['currency'] !== $intent->currency)) {
+                || (isset($attempt['currency']) && $attempt['currency'] !== $intent->currency)) {
                 throw new OwnershipException('Refund attempt belongs to a different payment or currency.');
             }
         } elseif ($intentId === null) {
@@ -262,6 +372,38 @@ class Refunds
             throw new EvidenceException('Refund status or versioned timing is missing.');
         }
         Timestamp::compare($remote['updated_at'], $remote['updated_at']);
+        if ($external) {
+            $this->assertCapture($remote, $intent, $attempt);
+        }
+
+        return $attempt;
+    }
+
+    private function readLinkedAttempt(array $remote): ?array
+    {
+        $id = $remote['payment_attempt_id'] ?? null;
+        if ($id === null) {
+            return null;
+        }
+        if (! is_string($id) || $id === '') {
+            throw new EvidenceException('Refund attempt linkage is malformed.');
+        }
+        $attempt = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentAttempts()->retrieve($id));
+        Proof::identity($attempt, $id, $this->context);
+
+        return $attempt;
+    }
+
+    private function assertCapture(array $remote, Intent $intent, ?array $attempt): void
+    {
+        $amount = Amount::units($remote['amount'], $intent->currency);
+        if (! $intent->paid() || $amount === '0'
+            || Amount::compare($amount, Amount::units($intent->captured_amount, $intent->currency)) > 0) {
+            throw new EvidenceException('Provider-created refund exceeds or lacks positive canonical captured funds.');
+        }
+        if ($attempt !== null && Amount::compare($amount, Amount::units($attempt['captured_amount'] ?? null, $intent->currency)) > 0) {
+            throw new EvidenceException('Provider-created refund exceeds the capture on its linked attempt.');
+        }
     }
 
     /** Captured minus all nonfailed remote refunds and unseen local obligations, in exact minor units. */
@@ -279,8 +421,8 @@ class Refunds
             }
         }
         foreach (Refund::query()->where('intent_id', $intent->id)->get() as $local) {
-            $operation = Operation::query()->findOrFail($local->operation_id);
-            if ($local->id === $excluding || $local->status === 'FAILED' || in_array($operation->status, ['failed', 'superseded'], true)) {
+            $operation = $local->operation_id === null ? null : Operation::query()->findOrFail($local->operation_id);
+            if ($local->id === $excluding || $local->status === 'FAILED' || in_array($operation?->status, ['failed', 'superseded'], true)) {
                 continue;
             }
             if ($local->remote_id !== null && isset($seen[$local->remote_id])) {
@@ -291,7 +433,7 @@ class Refunds
                     throw new EvidenceException('A stale refund page cannot release a newer retained reservation.');
                 }
                 if (Amount::units($observation['amount'], $intent->currency) !== Amount::units($local->amount, $intent->currency)
-                    || (array_key_exists('request_id', $observation) && $observation['request_id'] !== $operation->request_id)) {
+                    || ($operation !== null && array_key_exists('request_id', $observation) && $observation['request_id'] !== $operation->request_id)) {
                     throw new EvidenceException('Remote refund total contradicts the original reserved amount.');
                 }
 
