@@ -93,6 +93,64 @@ class PaymentsInstrumentTest extends TestCase
         return $http;
     }
 
+    #[DataProvider('mismatchedOrUnusableReportPairs')]
+    public function test_migration_requires_exact_owned_and_usable_pair_before_adoption(array $consent, array $method, string $exception): void
+    {
+        $default = $this->seedInstrument();
+        DB::table('airwallex_payment_instrument_defaults')->insert(['customer_id' => $this->customer->id, 'instrument_id' => $default->id]);
+        $remoteConsent = $this->consent(['id' => 'consent-imported', 'payment_method' => ['id' => 'method-imported', 'type' => 'card'], ...$consent]);
+        $remoteMethod = $this->method(['id' => 'method-imported', ...$method]);
+        $http = $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $remoteMethod : $remoteConsent));
+        try {
+            app(Instruments::class)->adoptVerifiedCard($this->customer, 'consent-imported', 'method-imported');
+            self::fail('An ineligible migration report pair was adopted.');
+        } catch (OwnershipException|EvidenceException $error) {
+            self::assertInstanceOf($exception, $error);
+            self::assertSame($default->id, Instrument::sole()->id);
+            self::assertSame($default->id, DB::table('airwallex_payment_instrument_defaults')->value('instrument_id'));
+            self::assertSame(0, Operation::count());
+        }
+        $requests = count($http->requests);
+        try {
+            app(Instruments::class)->verified($this->customer, 'consent-imported');
+            self::fail('A failed adoption made an unknown card usable for a charge.');
+        } catch (OwnershipException) {
+            self::assertCount($requests, $http->requests);
+        }
+    }
+
+    public function test_adoption_rejects_method_version_superseded_between_canonical_reads_and_projection(): void
+    {
+        $updatedAt = '2026-11-11T09:01:00Z';
+        $this->app['events']->listen('eloquent.saved: '.MethodObservation::class, function (MethodObservation $method) use ($updatedAt): void {
+            DB::afterCommit(static fn () => MethodObservation::query()->whereKey($method->id)->update(['provider_updated_at' => $updatedAt]));
+        });
+        $this->transport(fn (RequestInterface $request) => FakeHttpClient::json(str_contains($request->getUri()->getPath(), '/payment_methods/') ? $this->method() : $this->consent()));
+
+        try {
+            app(Instruments::class)->adoptVerifiedCard($this->customer, 'cst-one', 'mtd-one');
+            self::fail('A stale Method version was adopted after the newer proof committed.');
+        } catch (ConflictException) {
+            self::assertSame($updatedAt, MethodObservation::sole()->provider_updated_at);
+            self::assertSame(0, Instrument::count());
+        }
+    }
+
+    public static function mismatchedOrUnusableReportPairs(): array
+    {
+        return [
+            'different method' => [['payment_method' => ['id' => 'method-other', 'type' => 'card']], [], EvidenceException::class],
+            'unverified' => [['status' => 'REQUIRES_PAYMENT_METHOD'], [], EvidenceException::class],
+            'customer-triggered' => [['next_triggered_by' => 'customer'], [], EvidenceException::class],
+            'scheduled merchant use' => [['merchant_trigger_reason' => 'scheduled'], [], EvidenceException::class],
+            'foreign merchant account' => [['account_id' => 'other-account'], [], OwnershipException::class],
+            'foreign consent customer' => [['customer_id' => 'cus-other'], [], OwnershipException::class],
+            'foreign method customer' => [[], ['customer_id' => 'cus-other'], OwnershipException::class],
+            'disabled method' => [[], ['status' => 'DISABLED'], EvidenceException::class],
+            'non-card' => [['payment_method' => ['id' => 'method-imported', 'type' => 'googlepay']], ['type' => 'googlepay'], EvidenceException::class],
+        ];
+    }
+
     public function test_create_only_secret_is_ephemeral_and_same_key_recovery_reads_without_recreating_setup(): void
     {
         $http = $this->transport(function (RequestInterface $request): ResponseInterface {

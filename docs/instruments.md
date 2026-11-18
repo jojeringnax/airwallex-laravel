@@ -47,7 +47,28 @@ The installed [instrument recipe](../examples/payments-instruments.php) accepts 
 
 `billingSource($paymentsCustomer, $consentId, $authorizedBillingCustomer, $sourceId)` is an explicit read-only proof. Both mappings must represent the same billable/environment; canonical Source customer/collector and `external_id` must match the verified Payments account/card Method. Equal opaque Method IDs alone never bridge different collector accounts. It performs no source swap. The [Source API](https://www.airwallex.com/docs/api/billing/payment_sources) uses Method linkage and requires merchant/unscheduled authorization. Separate Billing source replacement remains an explicit action that may retry an invoice.
 
-Downstream work owns agreement text, callback authorization, wallet/domain setup, deployed client builds and instrument migration/recollection. Existing Stripe tokens cannot be copied into Airwallex; use an approved provider migration route or recollect. No consumer repository migration or account observation is claimed.
+Downstream work owns agreement text, callback authorization, wallet/domain setup, deployed client builds and instrument migration or recollection.
+
+## Adopt cards from an Airwallex migration report
+
+Arrange the encrypted card-data transfer with Airwallex and the previous processor. Import only the migration **output report** into an authorized application workflow. Scope each import to its approved environment, merchant account and previous processor. Use the External customer ID to find an authorized local billable and the External Card ID to match a known instrument under that same customer. Treat both as opaque identifiers. The report supplies Airwallex Customer, Consent and Payment Method IDs, verification result, migration failure reason and finish time. [Airwallex card data migration](https://www.airwallex.com/docs/payments/test-and-go-live/card-data-migration)
+
+Before any package call, quarantine rows with a missing ID, an unrecognized external pair, a reported failure or a missing or false verification result. Collapse identical rows into one import decision. If one external pair maps to different Airwallex references, or one Airwallex reference maps to incompatible local owners, quarantine the affected rows together and resolve the mapping with the migration owner. The application owns this staging, audit and retry policy. Keep the original processor's credentials and encrypted card file outside the application.
+
+For a row that passes those checks, use the three Airwallex identifiers from the report and the independently authorized local billable.
+
+```php
+use Jojeringnax\AirwallexLaravel\Payments;
+use Jojeringnax\AirwallexLaravel\Payments\Instruments;
+
+$payments = Payments::for($authorizedBillable);
+$customer = $payments->linkCustomer($reportCustomerId);
+$instrument = app(Instruments::class)->adoptVerifiedCard($customer, $reportConsentId, $reportMethodId);
+```
+
+`linkCustomer()` verifies the Customer and its `merchant_customer_id` under the configured Payments account. It rejects a different existing Customer association with `OwnershipException`. A rejected instrument row leaves a successfully linked Customer in place. `adoptVerifiedCard()` verifies the exact Consent and Method under that mapped Customer, checks canonical card eligibility including `merchant` and `unscheduled` authorization, and stores the targeted association. Repeating the same row returns the same local Instrument. A foreign owner raises `OwnershipException`, contradictory or unusable evidence raises `EvidenceException`, and a concurrent projection change raises `ConflictException`. A missing provider resource surfaces the SDK read failure. Quarantine failures and correct the evidence before retrying. Adoption preserves the default selection. The ordinary default and charge reads still enforce provider and local eligibility.
+
+Authorize each new payable separately. Pass the adopted Consent ID as an explicit argument to the [saved-card payment flow](payments.md), with independent persistent action keys for Intent creation and confirmation. A deterministic SDK-transport test exercises report replay, conflicting Customer and Method references, ineligible cards and a successful canonical merchant-initiated capture. An Airwallex-approved migration report and corresponding imported test Consent are required to qualify a sandbox or pilot migration. Use fresh explicit card setup when migration is unavailable.
 
 ## Optional subscription servicing after revocation
 

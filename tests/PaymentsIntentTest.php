@@ -7,6 +7,7 @@ namespace Jojeringnax\AirwallexLaravel\Tests;
 use Closure;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Jojeringnax\AirwallexLaravel\Exception\AmbiguousOperationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
@@ -15,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Payments;
 use Jojeringnax\AirwallexLaravel\Payments\Amount;
 use Jojeringnax\AirwallexLaravel\Payments\Context;
+use Jojeringnax\AirwallexLaravel\Payments\Instruments;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
@@ -63,6 +65,9 @@ class PaymentsIntentTest extends TestCase
             if (str_ends_with($path, '/authentication/login')) {
                 return FakeHttpClient::login();
             }
+            if (str_ends_with($path, '/pa/customers/customer-payments')) {
+                return FakeHttpClient::json(['id' => 'customer-payments', 'merchant_customer_id' => 'merchant', 'account_id' => 'account-payments']);
+            }
             if (str_contains($path, '/payment_methods/')) {
                 return FakeHttpClient::json(['id' => 'method-owned', 'customer_id' => 'customer-payments', 'status' => 'CREATED', 'type' => 'card', 'updated_at' => '2026-11-11T12:00:00Z']);
             }
@@ -98,6 +103,53 @@ class PaymentsIntentTest extends TestCase
                 return ($this->reply)($request);
             }
         });
+    }
+
+    public function test_migration_report_pair_is_adopted_once_and_used_for_an_explicit_merchant_charge(): void
+    {
+        $unmapped = IntentOwner::create(['id' => 'migration-owner']);
+        $this->customer->delete();
+        $payments = Payments::for($unmapped);
+        $customer = $payments->linkCustomer('customer-payments');
+        $instruments = app(Instruments::class);
+        $imported = $instruments->adoptVerifiedCard($customer, 'consent-owned', 'method-owned');
+
+        self::assertSame($customer->id, $imported->customer_id);
+        self::assertSame($imported->id, $instruments->adoptVerifiedCard($customer, 'consent-owned', 'method-owned')->id);
+        self::assertSame(1, Instrument::count());
+        self::assertSame(1, Observation::count());
+        self::assertNull($instruments->default($customer));
+        self::assertSame(0, $this->writes());
+
+        $instruments->setDefault($customer, $imported);
+        $reads = count($this->requests);
+        try {
+            $payments->linkCustomer('different-report-customer');
+            self::fail('Conflicting report customer displaced an existing mapping.');
+        } catch (OwnershipException) {
+            self::assertCount($reads, $this->requests);
+            self::assertSame($customer->id, $payments->customer()->id);
+            self::assertSame('customer-payments', $payments->customer()->remote_id);
+            self::assertSame($imported->id, DB::table('airwallex_payment_instrument_defaults')->value('instrument_id'));
+        }
+
+        $this->afterWrite = function (Operation $operation, array &$state): void {
+            if ($operation->kind === 'intent.confirm') {
+                self::assertSame('merchant', $operation->intent['body']['triggered_by']);
+                self::assertSame('consent-owned', $operation->intent['body']['payment_consent_id']);
+                $state['status'] = 'SUCCEEDED';
+                $state['captured_amount'] = '1.25';
+            }
+        };
+        $intent = $payments->createIntent('migration-create', 'migration-order', '1.25', 'EUR');
+        $paid = $payments->confirmIntent($intent, 'migration-confirm', $imported->remote_id);
+
+        self::assertSame($intent->id, $paid->id);
+        self::assertTrue($paid->paid());
+        self::assertSame('1.25', $paid->captured_amount);
+        self::assertSame(2, $this->writes());
+        self::assertSame($paid->id, $payments->confirmIntent($intent, 'migration-confirm', $imported->remote_id)->id);
+        self::assertSame(2, $this->writes());
     }
 
     public function test_exact_conversion_and_creation_reserve_merchant_order_and_original_command(): void

@@ -67,6 +67,16 @@ class Instruments
         return $this->observe($customer, $consentId);
     }
 
+    /** Adopt one explicitly authorized Consent and Method pair after canonical MIT verification. */
+    public function adoptVerifiedCard(Customer $customer, string $consentId, string $paymentMethodId): Instrument
+    {
+        if ($consentId === '' || $paymentMethodId === '') {
+            throw new EvidenceException('Consent and Payment Method identifiers are required for saved card adoption.');
+        }
+
+        return $this->observe($this->customer($customer, enabled: true), $consentId, allowLink: true, expectedMethodId: $paymentMethodId);
+    }
+
     /** Canonical Method-only notifications never invent a Consent state or billing source. */
     public function reconcileMethod(Customer $customer, string $methodId): void
     {
@@ -100,10 +110,7 @@ class Instruments
     {
         $customer = $this->customer($customer, enabled: true);
         $instrument = $this->complete($customer, $consentId);
-        $this->assertUsable($instrument);
-        if ($instrument->next_triggered_by !== 'merchant' || $instrument->merchant_trigger_reason !== 'unscheduled') {
-            throw new EvidenceException('Consent is not verified for merchant-initiated unscheduled charges.');
-        }
+        $this->assertMerchantUsable($instrument);
 
         return $instrument;
     }
@@ -113,10 +120,7 @@ class Instruments
     {
         $customer = $this->customer($customer, enabled: true);
         $instrument = $this->local($customer, $consentId);
-        $this->assertUsable($instrument);
-        if ($instrument->next_triggered_by !== 'merchant' || $instrument->merchant_trigger_reason !== 'unscheduled') {
-            throw new EvidenceException('Consent is not eligible for this merchant-triggered reservation.');
-        }
+        $this->assertMerchantUsable($instrument);
     }
 
     /** @internal Retain canonical Method proof for an authorized on-session action. */
@@ -344,7 +348,7 @@ class Instruments
         return $this->observe($customer, $id, operation: $operation, allowLink: $operation->kind === 'consent.create');
     }
 
-    private function observe(Customer $customer, string $id, ?Operation $operation = null, bool $allowLink = false): Instrument
+    private function observe(Customer $customer, string $id, ?Operation $operation = null, bool $allowLink = false, ?string $expectedMethodId = null): Instrument
     {
         $this->context->assertModel($customer);
         $before = Instrument::query()->where([...$this->context->attributes(), 'remote_id' => $id])->first();
@@ -375,13 +379,16 @@ class Instruments
             }
         }
         $methodId = $remote['payment_method']['id'] ?? null;
+        if ($expectedMethodId !== null && $methodId !== $expectedMethodId) {
+            throw new EvidenceException('Consent does not reference the expected Payment Method.');
+        }
         $method = $methodId === null ? null : $this->method($customer, $methodId);
         if ($method !== null && ($remote['payment_method']['type'] ?? null) !== $method['type']) {
             throw new EvidenceException('Consent and Payment Method types disagree.');
         }
 
-        return DB::transaction(function () use ($customer, $remote, $id, $methodId, $method, $before, $operation): Instrument {
-            $this->lockCustomer($customer);
+        return DB::transaction(function () use ($customer, $remote, $id, $methodId, $method, $before, $operation, $expectedMethodId): Instrument {
+            $this->lockCustomer($customer, enabled: $expectedMethodId !== null);
             $current = Instrument::query()->where([...$this->context->attributes(), 'remote_id' => $id])->first();
             if ($current !== null && ($current->customer_id !== $customer->id || $before === null || $current->revision !== $before->revision)) {
                 throw new ConflictException('Consent projection changed while its canonical reads were in flight.');
@@ -409,7 +416,11 @@ class Instruments
                 'snapshot' => ['consent' => array_intersect_key($remote, array_flip(['id', 'customer_id', 'status', 'next_triggered_by', 'merchant_trigger_reason', 'created_at', 'updated_at'])),
                     'method' => $method === null ? null : ['id' => $methodId, 'customer_id' => $method['customer_id'], 'type' => $method['type'], 'status' => $method['status'], 'updated_at' => $method['updated_at'],
                         'card' => array_intersect_key($method['card'] ?? [], array_flip(['last4', 'brand', 'expiry_month', 'expiry_year']))]],
-                'revision' => ($current->revision ?? 0) + 1, 'synced_at' => now()->utc()])->save();
+                'revision' => ($current->revision ?? 0) + 1, 'synced_at' => now()->utc()]);
+            if ($expectedMethodId !== null) {
+                $this->assertMerchantUsable($instrument, $method['updated_at'] ?? null);
+            }
+            $instrument->save();
             if ($instrument->status !== 'VERIFIED' || $instrument->method_status !== 'CREATED' || $instrument->revoked_at !== null) {
                 DB::table('airwallex_payment_instrument_defaults')->where('customer_id', $customer->id)->where('instrument_id', $instrument->id)->update(['instrument_id' => null]);
             }
@@ -457,7 +468,15 @@ class Instruments
             ?? throw new OwnershipException('Consent setup is not known to this billable.');
     }
 
-    private function assertUsable(Instrument $instrument): void
+    private function assertMerchantUsable(Instrument $instrument, ?string $expectedMethodVersion = null): void
+    {
+        $this->assertUsable($instrument, $expectedMethodVersion);
+        if ($instrument->next_triggered_by !== 'merchant' || $instrument->merchant_trigger_reason !== 'unscheduled') {
+            throw new EvidenceException('Consent is not verified for merchant-initiated unscheduled charges.');
+        }
+    }
+
+    private function assertUsable(Instrument $instrument, ?string $expectedMethodVersion = null): void
     {
         if ($instrument->status !== 'VERIFIED' || $instrument->method_status !== 'CREATED' || $instrument->method_type !== 'card' || $instrument->method_id === null || $instrument->revoked_at !== null) {
             throw new EvidenceException('Saved card consent or method is not canonically usable.');
@@ -465,6 +484,9 @@ class Instruments
         $method = MethodObservation::query()->where([...$this->context->attributes(), 'customer_id' => $instrument->customer_id, 'remote_id' => $instrument->method_id])->first();
         if ($method === null || $method->status !== 'CREATED' || $method->method_type !== 'card') {
             throw new EvidenceException('Retained Payment Method proof does not allow a charge reservation.');
+        }
+        if ($expectedMethodVersion !== null && Timestamp::compare($method->provider_updated_at, $expectedMethodVersion) !== 0) {
+            throw new ConflictException('Payment Method changed while saved card adoption was in flight.');
         }
     }
 
