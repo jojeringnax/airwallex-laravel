@@ -268,7 +268,8 @@ class Refunds
                     $query->orWhere('request_id', $requestId);
                 }
             });
-        $matches = $operations->limit(2)->get();
+        $operations->limit(2);
+        $matches = $operations->get();
         if ($matches->count() > 1) {
             throw new EvidenceException('Refund identity and request reference contradict local commands.');
         }
