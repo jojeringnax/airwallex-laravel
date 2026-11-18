@@ -16,6 +16,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 use Jojeringnax\AirwallexLaravel\Services\ReceiptOutcome;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
+use Jojeringnax\AirwallexLaravel\Timestamp;
 
 class WebhookProcessor
 {
@@ -30,6 +31,12 @@ class WebhookProcessor
         }
         $id = $event['resourceId'];
         $family = $event['family'];
+        if ($family === 'payment_dispute') {
+            return $this->observeDispute($id, $event['resource']['updated_at'] ?? null);
+        }
+        if ($family === 'deposit') {
+            return $this->observeDeposit($id, $event['eventName'] === 'deposit.reversed');
+        }
         $model = match ($family) {
             'payment_intent' => Intent::query()->where($this->context->attributes())->where('remote_id', $id)->first(),
             'refund' => Refund::query()->where($this->context->attributes())->where('remote_id', $id)->first(),
@@ -97,6 +104,43 @@ class WebhookProcessor
     public function recordOutcome(Receipt $receipt, ReceiptOutcome $outcome): void
     {
         app(Observations::class)->record($receipt, ['remote_id' => $receipt->resource_id, 'status' => $outcome->status]);
+    }
+
+    private function observeDispute(string $id, mixed $signalUpdatedAt): ReceiptOutcome
+    {
+        try {
+            $dispute = app(Disputes::class)->observe($id);
+        } catch (OwnershipException) {
+            return new ReceiptOutcome('quarantined', 'foreign_dispute');
+        }
+        if ($dispute === null) {
+            return new ReceiptOutcome('ignored', 'unknown_dispute_payment');
+        }
+        if ($signalUpdatedAt !== null && Timestamp::compare($dispute->provider_updated_at, Proof::timestamp($signalUpdatedAt)) < 0) {
+            return new ReceiptOutcome('failed', 'dispute_update_unconfirmed');
+        }
+
+        return new ReceiptOutcome('processed', 'canonical_observed');
+    }
+
+    private function observeDeposit(string $id, bool $reversal): ReceiptOutcome
+    {
+        if (config('airwallex.payments.deposit_global_account_id') === null) {
+            return new ReceiptOutcome('ignored', 'deposits_not_configured');
+        }
+        try {
+            $deposit = app(Deposits::class)->observe($id);
+        } catch (OwnershipException) {
+            return new ReceiptOutcome('quarantined', 'foreign_deposit');
+        }
+        if ($deposit === null) {
+            return new ReceiptOutcome('ignored', 'outside_global_account');
+        }
+        if ($reversal && $deposit->status !== 'REVERSED') {
+            return new ReceiptOutcome('failed', 'deposit_reversal_unconfirmed');
+        }
+
+        return new ReceiptOutcome('processed', 'canonical_observed');
     }
 
     private function recover(Customer $customer, Operation $operation, string $id): void

@@ -13,6 +13,7 @@ The released v0.1 baseline is [release tracker #1](https://github.com/jojeringna
 | Subscription changes/cancellation | Exact values and explicit provider financial controls; no package proration calculation |
 | Invoice access | Owned invoice/line-item reads and provider PDF/hosted links; transaction observations follow [public contracts](contracts.md#invoice-transaction-observations); no local cash ledger, allocation or settlement inference |
 | Webhooks and recovery | SDK signatures/decoding, durable receipts, canonical reconciliation, events, dispatch/replay/reconcile tools |
+| Payment disputes and Global Account deposit observations | Account-scoped canonical reads and signed-event recovery. Disputes require an owned original PaymentIntent and verified linked Attempt when supplied. Bank transfers require the configured Global Account. The consumer handles dispute responses, deposit matching, approvals and accounting. |
 | Extensibility | Configured model subclasses, billable profiles and replaceable access policy; raw SDK remains accessible |
 
 The SDK owns authentication, HTTP, request validation, lossless representation and signature verification. Laravel owns local persistence, orchestration, receipts/jobs, reconciliation and events. Sandbox/production and owning organization form immutable identity; credentials may rotate without changing mappings. Each local billable/context has one Customer; each remote Customer/context has one local billable.
