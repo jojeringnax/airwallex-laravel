@@ -85,12 +85,9 @@ class WebhookProcessor
 
         if ($family === 'refund') {
             try {
-                $refund = app(Refunds::class)->observeById($id);
+                return app(Refunds::class)->observeById($id);
             } catch (OwnershipException) {
                 return new ReceiptOutcome('quarantined', 'refund_ownership_mismatch');
-            }
-            if ($refund !== null) {
-                return new ReceiptOutcome('processed', 'canonical_observed');
             }
         }
 

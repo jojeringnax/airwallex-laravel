@@ -443,6 +443,24 @@ class PaymentsRefundTest extends TestCase
         self::assertSame(1, $this->writes());
     }
 
+    public function test_signed_locator_stays_quarantined_after_an_explicit_retry_release(): void
+    {
+        $this->timeoutWrite = true;
+        try {
+            $this->payments->refundIntent($this->intent, 'unknown', '30');
+            self::fail('Expected a synthetic lost response.');
+        } catch (AmbiguousOperationException $error) {
+            $operation = Operation::findOrFail($error->operationId);
+        }
+        app(CreationRetries::class)->allowRetry($operation, 'consumer', 'explicit replacement');
+        $receipt = $this->signedRefund('late-superseded-refund', 'refund-1', 'refund.accepted');
+        self::assertSame('quarantined', $receipt->status);
+        self::assertSame('superseded_creation_locator', $receipt->last_error);
+        self::assertNull(Refund::sole()->remote_id);
+        self::assertSame(0, Observation::where('resource_type', 'airwallex_payment_refunds')->count());
+        self::assertSame(1, $this->writes());
+    }
+
     private function externalRefund(string $id, string $amount, string $status, array $overrides = []): void
     {
         $this->refunds[$id] = ['id' => $id, 'amount' => $amount, 'status' => $status, 'payment_intent_id' => 'intent-owned',

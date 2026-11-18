@@ -17,6 +17,7 @@ use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
 use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
+use Jojeringnax\AirwallexLaravel\Services\ReceiptOutcome;
 use Jojeringnax\AirwallexLaravel\Services\SubscriptionSynchronizer;
 use Jojeringnax\AirwallexLaravel\Support\SdkResponseShape;
 use Jojeringnax\AirwallexLaravel\Timestamp;
@@ -134,8 +135,8 @@ class Refunds
         return $result;
     }
 
-    /** Signed locator path. Ownership is established entirely from canonical records. */
-    public function observeById(string $id): ?Refund
+    /** @internal Signed locator path. Ownership is established entirely from canonical records. */
+    public function observeById(string $id): ReceiptOutcome
     {
         $remote = $this->retrieve($id);
         $attempt = $this->readLinkedAttempt($remote);
@@ -145,13 +146,16 @@ class Refunds
         }
         $intent = Intent::query()->where([...$this->context->attributes(), 'remote_id' => $intentId])->first();
         if ($intent === null) {
-            return null;
+            return new ReceiptOutcome('ignored', 'unknown_resource');
         }
 
         $customer = Customer::query()->where($this->context->attributes())->findOrFail($intent->customer_id);
         $intent = $this->intents->reconcile($customer, $intent);
+        $refund = $this->adopt($customer, $intent, $remote, $attempt);
 
-        return $this->adopt($customer, $intent, $remote, $attempt);
+        return $refund === null
+            ? new ReceiptOutcome('quarantined', 'superseded_creation_locator')
+            : new ReceiptOutcome('processed', 'canonical_observed');
     }
 
     public function recover(Customer $customer, Operation $operation, ?string $knownId = null): Refund
@@ -303,9 +307,17 @@ class Refunds
                 throw new EvidenceException('A stale or contradictory refund observation cannot replace retained evidence.');
             }
         }
+        $originalAttempt = $current->paymentAttemptId();
+        if ($originalAttempt !== null && isset($remote['payment_attempt_id']) && $remote['payment_attempt_id'] !== $originalAttempt) {
+            throw new OwnershipException('Refund observation changed its original payment attempt.');
+        }
+        $snapshot = SubscriptionSynchronizer::sanitize($remote);
+        if ($originalAttempt !== null) {
+            $snapshot['payment_attempt_id'] = $originalAttempt;
+        }
         $current->forceFill([
             'remote_id' => $remote['id'], 'status' => $remote['status'],
-            'snapshot' => SubscriptionSynchronizer::sanitize($remote), 'revision' => $current->revision + 1,
+            'snapshot' => $snapshot, 'revision' => $current->revision + 1,
         ])->save();
         $providerCreated = $current->operation_id === null;
         $this->observations->record($current, [
