@@ -507,11 +507,19 @@ class PaymentsIntentTest extends TestCase
             'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
             'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
         $createRequest = $this->state['request_id'];
-        $this->attempts['attempt-new'] = ['id' => 'attempt-new', 'payment_intent_id' => 'intent-owned', 'status' => 'AUTHORIZED',
+        $this->attempts['attempt-new'] = ['id' => 'attempt-new', 'payment_intent_id' => 'intent-owned',
+            'status' => match ($scenario) {
+                'failed_attempt' => 'FAILED',
+                'challenged_attempt' => 'AUTHENTICATION_REDIRECTED',
+                'contradictory_capture' => 'CAPTURE_REQUESTED',
+                default => 'AUTHORIZED',
+            },
+            'captured_amount' => $scenario === 'contradictory_capture' ? '5.00' : '0.00',
             'payment_consent_id' => 'consent-owned', 'payment_method' => ['id' => $scenario === 'foreign_method' ? 'other-method' : 'method-owned']];
         $this->afterWrite = function (Operation $operation, array &$state) use ($createRequest, $scenario): void {
             $state['request_id'] = $scenario === 'contradictory_request' ? 'different-request' : $createRequest;
-            $state['status'] = 'REQUIRES_CAPTURE';
+            $state['status'] = $scenario === 'contradictory_capture' ? 'SUCCEEDED' : 'REQUIRES_CAPTURE';
+            $state['captured_amount'] = $scenario === 'contradictory_capture' ? '10.00' : '0.00';
             $state['latest_payment_attempt'] = ['id' => 'attempt-new'];
             if ($scenario === 'lost_response') {
                 $this->advance([]);
@@ -537,7 +545,7 @@ class PaymentsIntentTest extends TestCase
         self::assertSame('REQUIRES_PAYMENT_METHOD', $intent->fresh()->status);
         self::assertSame($scenario === 'lost_response' ? null : $intent->remote_id, $operation->remote_id);
         self::assertSame($scenario === 'another_attempt' ? 'attempt-unrelated'
-            : (in_array($scenario, ['foreign_method', 'contradictory_request'], true) ? 'attempt-new' : null), $operation->confirmation_attempt_id);
+            : (in_array($scenario, ['missing_attempt', 'lost_response'], true) ? null : 'attempt-new'), $operation->confirmation_attempt_id);
         $writes = $this->writes();
         try {
             $this->payments->recoverIntent($operation->id);
@@ -550,7 +558,47 @@ class PaymentsIntentTest extends TestCase
 
     public static function unprovenConfirmations(): array
     {
-        return [['missing_attempt'], ['foreign_method'], ['another_attempt'], ['lost_response'], ['contradictory_request']];
+        return [['missing_attempt'], ['foreign_method'], ['another_attempt'], ['lost_response'], ['contradictory_request'],
+            ['failed_attempt'], ['challenged_attempt'], ['contradictory_capture']];
+    }
+
+    #[DataProvider('compatibleConfirmations')]
+    public function test_create_request_echo_and_distinct_ack_attempt_verify_owned_canonical_outcome(
+        string $intentStatus,
+        string $attemptStatus,
+        string $captured,
+        bool $paid,
+    ): void {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
+            'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
+        $createRequest = $this->state['request_id'];
+        $this->attempts['attempt-new'] = ['id' => 'attempt-new', 'payment_intent_id' => 'intent-owned', 'status' => $attemptStatus,
+            'captured_amount' => $captured, 'payment_consent_id' => 'consent-owned', 'payment_method' => ['id' => 'method-owned']];
+        $this->afterWrite = function (Operation $operation, array &$state) use ($createRequest, $intentStatus, $captured): void {
+            $state['request_id'] = $createRequest;
+            $state['status'] = $intentStatus;
+            $state['captured_amount'] = $captured;
+            $state['latest_payment_attempt'] = ['id' => 'attempt-new'];
+        };
+        $result = $this->payments->confirmIntent($intent, 'saved-confirm', 'consent-owned');
+        $operation = Operation::query()->where('action_key', 'saved-confirm')->sole();
+        self::assertSame('attempt-new', $operation->confirmation_attempt_id);
+        self::assertSame('succeeded', $operation->status);
+        self::assertNull($operation->lock_key);
+        self::assertSame($intentStatus, $result->status);
+        self::assertSame($paid, $result->paid());
+        self::assertSame($captured, $this->payments->paymentAttempt($intent)?->capturedAmount);
+        self::assertSame(2, $this->writes());
+    }
+
+    public static function compatibleConfirmations(): array
+    {
+        return [
+            'manual authorization' => ['REQUIRES_CAPTURE', 'AUTHORIZED', '0.00', false],
+            'automatic capture before settlement' => ['SUCCEEDED', 'CAPTURE_REQUESTED', '10.00', true],
+        ];
     }
 
     public function test_stale_created_method_cannot_bypass_retained_disable_for_customer_present_payment(): void
