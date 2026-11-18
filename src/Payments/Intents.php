@@ -108,21 +108,28 @@ class Intents
         if ($intent->status !== 'REQUIRES_CUSTOMER_ACTION') {
             throw new ConflictException('This Payments intent has no outstanding customer action.');
         }
+        $attemptId = $this->latestAttemptId($remote);
+        if ($attemptId === null) {
+            throw new EvidenceException('The challenge response has no distinct current attempt identity.');
+        }
         $requestId = $remote['request_id'] ?? null;
-        $operation = is_string($requestId) ? Operation::query()->where([
-            ...$this->context->attributes(), 'customer_id' => $customer->id, 'kind' => 'intent.confirm',
-            'target_id' => $intent->remote_id, 'request_id' => $requestId,
-        ])->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'succeeded'])->first() : null;
+        $operations = Operation::query();
+        $operations->where([
+            ...$this->context->attributes(), 'customer_id' => $customer->id, 'kind' => 'intent.confirm', 'target_id' => $intent->remote_id,
+        ])->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'succeeded']);
+        $operation = is_string($requestId) ? (clone $operations)->where('request_id', $requestId)->first() : null;
+        $operation ??= $operations->where('confirmation_attempt_id', $attemptId)->first();
         if ($operation === null || ($operation->intent['body']['payment_consent_id'] ?? null) !== $consentId
             || ($operation->intent['body']['triggered_by'] ?? 'merchant') !== 'merchant'
             || isset($operation->intent['body']['payment_method'])) {
             throw new OwnershipException('The outstanding customer action does not match the original saved-card confirmation.');
         }
-        $attemptId = $this->latestAttemptId($remote);
-        if ($attemptId === null || $attemptId === ($operation->confirmation_baseline['attempt_id'] ?? null)) {
+        if ($attemptId === ($operation->confirmation_baseline['attempt_id'] ?? null)) {
             throw new EvidenceException('The challenge response has no distinct current attempt identity.');
         }
-        $attempt = $this->readAttempt($intent, $attemptId);
+        $attempt = $requestId === $operation->request_id
+            ? $this->readAttempt($intent, $attemptId)
+            : $this->acknowledgedSavedAttempt($intent, $operation, $remote);
         if ($attempt === null || $attempt->status !== 'AUTHENTICATION_REDIRECTED') {
             throw new EvidenceException('A canonical attempt awaiting authentication is required.');
         }
@@ -327,7 +334,7 @@ class Intents
 
         try {
             return $this->operations->execute($operation,
-                fn () => app(Client::class)->sdk->payments()->paymentIntents()->{$action}($canonical->remote_id, [...$body, 'request_id' => $operation->request_id]),
+                fn () => $this->sendAction($canonical, $operation, $action, $body),
                 fn () => $this->confirm($customer, $canonical, $operation, $canonical->remote_id),
                 function () use ($customer, $canonical, $consentId, $methodId, $operation, $action, $attempt): void {
                     if ($this->owned($customer, $canonical)->revision !== $canonical->revision) {
@@ -353,6 +360,46 @@ class Intents
         }
     }
 
+    private function sendAction(Intent $intent, Operation $operation, string $action, array $body): array
+    {
+        $remote = app(Client::class)->sdk->payments()->paymentIntents()->{$action}($intent->remote_id, [...$body, 'request_id' => $operation->request_id]);
+        if ($action === 'confirm') {
+            $observation = SdkResponseShape::normalize($remote);
+            Proof::identity($observation, $intent->remote_id, $this->context);
+            $attemptId = $this->latestAttemptId($observation);
+            if ($attemptId !== null && $attemptId !== $operation->confirmation_baseline['attempt_id']) {
+                $operation->forceFill(['confirmation_attempt_id' => $attemptId])->save();
+            }
+        }
+
+        return $remote;
+    }
+
+    /** Prove an acknowledged saved-card action when Retrieve still echoes the Create request. */
+    private function acknowledgedSavedAttempt(Intent $intent, Operation $operation, array $remote): PaymentAttempt
+    {
+        $attemptId = $operation->confirmation_attempt_id;
+        $consentId = $operation->intent['body']['payment_consent_id'] ?? null;
+        $methodId = $operation->confirmation_baseline['consent_method_id'] ?? null;
+        $creation = Operation::query()->findOrFail($intent->operation_id);
+        if ($operation->kind !== 'intent.confirm' || $operation->target_id !== $intent->remote_id
+            || ! is_string($consentId) || $methodId === null || $attemptId === null
+            || $attemptId === $operation->confirmation_baseline['attempt_id'] || $attemptId !== $this->latestAttemptId($remote)
+            || ($remote['request_id'] ?? null) !== $creation->request_id
+            || $creation->kind !== 'intent.create' || $creation->remote_id !== $intent->remote_id) {
+            throw new EvidenceException('Canonical intent does not correlate to the original financial action.');
+        }
+        $this->context->assertModel($creation);
+        $attempt = $this->readAttempt($intent, $attemptId);
+        if ($attempt === null || ($attempt->consentId === null && $attempt->methodId === null)
+            || ($attempt->consentId !== null && $attempt->consentId !== $consentId)
+            || ($attempt->methodId !== null && $attempt->methodId !== $methodId)) {
+            throw new OwnershipException('The acknowledged confirmation attempt does not reference the original saved card.');
+        }
+
+        return $attempt;
+    }
+
     private function confirm(Customer $customer, Intent $intent, Operation $operation, string $id): Intent
     {
         return app(CreationRetries::class)->during($operation, fn () => $this->confirmCurrent($customer, $intent, $operation, $id));
@@ -361,9 +408,9 @@ class Intents
     private function confirmCurrent(Customer $customer, Intent $intent, Operation $operation, string $id): Intent
     {
         $remote = SdkResponseShape::normalize(app(Client::class)->sdk->payments()->paymentIntents()->retrieve($id));
-        if (($remote['request_id'] ?? null) !== $operation->request_id) {
-            throw new EvidenceException('Canonical intent does not correlate to the original financial action.');
-        }
+        $attempt = ($remote['request_id'] ?? null) === $operation->request_id
+            ? null
+            : $this->acknowledgedSavedAttempt($intent, $operation, $remote);
 
         $result = $this->observe($customer, $intent, $remote, $id);
         $fulfilled = match ($operation->kind) {
@@ -373,7 +420,7 @@ class Intents
             'intent.confirm' => $result->status !== 'REQUIRES_PAYMENT_METHOD'
                 || ($operation->confirmation_baseline !== null
                     && $this->latestAttemptId($result->snapshot) !== $operation->confirmation_baseline['attempt_id']
-                    && in_array($this->readAttempt($result)?->status, ['FAILED', 'EXPIRED', 'CANCELLED'], true)),
+                    && in_array(($attempt ?? $this->readAttempt($result))?->status, ['FAILED', 'EXPIRED', 'CANCELLED'], true)),
             default => true,
         };
         if (! $fulfilled) {
