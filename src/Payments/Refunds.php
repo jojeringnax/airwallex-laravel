@@ -245,9 +245,16 @@ class Refunds
             if ($currentIntent->revision !== $intent->revision || $this->operationFor($remote) !== null) {
                 throw new ConflictException('Refund or its original payment changed during discovery.');
             }
-            $current = Refund::query()->firstOrCreate([...$this->context->attributes(), 'remote_id' => $id], [
-                'customer_id' => $customer->id, 'intent_id' => $intent->id, 'amount' => $amount, 'currency' => $intent->currency,
-            ]);
+            $identity = [...$this->context->attributes(), 'remote_id' => $id];
+            $current = Refund::query()->where($identity)->first();
+            if ($current === null) {
+                if (! is_string($remote['request_id'] ?? null) || $remote['request_id'] === '') {
+                    $this->assertNoUncorrelatedOperation($currentIntent, $amount);
+                }
+                $current = Refund::query()->createOrFirst($identity, [
+                    'customer_id' => $customer->id, 'intent_id' => $intent->id, 'amount' => $amount, 'currency' => $intent->currency,
+                ]);
+            }
             if ($current->operation_id !== null || $current->customer_id !== $customer->id || $current->intent_id !== $intent->id
                 || $current->amount !== $amount || $current->currency !== $intent->currency) {
                 throw new OwnershipException('Refund identity conflicts with the original local payment or amount.');
@@ -255,6 +262,16 @@ class Refunds
 
             return $this->project($current, $currentIntent, $remote);
         });
+    }
+
+    private function assertNoUncorrelatedOperation(Intent $intent, string $amount): void
+    {
+        $commands = Operation::query()->where([
+            ...$this->context->attributes(), 'customer_id' => $intent->customer_id, 'kind' => 'refund.create',
+        ])->whereNull('remote_id')->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'superseded'])->select('id');
+        if (Refund::query()->where(['intent_id' => $intent->id, 'amount' => $amount])->whereIn('operation_id', $commands)->exists()) {
+            throw new EvidenceException('Refund discovery needs request or resource identity to resolve an outstanding matching package command.');
+        }
     }
 
     private function operationFor(array $remote): ?Operation

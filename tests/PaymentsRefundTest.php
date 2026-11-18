@@ -423,6 +423,26 @@ class PaymentsRefundTest extends TestCase
         self::assertSame($result->id, $this->payments->reconcileRefunds($this->intent)[0]->id);
     }
 
+    public function test_external_discovery_without_request_identity_waits_for_matching_package_refund_proof(): void
+    {
+        $this->nextStatus = 'ACCEPTED';
+        $this->afterWrite = function (string $id): void {
+            $original = $this->refunds[$id]['request_id'];
+            unset($this->refunds[$id]['request_id']);
+            $receipt = $this->signedRefund('unidentified-original', $id, 'refund.accepted');
+            self::assertSame('failed', $receipt->status);
+            self::assertNull(Refund::sole()->remote_id);
+            self::assertSame(0, Observation::where('resource_type', 'airwallex_payment_refunds')->count());
+            $this->refunds[$id]['request_id'] = $original;
+            self::assertSame('processed', app(Receipts::class)->process($receipt->id)->status);
+        };
+        $refund = $this->payments->refundIntent($this->intent, 'original-with-missing-request', '30');
+        self::assertSame($refund->id, Refund::sole()->id);
+        self::assertSame('package_initiated', $refund->origin());
+        self::assertSame(1, Observation::where('resource_type', 'airwallex_payment_refunds')->count());
+        self::assertSame(1, $this->writes());
+    }
+
     private function externalRefund(string $id, string $amount, string $status, array $overrides = []): void
     {
         $this->refunds[$id] = ['id' => $id, 'amount' => $amount, 'status' => $status, 'payment_intent_id' => 'intent-owned',
