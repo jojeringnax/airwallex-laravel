@@ -44,6 +44,8 @@ class PaymentsIntentTest extends TestCase
 
     private ?Closure $afterWrite = null;
 
+    private ?Closure $writeAcknowledgement = null;
+
     private ?Closure $beforeRead = null;
 
     private int $version = 0;
@@ -87,7 +89,10 @@ class PaymentsIntentTest extends TestCase
                 $this->advance([]);
             }
 
-            return FakeHttpClient::json([...$this->state, 'client_secret' => 'private-bootstrap-secret']);
+            $response = $request->getMethod() === 'POST' && $this->writeAcknowledgement !== null
+                ? ($this->writeAcknowledgement)($this->state) : $this->state;
+
+            return FakeHttpClient::json([...$response, 'client_secret' => 'private-bootstrap-secret']);
         };
         $this->app->instance(ClientInterface::class, new class($reply) implements ClientInterface
         {
@@ -340,14 +345,19 @@ class PaymentsIntentTest extends TestCase
         }
     }
 
-    public function test_saved_card_customer_action_requires_canonical_capture_after_browser_completion(): void
+    #[DataProvider('intentRequestEchoes')]
+    public function test_saved_card_customer_action_requires_canonical_capture_after_browser_completion(bool $createEcho): void
     {
         $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        $createRequest = $this->state['request_id'];
         Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
             'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
             'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
-        $this->afterWrite = function (Operation $operation, array &$state): void {
+        $this->afterWrite = function (Operation $operation, array &$state) use ($createEcho, $createRequest): void {
             self::assertArrayNotHasKey('triggered_by', $operation->intent['body']);
+            if ($createEcho) {
+                $state['request_id'] = $createRequest;
+            }
             self::assertSame('consent-owned', $operation->intent['body']['payment_consent_id']);
             $state['status'] = 'REQUIRES_CUSTOMER_ACTION';
             $state['next_action'] = ['type' => 'redirect_iframe', 'method' => 'GET', 'url' => 'https://example.test/synthetic-3ds?private=challenge'];
@@ -429,6 +439,65 @@ class PaymentsIntentTest extends TestCase
         } catch (EvidenceException) {
             self::assertSame($writes, $this->writes());
         }
+    }
+
+    public static function intentRequestEchoes(): array
+    {
+        return ['action request' => [false], 'create request' => [true]];
+    }
+
+    #[DataProvider('unprovenConfirmations')]
+    public function test_create_request_echo_cannot_recover_an_uncorrelated_saved_card_confirmation(string $scenario): void
+    {
+        $intent = $this->payments->createIntent('create', 'order', '10', 'USD');
+        Instrument::create([...app(Context::class)->attributes(), 'customer_id' => $this->customer->id,
+            'remote_id' => 'consent-owned', 'method_id' => 'method-owned', 'status' => 'VERIFIED', 'method_status' => 'CREATED', 'method_type' => 'card',
+            'next_triggered_by' => 'merchant', 'merchant_trigger_reason' => 'unscheduled', 'snapshot' => ['consent' => ['updated_at' => '2026-11-11T12:00:00Z']]]);
+        $createRequest = $this->state['request_id'];
+        $this->attempts['attempt-new'] = ['id' => 'attempt-new', 'payment_intent_id' => 'intent-owned', 'status' => 'AUTHORIZED',
+            'payment_consent_id' => 'consent-owned', 'payment_method' => ['id' => $scenario === 'foreign_method' ? 'other-method' : 'method-owned']];
+        $this->afterWrite = function (Operation $operation, array &$state) use ($createRequest, $scenario): void {
+            $state['request_id'] = $scenario === 'contradictory_request' ? 'different-request' : $createRequest;
+            $state['status'] = 'REQUIRES_CAPTURE';
+            $state['latest_payment_attempt'] = ['id' => 'attempt-new'];
+            if ($scenario === 'lost_response') {
+                $this->advance([]);
+                throw new RuntimeException('Synthetic lost confirmation after remote authorization.');
+            }
+        };
+        $this->writeAcknowledgement = static function (array $ack) use ($scenario): array {
+            if ($scenario === 'missing_attempt') {
+                unset($ack['latest_payment_attempt']);
+            } elseif ($scenario === 'another_attempt') {
+                $ack['latest_payment_attempt'] = ['id' => 'attempt-unrelated'];
+            }
+
+            return $ack;
+        };
+        try {
+            $this->payments->confirmIntent($intent, 'saved-confirm', 'consent-owned');
+            self::fail('Prior Create identity falsely confirmed a saved-card write.');
+        } catch (AmbiguousOperationException $exception) {
+            $operation = Operation::findOrFail($exception->operationId);
+        }
+        self::assertSame('ambiguous', $operation->status);
+        self::assertSame('REQUIRES_PAYMENT_METHOD', $intent->fresh()->status);
+        self::assertSame($scenario === 'lost_response' ? null : $intent->remote_id, $operation->remote_id);
+        self::assertSame($scenario === 'another_attempt' ? 'attempt-unrelated'
+            : (in_array($scenario, ['foreign_method', 'contradictory_request'], true) ? 'attempt-new' : null), $operation->confirmation_attempt_id);
+        $writes = $this->writes();
+        try {
+            $this->payments->recoverIntent($operation->id);
+            self::fail('Ambiguous original write was falsely associated on recovery.');
+        } catch (AmbiguousOperationException) {
+            self::assertSame($writes, $this->writes());
+            self::assertNotNull($operation->fresh()->lock_key);
+        }
+    }
+
+    public static function unprovenConfirmations(): array
+    {
+        return [['missing_attempt'], ['foreign_method'], ['another_attempt'], ['lost_response'], ['contradictory_request']];
     }
 
     public function test_stale_created_method_cannot_bypass_retained_disable_for_customer_present_payment(): void
