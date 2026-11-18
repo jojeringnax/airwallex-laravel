@@ -18,6 +18,7 @@ final readonly class Reconciliation
     private const array SETTLEMENT_RECORD = [
         'transaction_id', 'transaction_type', 'settlement_batch_id', 'payment_intent_id', 'payment_attempt_ids',
         'source_id', 'source_entity', 'order_id', 'request_id', 'acquirer_reference_number', 'subscription_id',
+        'customer_id', 'merchant_customer_id', 'payment_link_reference',
         'dispute_status', 'dispute_reason_code', 'created_at', 'settled_at', 'payment_created_time',
         'transaction_amount', 'transaction_currency', 'exchange_rate', 'settlement_currency',
         'gross_amount', 'fees', 'taxes_on_fees', 'net_amount',

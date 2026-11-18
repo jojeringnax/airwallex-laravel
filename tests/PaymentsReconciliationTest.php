@@ -25,6 +25,7 @@ final class PaymentsReconciliationTest extends TestCase
             {"items":[
                 {"account_id":"merchant","settlement_batch_id":"batch-eur","transaction_id":"tx-payment","transaction_type":"Payment",
                  "source_id":"att-1","source_entity":"PaymentAttempt","payment_attempt_ids":["att-1"],"payment_intent_id":"int-1",
+                 "payment_link_reference":"link-ref",
                  "settlement_currency":"EUR","transaction_currency":"USD","transaction_amount":108.66,"exchange_rate":0.920301859744155,
                  "gross_amount":100.00,"fees":3.00,"taxes_on_fees":0.50,"net_amount":96.50,"customer_email":"private@example.test",
                  "fee_details_list":[{"fee_type":"Gateway fee","fee_currency":"EUR","fee_subtotal_amount":3.00,
@@ -71,6 +72,7 @@ final class PaymentsReconciliationTest extends TestCase
         self::assertSame('3.50', $rows[0]['fee_details_list'][0]['settlement_total_amount']);
         self::assertSame('0.920301859744155', $rows[0]['exchange_rate']);
         self::assertSame('ref-1', $rows[1]['source_id']);
+        self::assertSame('link-ref', $rows[0]['payment_link_reference']);
         self::assertArrayNotHasKey('customer_email', $rows[0]);
         $cents = static fn (string $value): int => (int) str_replace('.', '', $value);
         self::assertSame($cents($batch['amount']), array_sum(array_map($cents, array_column($rows, 'net_amount'))));
@@ -95,6 +97,23 @@ final class PaymentsReconciliationTest extends TestCase
         self::assertSame('settlement_id=batch-eur&page_size=50&page=next%2B1', $http->requests[5]->getUri()->getQuery());
         self::assertSame('account_type=cash&currency=EUR&page=0&page_size=100', $http->requests[6]->getUri()->getQuery());
         self::assertSame('/api/v1/transfers/transfer-1', $http->requests[7]->getUri()->getPath());
+    }
+
+    public function test_wallet_pages_preserve_reserve_amounts_with_the_documented_movement_direction(): void
+    {
+        $http = $this->transport([
+            '{"items":[{"id":"reserve","currency":"EUR","amount":5.00,"balance":3.75,"source_type":"PAYMENT_RESERVE",'
+                .'"transaction_type":"PAYMENT_RESERVE_HOLD"}],"has_more":true,"page_after":"wallet+2"}',
+            '{"items":[],"has_more":false,"page_after":null}',
+        ]);
+        $reads = app(Reconciliation::class);
+
+        $page = $reads->walletActivity('EUR', fromPostedAt: '2026-11-18T12:00:00Z');
+        self::assertSame('5.00', $page['items'][0]['amount']);
+        self::assertSame('debit', $page['items'][0]['direction']);
+        self::assertSame(['items' => [], 'next_page' => null], $reads->walletActivity('EUR', $page['next_page'], '2026-11-18T12:00:00Z'));
+        self::assertStringContainsString('page=wallet%2B2', $http->requests[2]->getUri()->getQuery());
+        self::assertStringContainsString('from_post_at=2026-11-18T12%3A00%3A00Z', $http->requests[2]->getUri()->getQuery());
     }
 
     public function test_pending_and_amended_reads_keep_the_original_id_and_replay_is_repeatable(): void
