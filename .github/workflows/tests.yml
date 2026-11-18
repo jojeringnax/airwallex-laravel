@@ -83,7 +83,7 @@ jobs:
           python3 tools/qualify-candidate.py \
             --candidate "$(git rev-parse HEAD)" \
             --composer "$RUNNER_TEMP/airwallex-composer.phar" \
-            --sdk-version 0.1.3 --preserve-sdk-objects \
+            --sdk-version 0.2.0 --preserve-sdk-objects \
             --track all \
             --laravel "$LARAVEL_MAJOR" --database "$DATABASE" \
             --dependencies "$DEPENDENCIES" \

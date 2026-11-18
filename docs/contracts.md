@@ -4,7 +4,7 @@ This reference describes the released implementation contract and explicitly ide
 
 ## Consumer API
 
-Optional `airwallex.preserve_response_objects` is a strict boolean, default false. Enabling it selects the object-preserving HTTP and WebhookEvent views in the required released SDK v0.1.3 baseline. The package projects ordinary decoded object maps into its existing array interfaces while retaining empty and numeric-list-shaped objects as `stdClass`, so object/list metadata proof survives reads and persistence. Both Billing and Payments, their pages and signed envelopes follow this projection. SDK decoding, exact numbers, signatures and raw-token/duplicate-key limits remain SDK-owned. Default array behavior remains supported; qualify the selected representation in the installed application.
+Optional `airwallex.preserve_response_objects` is a strict boolean, default false. Enabling it selects the object-preserving HTTP and WebhookEvent views in the required released SDK baseline. The package projects ordinary decoded object maps into its existing array interfaces while retaining empty and numeric-list-shaped objects as `stdClass`, so object/list metadata proof survives reads and persistence. Both Billing and Payments, their pages and signed envelopes follow this projection. SDK decoding, exact numbers, signatures and raw-token/duplicate-key limits remain SDK-owned. Default array behavior remains supported; qualify the selected representation in the installed application.
 
 Applications authorize the local billable first. Any persisted Eloquent model uses `Jojeringnax\AirwallexLaravel\Billable`; keys may be integer/UUID/ULID and morph maps remain effective. Methods do not assume an authentication guard. `airwallexProfile(): array` is overridable and returns provider customer profile keys; saving a model never syncs remotely.
 
@@ -95,7 +95,7 @@ Domain events use a stable correlation ID, local resource ID, context and prior/
 
 `Invoice::transactions(array $query = []): Collection<InvoiceTransaction>` reads every cursor page for that exact invoice; `transaction(string $id): InvoiceTransaction` verifies a direct lookup against the same freshly retrieved parent. Parent/customer/context/routing is rechecked after remote I/O; absent invoice/customer linkage cannot be adopted. Foreign filters, repeated IDs/cursors and incomplete pages produce no partial collection. Optional external/collector/type/out-of-band omission remains visible, and every present route must match configuration. Ordinary JSON/debug output includes only identities, exact amount/currency and classifications; explicit `toArray()` preserves sanitized SDK observations and unknown fields. `identityKey()` is stable for provider/environment/owning Billing organization/transaction ID/type across distinct observation-event IDs; it is not proof of a successful cash allocation.
 
-This API uses the required released SDK v0.1.3 baseline; no additional dependency selection is necessary. The [selected SDK transaction contract](https://github.com/jojeringnax/airwallex-php-sdk/blob/v0.1.2/docs/billing-resources.md#billing-transactions) does not prove the transaction total is exclusively allocated to one invoice or settled. PAID invoices may be covered by credits/adjustments; a pending/failed/refund/out-of-band transaction is not a new provider cash payment. Applications retain independent allocation/currency-conversion evidence and deduplicate ledger posts by verified financial identity. No application accounting row or cash ledger is introduced by the package.
+This API uses the required released SDK baseline; no additional dependency selection is necessary. The [selected SDK transaction contract](https://github.com/jojeringnax/airwallex-php-sdk/blob/v0.1.2/docs/billing-resources.md#billing-transactions) does not prove the transaction total is exclusively allocated to one invoice or settled. PAID invoices may be covered by credits/adjustments; a pending/failed/refund/out-of-band transaction is not a new provider cash payment. Applications retain independent allocation/currency-conversion evidence and deduplicate ledger posts by verified financial identity. No application accounting row or cash ledger is introduced by the package.
 
 ## Managed subscription coupons
 
@@ -113,7 +113,7 @@ ONCE applies to the provider's first invoice; CUSTOM is a calendar interval, not
 
 This interface applies a 100 percent discount. Its name does not imply that it calculates a free calendar interval or charges the paid remainder. The [partial-period requirement](scope.md#catalogue-coupons-and-access) remains under strategy #101; this helper alone is not its implementation. Its actual Invoice effects still require account evidence.
 
-`Subscription::applyFreePeriod(string $actionKey, string $couponId): Subscription` applies one subscription-level native Coupon to the current ACTIVE generation. The application authorizes eligibility and selects the Coupon; this package creates no catalogue or commercial redemption policy. Coupon retrieval is included in required SDK v0.1.3 at `33881b46d696435dfbd370ec371e1fef5452ba44`.
+`Subscription::applyFreePeriod(string $actionKey, string $couponId): Subscription` applies one subscription-level native Coupon to the current ACTIVE generation. The application authorizes eligibility and selects the Coupon; this package creates no catalogue or commercial redemption policy. Coupon retrieval is available since SDK v0.1.3 at `33881b46d696435dfbd370ec371e1fef5452ba44`.
 
 The selected Coupon must be active, exactly 100 percent PERCENTAGE, CUSTOM with a positive DAY/WEEK/MONTH/YEAR duration, and available for redemption. Before the first write the package verifies unchanged Coupon terms, current name generation, ACTIVE state, recognized collection method, no scheduled cancellation, no existing subscription-level discounts, and a freshly owned Source for AUTO_CHARGE. The durable encrypted original intent contains the Coupon ID/terms, original subscription shape and fixed NONE/DEFER_CHARGE_AND_KEEP_CYCLE controls. Generic item mutation options cannot apply/remove discounts, including stored never-attempted prepared payloads; use this qualified command or explicitly qualified raw SDK orchestration.
 
@@ -143,7 +143,7 @@ The result is an owned Invoice observation, not cash or settlement proof. A 15-u
 
 ## Owned Invoice credits
 
-Credit Notes use `billing()->creditNotes()` in required released SDK v0.1.3 (source `33881b46d696435dfbd370ec371e1fef5452ba44`). An authorized owned `Invoice` supports three separate durable commands:
+Credit Notes use `billing()->creditNotes()` with SDK support introduced in v0.1.3 (source `33881b46d696435dfbd370ec371e1fef5452ba44`). An authorized owned `Invoice` supports three separate durable commands:
 
 ```php
 $draft = $invoice->createCreditNote('earned-free/create', 'BEFORE_PAYMENT', 'GOODWILL_GESTURE');

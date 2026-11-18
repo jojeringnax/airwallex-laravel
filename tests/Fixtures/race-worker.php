@@ -65,26 +65,26 @@ if (($argv[4] ?? '') === 'stale') {
     fwrite(STDOUT, json_encode(['status' => $result->status, 'remote_id' => $result->remote_id], JSON_THROW_ON_ERROR));
     exit;
 }
+$mode = $argv[4] ?? 'create';
 $billable = Team::query()->findOrFail('race');
 fwrite(STDOUT, "READY\n");
+$start = $mode === 'delayed-create' ? $barrier.'.imported' : $barrier;
 $deadline = microtime(true) + 10;
-while (! file_exists($barrier)) {
+while (! file_exists($start)) {
     if (microtime(true) > $deadline) {
         throw new RuntimeException('Race barrier timeout.');
     }
     usleep(1000);
 }
-if (($argv[4] ?? '') === 'delayed-create') {
-    usleep(100000);
-}
 $customer = $manager->reserveCustomer($billable);
 try {
-    if (($argv[4] ?? 'create') === 'import') {
+    if ($mode === 'import') {
         $factory = new HttpFactory;
         $remote = Billing::subscription();
         $http = new FakeHttpClient([FakeHttpClient::login(), FakeHttpClient::json($remote), Billing::page([]), FakeHttpClient::json($remote)]);
         $app->instance(Client::class, new Client(Environment::Sandbox, new Credentials('synthetic-client', 'synthetic-key'), $http, $factory, $factory));
         $subscription = $app->make(SubscriptionSynchronizer::class)->import($customer, 'default', 'sub-test');
+        touch($barrier.'.imported');
         fwrite(STDOUT, json_encode(['customer' => $customer->id, 'subscription' => $subscription->id], JSON_THROW_ON_ERROR));
         exit;
     }
