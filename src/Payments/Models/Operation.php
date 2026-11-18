@@ -17,17 +17,19 @@ use Jojeringnax\AirwallexLaravel\Casts\LosslessJson;
  * @property ?string $target_id
  * @property string $status
  * @property array $intent
+ * @property ?array{attempt_id:?string,consent_method_id:?string} $confirmation_baseline
  */
 class Operation extends PaymentModel
 {
     protected $table = 'airwallex_payment_operations';
 
-    protected $hidden = ['retry_release', 'intent', 'snapshot', 'body', 'payload'];
+    protected $hidden = ['retry_release', 'intent', 'snapshot', 'body', 'payload', 'confirmation_baseline'];
 
-    protected $casts = ['retry_release' => LosslessJson::class.':encrypted', 'intent' => LosslessJson::class.':encrypted'];
+    protected $casts = ['retry_release' => LosslessJson::class.':encrypted', 'intent' => LosslessJson::class.':encrypted',
+        'confirmation_baseline' => LosslessJson::class.':encrypted'];
 
     protected function immutable(): array
     {
-        return [...parent::immutable(), 'customer_id', 'kind', 'action_key', 'intent_hash', 'intent', 'request_id', 'retry_release', 'target_id', 'remote_id'];
+        return [...parent::immutable(), 'customer_id', 'kind', 'action_key', 'intent_hash', 'intent', 'request_id', 'retry_release', 'target_id', 'remote_id', 'confirmation_baseline'];
     }
 }

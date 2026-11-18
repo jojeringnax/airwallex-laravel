@@ -11,6 +11,7 @@ use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Exception\EvidenceException;
 use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Services\CommitGuard;
@@ -113,14 +114,22 @@ class Intents
             'target_id' => $intent->remote_id, 'request_id' => $requestId,
         ])->whereIn('status', ['in_flight', 'ambiguous', 'acknowledged', 'succeeded'])->first() : null;
         if ($operation === null || ($operation->intent['body']['payment_consent_id'] ?? null) !== $consentId
-            || ($operation->intent['body']['triggered_by'] ?? null) !== 'merchant') {
+            || ($operation->intent['body']['triggered_by'] ?? 'merchant') !== 'merchant'
+            || isset($operation->intent['body']['payment_method'])) {
             throw new OwnershipException('The outstanding customer action does not match the original saved-card confirmation.');
         }
-        $attempt = $this->readAttempt($intent);
+        $attemptId = $this->latestAttemptId($remote);
+        if ($attemptId === null || $attemptId === ($operation->confirmation_baseline['attempt_id'] ?? null)) {
+            throw new EvidenceException('The challenge response has no distinct current attempt identity.');
+        }
+        $attempt = $this->readAttempt($intent, $attemptId);
         if ($attempt === null || $attempt->status !== 'AUTHENTICATION_REDIRECTED') {
             throw new EvidenceException('A canonical attempt awaiting authentication is required.');
         }
+        $originalMethod = $operation->confirmation_baseline['consent_method_id'] ?? null;
         if (($attempt->consentId === null && $attempt->methodId === null)
+            || ($originalMethod !== null && $originalMethod !== $instrument->method_id)
+            || ($originalMethod === null && $attempt->methodId === null)
             || ($attempt->consentId !== null && $attempt->consentId !== $consentId)
             || ($attempt->methodId !== null && $attempt->methodId !== $instrument->method_id)) {
             throw new OwnershipException('The challenge attempt does not link to the original saved card.');
@@ -134,17 +143,20 @@ class Intents
         }
         $current = $this->owned($customer, $intent);
         if ($current->status !== $intent->status || ($current->snapshot['updated_at'] ?? null) !== $remote['updated_at']
-            || $this->latestAttemptId($current) !== $attempt->id) {
+            || $this->latestAttemptId($current->snapshot) !== $attempt->id) {
             throw new ConflictException('The Payments intent changed during its challenge read.');
         }
         app(Instruments::class)->assertUsableReservation($customer, $consentId);
+        if ($this->reservedMethod($customer, $consentId) !== $instrument->method_id) {
+            throw new ConflictException('The saved card changed during its challenge read.');
+        }
 
         return new BrowserChallenge($attempt->paymentIntentId, $attempt->id, $url);
     }
 
     private function readAttempt(Intent $intent, ?string $attemptId = null): ?PaymentAttempt
     {
-        $attemptId ??= $this->latestAttemptId($intent);
+        $attemptId ??= $this->latestAttemptId($intent->snapshot);
         if ($attemptId === null) {
             return null;
         }
@@ -173,17 +185,12 @@ class Intents
         );
     }
 
-    private function latestAttemptId(Intent $intent): ?string
+    private function latestAttemptId(?array $snapshot): ?string
     {
-        $attempt = $intent->snapshot['latest_payment_attempt'] ?? null;
-        if ($attempt === null) {
-            return null;
-        }
-        if (! is_array($attempt) || ! is_string($attempt['id'] ?? null) || $attempt['id'] === '') {
-            throw new EvidenceException('Latest Payments attempt has no canonical identity.');
-        }
+        $attempt = $snapshot['latest_payment_attempt'] ?? null;
+        $id = is_array($attempt) ? ($attempt['id'] ?? null) : null;
 
-        return $attempt['id'];
+        return is_string($id) && $id !== '' ? $id : null;
     }
 
     /** Merchant-initiated saved-instrument charge; no raw card credentials accepted. */
@@ -195,7 +202,7 @@ class Intents
             app(Instruments::class)->verified($customer, $consentId);
         }
 
-        return $this->action($customer, $intent, $key, 'confirm', [...$options, 'payment_consent_id' => $consentId, 'triggered_by' => 'merchant'], $consentId);
+        return $this->action($customer, $intent, $key, 'confirm', [...$options, 'payment_consent_id' => $consentId], $consentId);
     }
 
     /** Customer-present tokenized method, collected by an eligible authorized browser client. */
@@ -268,7 +275,9 @@ class Intents
             throw new ConflictException('Original intent must be recovered before another action.');
         }
         $operation = DB::transaction(function () use ($customer, $intent, $key, $action, $body, $consentId, $methodId): Operation {
-            $operation = $this->operations->prepare($customer, $key, 'intent.'.$action, ['body' => $body, 'before_captured' => $intent->captured_amount], $intent->remote_id, 'customer/'.$customer->id, $body);
+            // Retain the existing identity for saved-card commands across the wire correction.
+            $specification = $consentId === null ? $body : [...$body, 'triggered_by' => 'merchant'];
+            $operation = $this->operations->prepare($customer, $key, 'intent.'.$action, ['body' => $body, 'before_captured' => $intent->captured_amount], $intent->remote_id, 'customer/'.$customer->id, $specification);
             if ($consentId !== null && $operation->status === 'prepared') {
                 // Revocation uses the same customer lock. It cannot silently substitute
                 // another instrument after this explicit command has been reserved.
@@ -294,6 +303,7 @@ class Intents
             $this->operations->rejectPrepared($operation);
             throw new ConflictException('Canonical intent is not eligible for this financial action.', $operation->id);
         }
+        $attempt = null;
         if ($action === 'confirm') {
             try {
                 $attempt = $this->readAttempt($canonical);
@@ -319,7 +329,7 @@ class Intents
             return $this->operations->execute($operation,
                 fn () => app(Client::class)->sdk->payments()->paymentIntents()->{$action}($canonical->remote_id, [...$body, 'request_id' => $operation->request_id]),
                 fn () => $this->confirm($customer, $canonical, $operation, $canonical->remote_id),
-                function () use ($customer, $canonical, $consentId, $methodId, $operation): void {
+                function () use ($customer, $canonical, $consentId, $methodId, $operation, $action, $attempt): void {
                     if ($this->owned($customer, $canonical)->revision !== $canonical->revision) {
                         throw new ConflictException('Canonical intent changed before the financial action was claimed.', $operation->id);
                     }
@@ -328,6 +338,12 @@ class Intents
                     }
                     if ($methodId !== null) {
                         app(Instruments::class)->assertMethodReservation($customer, $methodId);
+                    }
+                    if ($action === 'confirm') {
+                        $operation->forceFill(['confirmation_baseline' => [
+                            'attempt_id' => $attempt?->id,
+                            'consent_method_id' => $consentId === null ? null : $this->reservedMethod($customer, $consentId),
+                        ]])->save();
                     }
                 },
             );
@@ -355,7 +371,9 @@ class Intents
                 && Amount::compare(Amount::units($result->captured_amount, $result->currency), Amount::add(Amount::units($operation->intent['before_captured'] ?? '0', $result->currency), Amount::units($operation->intent['body']['amount'], $result->currency))) >= 0,
             'intent.cancel' => $result->status === 'CANCELLED',
             'intent.confirm' => $result->status !== 'REQUIRES_PAYMENT_METHOD'
-                || in_array($this->readAttempt($result)?->status, ['FAILED', 'EXPIRED', 'CANCELLED'], true),
+                || ($operation->confirmation_baseline !== null
+                    && $this->latestAttemptId($result->snapshot) !== $operation->confirmation_baseline['attempt_id']
+                    && in_array($this->readAttempt($result)?->status, ['FAILED', 'EXPIRED', 'CANCELLED'], true)),
             default => true,
         };
         if (! $fulfilled) {
@@ -388,7 +406,12 @@ class Intents
             throw new EvidenceException('Captured observation exceeds original intent amount.');
         }
 
-        return DB::transaction(function () use ($customer, $intent, $remote, $id, $captured): Intent {
+        $attemptId = $this->latestAttemptId($remote);
+        if (isset($remote['latest_payment_attempt']) && $attemptId === null) {
+            throw new EvidenceException('Latest Payments attempt has no canonical identity.');
+        }
+
+        return DB::transaction(function () use ($customer, $intent, $remote, $id, $captured, $attemptId): Intent {
             app(CommitGuard::class)->assertMayCommit();
             $current = $this->owned($customer, $intent);
             if ($current->revision !== $intent->revision || ($current->remote_id !== null && $current->remote_id !== $id)) {
@@ -398,8 +421,10 @@ class Intents
             if (is_string($previous) && Timestamp::compare($remote['updated_at'], $previous) < 0) {
                 throw new EvidenceException('Payments intent observation is older than retained evidence.');
             }
+            $previousAttemptId = $this->latestAttemptId($current->snapshot);
             if (is_string($previous) && Timestamp::compare($remote['updated_at'], $previous) === 0
-                && ($current->status !== $remote['status'] || $current->captured_amount !== $captured)) {
+                && ($current->status !== $remote['status'] || $current->captured_amount !== $captured
+                    || ($previousAttemptId !== null && $attemptId !== null && $previousAttemptId !== $attemptId))) {
                 throw new EvidenceException('Equal-version Payments observations contain contradictory financial evidence.');
             }
             $changed = Intent::query()->whereKey($current->id)->where('revision', $current->revision)->update([
@@ -412,6 +437,8 @@ class Intents
             unset($snapshot['next_action'], $snapshot['authentication_data']);
             if (is_array($snapshot['latest_payment_attempt'] ?? null)) {
                 unset($snapshot['latest_payment_attempt']['next_action'], $snapshot['latest_payment_attempt']['authentication_data']);
+            } elseif ($previousAttemptId !== null) {
+                $snapshot['latest_payment_attempt'] = ['id' => $previousAttemptId];
             }
             $current->forceFill(['remote_id' => $id, 'status' => $remote['status'], 'captured_amount' => $captured, 'snapshot' => $snapshot])->save();
             $this->observations->record($current, ['remote_id' => $id, 'status' => $current->status, 'amount' => $current->amount, 'currency' => $current->currency, 'captured_amount' => $captured, 'financial_identity' => 'payment_intent/'.$id]);
@@ -431,6 +458,13 @@ class Intents
         $this->context->assertModel($current);
 
         return $current;
+    }
+
+    private function reservedMethod(Customer $customer, string $consentId): ?string
+    {
+        return Instrument::query()->where([
+            ...$this->context->attributes(), 'customer_id' => $customer->id, 'remote_id' => $consentId,
+        ])->firstOrFail()->method_id;
     }
 
     private function confirmedCustomer(Customer $customer): Customer
