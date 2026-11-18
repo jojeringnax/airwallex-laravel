@@ -27,6 +27,7 @@ return [
         'client_id' => env('AIRWALLEX_PAYMENTS_CLIENT_ID'),
         'api_key' => env('AIRWALLEX_PAYMENTS_API_KEY'),
         'cache_store' => env('AIRWALLEX_PAYMENTS_CACHE_STORE'),
+        'deposit_global_account_id' => env('AIRWALLEX_PAYMENTS_DEPOSIT_GLOBAL_ACCOUNT_ID'),
         'webhook' => [
             'enabled' => false,
             'path' => 'airwallex/payments/webhook',

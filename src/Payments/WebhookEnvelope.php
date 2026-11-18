@@ -17,6 +17,8 @@ final class WebhookEnvelope
         'refund' => ['accepted', 'failed', 'received', 'settled'],
         'payment_consent' => ['created', 'disabled', 'paused', 'pending', 'requires_customer_action', 'requires_payment_method', 'updated', 'verification_failed', 'verified'],
         'payment_method' => ['attached', 'created', 'detached', 'disabled', 'updated'],
+        'payment_dispute' => ['accepted', 'challenged', 'expired', 'lost', 'pending_closure', 'pending_decision', 'requires_response', 'reversed', 'won'],
+        'deposit' => ['pending', 'rejected', 'reversed', 'settled'],
     ];
 
     public static function inspect(array $envelope, Context $context, string $version): array
@@ -24,10 +26,10 @@ final class WebhookEnvelope
         if ($version !== '2026-08-21') {
             throw new ConfigurationException('Payments webhook handling requires the supported version.');
         }
-        $id = self::identifier($envelope['id'] ?? null);
-        $name = self::identifier($envelope['name'] ?? null);
+        $id = Proof::identifier($envelope['id'] ?? null);
+        $name = Proof::identifier($envelope['name'] ?? null);
         $result = ['eventId' => $id ?? 'invalid/'.hash('sha256', CanonicalJson::encode($envelope)), 'eventName' => $name,
-            'version' => self::identifier($envelope['version'] ?? null), 'resourceId' => null, 'family' => null, 'resource' => null, 'status' => 'quarantined', 'reason' => 'malformed_envelope'];
+            'version' => Proof::identifier($envelope['version'] ?? null), 'resourceId' => null, 'family' => null, 'resource' => null, 'status' => 'quarantined', 'reason' => 'malformed_envelope'];
         if ($id === null || $name === null) {
             return $result;
         }
@@ -53,15 +55,10 @@ final class WebhookEnvelope
         }
         $data = $envelope['data'] ?? null;
         $resource = is_array($data) && array_key_exists('object', $data) ? $data['object'] : null;
-        if (! is_array($resource) || array_is_list($resource) || self::identifier($resource['id'] ?? null) === null) {
+        if (! is_array($resource) || array_is_list($resource) || Proof::identifier($resource['id'] ?? null) === null) {
             return [...$result, 'family' => $family, 'reason' => 'malformed_resource'];
         }
 
         return [...$result, 'family' => $family, 'resourceId' => $resource['id'], 'resource' => $resource, 'status' => 'pending', 'reason' => null];
-    }
-
-    private static function identifier(mixed $value): ?string
-    {
-        return is_string($value) && $value !== '' && strlen($value) <= 255 && ! preg_match('/[\x00-\x20\x7f]/', $value) ? $value : null;
     }
 }

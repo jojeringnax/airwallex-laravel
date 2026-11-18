@@ -9,6 +9,8 @@ use Illuminate\Database\Eloquent\Model;
 use Jojeringnax\AirwallexLaravel\Exception\ConfigurationException;
 use Jojeringnax\AirwallexLaravel\Exception\ConflictException;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Deposit;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Dispute;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Instrument;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\MethodObservation;
@@ -22,7 +24,8 @@ use Jojeringnax\AirwallexLaravel\Services\CreationRetries;
 class Recovery
 {
     private const MODELS = ['intent' => Intent::class, 'refund' => Refund::class, 'instrument' => Instrument::class,
-        'method' => MethodObservation::class, 'operation' => Operation::class, 'receipt' => Receipt::class, 'event' => Observation::class];
+        'method' => MethodObservation::class, 'operation' => Operation::class, 'receipt' => Receipt::class, 'event' => Observation::class,
+        'dispute' => Dispute::class, 'deposit' => Deposit::class];
 
     public function __construct(private readonly Context $context) {}
 
@@ -42,6 +45,9 @@ class Recovery
     {
         $class = self::MODELS[$family] ?? throw new ConfigurationException('Unknown Payments recovery family.');
         $query = $class::query()->where($this->context->attributes());
+        if ($family === 'deposit') {
+            $query->where('global_account_id', Proof::identifier(config('airwallex.payments.deposit_global_account_id')));
+        }
         if (! $one) {
             match ($family) {
                 'intent', 'refund' => $query->whereNotNull('remote_id'),
@@ -68,6 +74,11 @@ class Recovery
         if ($row instanceof Observation) {
             return app(ObservationDispatcher::class)->dispatch($row->id);
         }
+        if ($row instanceof Deposit) {
+            app(Deposits::class)->reconcile($row->remote_id);
+
+            return true;
+        }
         if ($row instanceof Operation && app(CreationRetries::class)->quarantined($row, $candidate)) {
             return true;
         }
@@ -90,6 +101,8 @@ class Recovery
             return $row->fresh()->status === 'succeeded';
         }
         match (true) {
+            $row instanceof Dispute => app(Disputes::class)->reconcile(
+                $customer, Intent::query()->where($this->context->attributes())->findOrFail($row->intent_id), $row->remote_id),
             $row instanceof Intent => app(Intents::class)->reconcile($customer, $row),
             $row instanceof Refund => app(Refunds::class)->reconcile($customer, $row),
             $row instanceof Instrument => app(Instruments::class)->complete($customer, $row->remote_id),

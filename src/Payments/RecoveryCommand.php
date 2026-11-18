@@ -12,7 +12,7 @@ use Throwable;
 
 class RecoveryCommand extends BillingCommand
 {
-    protected $signature = 'airwallex:payments-recover {--family=all : all, intent, refund, instrument, method, operation, receipt, event or prune} {--limit=100 : Rows per family} {--after=} {--id=} {--remote-id=} {--replay : Explicit replay of one retained receipt} {--sweep : Persist fair per-family progress using the recovery foundation} {--seconds=30 : Sweep scheduling seconds per family}';
+    protected $signature = 'airwallex:payments-recover {--family=all : all, intent, refund, instrument, method, operation, receipt, event, dispute, deposit or prune} {--limit=100 : Rows per family} {--after=} {--id=} {--remote-id=} {--replay : Explicit replay of one retained receipt} {--sweep : Persist fair per-family progress using the recovery foundation} {--seconds=30 : Sweep scheduling seconds per family}';
 
     protected $description = 'Recover canonical account-owned Payments state without replaying financial writes';
 

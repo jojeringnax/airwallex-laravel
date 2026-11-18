@@ -10,6 +10,7 @@ use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 use Jojeringnax\AirwallexLaravel\Payments\Context;
 use Jojeringnax\AirwallexLaravel\Payments\Customers;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Customer;
+use Jojeringnax\AirwallexLaravel\Payments\Models\Dispute;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Intent;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Operation;
 use Jojeringnax\AirwallexLaravel\Payments\Models\Refund;
@@ -149,6 +150,17 @@ final readonly class Payments
     public function recoverRefund(string $operationId, ?string $operatorKnownId = null): Refund
     {
         return app(Payments\Refunds::class)->recover($this->requiredCustomer(), Operation::query()->findOrFail($operationId), $operatorKnownId);
+    }
+
+    public function reconcileDispute(Intent $intent, string $disputeId): Dispute
+    {
+        return app(Payments\Disputes::class)->reconcile($this->requiredCustomer(), $intent, $disputeId);
+    }
+
+    /** @return array{items:list<Dispute>,nextCursor:?string} */
+    public function disputes(Intent $intent, string $fromUpdatedAt, string $toUpdatedAt, ?string $cursor = null, int $pageSize = 100): array
+    {
+        return app(Payments\Disputes::class)->page($this->requiredCustomer(), $intent, $fromUpdatedAt, $toUpdatedAt, $cursor, $pageSize);
     }
 
     public function __serialize(): array
