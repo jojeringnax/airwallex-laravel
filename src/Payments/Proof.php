@@ -9,9 +9,9 @@ use Jojeringnax\AirwallexLaravel\Exception\OwnershipException;
 /** Ownership checks over SDK-decoded observations, not a second API validator. */
 final class Proof
 {
-    public static function identity(array $remote, string $id, Context $context): void
+    public static function identity(array $remote, string $id, Context $context, string $identityField = 'id'): void
     {
-        if ($id === '' || ($remote['id'] ?? null) !== $id) {
+        if ($id === '' || ($remote[$identityField] ?? null) !== $id) {
             throw new OwnershipException('Payments resource identity does not match.');
         }
         foreach (['account_id' => $context->accountId, 'environment' => $context->environment] as $key => $expected) {
