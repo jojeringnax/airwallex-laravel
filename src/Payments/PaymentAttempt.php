@@ -18,6 +18,7 @@ final readonly class PaymentAttempt
         public ?string $cardBrand,
         public ?string $consentId,
         public ?string $methodId,
+        public ?string $capturedAmount = null,
     ) {}
 
     public function outcome(): string

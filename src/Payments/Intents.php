@@ -189,6 +189,7 @@ class Intents
             $optional($failure['code'] ?? null), $optional($failure['message'] ?? null) ?? $optional($remote['provider_original_response_description'] ?? null),
             $optional($remote['provider_original_response_code'] ?? null), $optional($card['brand'] ?? null),
             $optional($remote['payment_consent_id'] ?? null), $optional($method['id'] ?? null),
+            isset($remote['captured_amount']) ? Amount::canonical($remote['captured_amount'], $intent->currency) : null,
         );
     }
 
@@ -386,15 +387,29 @@ class Intents
             || ! is_string($consentId) || $methodId === null || $attemptId === null
             || $attemptId === $operation->confirmation_baseline['attempt_id'] || $attemptId !== $this->latestAttemptId($remote)
             || ($remote['request_id'] ?? null) !== $creation->request_id
-            || $creation->kind !== 'intent.create' || $creation->remote_id !== $intent->remote_id) {
+            || $creation->kind !== 'intent.create' || $creation->remote_id !== $intent->remote_id || $creation->customer_id !== $intent->customer_id) {
             throw new EvidenceException('Canonical intent does not correlate to the original financial action.');
         }
         $this->context->assertModel($creation);
+        Proof::identity($remote, $intent->remote_id, $this->context);
         $attempt = $this->readAttempt($intent, $attemptId);
         if ($attempt === null || ($attempt->consentId === null && $attempt->methodId === null)
             || ($attempt->consentId !== null && $attempt->consentId !== $consentId)
             || ($attempt->methodId !== null && $attempt->methodId !== $methodId)) {
             throw new OwnershipException('The acknowledged confirmation attempt does not reference the original saved card.');
+        }
+
+        $compatible = match ($remote['status'] ?? null) {
+            'REQUIRES_CAPTURE' => $attempt->status === 'AUTHORIZED',
+            'REQUIRES_CUSTOMER_ACTION' => $attempt->status === 'AUTHENTICATION_REDIRECTED',
+            'REQUIRES_PAYMENT_METHOD' => in_array($attempt->status, ['FAILED', 'EXPIRED', 'CANCELLED'], true),
+            'SUCCEEDED' => in_array($attempt->status, ['CAPTURE_REQUESTED', 'SETTLED', 'PAID'], true)
+                && $attempt->capturedAmount !== null && Amount::units($attempt->capturedAmount, $intent->currency) !== '0'
+                && Amount::canonical($remote['captured_amount'] ?? null, $intent->currency) === $attempt->capturedAmount,
+            default => false,
+        };
+        if (! $compatible) {
+            throw new EvidenceException('Canonical intent and acknowledged attempt do not agree on the saved-card outcome.');
         }
 
         return $attempt;
